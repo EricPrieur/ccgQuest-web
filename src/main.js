@@ -116,6 +116,8 @@ let inventoryScrollY = 0;
 let pendingLevelUp = false;
 let perkChoices = [];
 let restMode = false; // true when inventory opened during level-up rest
+let previousState = null; // state before help/ingame menu
+let helpScrollY = 0;
 
 // Fade transition state
 let fadeAlpha = 0;
@@ -276,6 +278,7 @@ canvas.addEventListener('wheel', (e) => {
   const scrollAmount = e.deltaY > 0 ? 40 : -40;
   if (state === GameState.SHOP) shopScrollY = Math.max(0, shopScrollY + scrollAmount);
   if (state === GameState.INVENTORY) inventoryScrollY = Math.max(0, inventoryScrollY + scrollAmount);
+  if (state === GameState.HELP_SCREEN) helpScrollY = Math.max(0, helpScrollY + scrollAmount);
 }, { passive: false });
 
 // === Utility ===
@@ -363,11 +366,16 @@ function handleClick(x, y) {
     case GameState.GAME_OVER:
       state = GameState.MENU;
       break;
+    case GameState.HELP_SCREEN:
+      handleHelpClick(x, y);
+      break;
+    case GameState.INGAME_MENU:
+      handleIngameMenuClick(x, y);
+      break;
     case GameState.TITLE_CARD:
       dismissTitleCard();
       break;
     case GameState.FADING:
-      // clicks during fade are ignored
       break;
   }
 }
@@ -389,6 +397,14 @@ function handleKeyDown(key, event) {
       state = GameState.MAP;
     } else if (state === GameState.SHOP || state === GameState.INVENTORY) {
       state = GameState.MAP;
+    } else if (state === GameState.HELP_SCREEN) {
+      state = previousState || GameState.MAP;
+    } else if (state === GameState.INGAME_MENU) {
+      state = previousState || GameState.MAP;
+    } else if (state === GameState.COMBAT || state === GameState.MAP || state === GameState.ENCOUNTER_TEXT || state === GameState.ENCOUNTER_CHOICE) {
+      // Open in-game menu
+      previousState = state;
+      state = GameState.INGAME_MENU;
     }
   }
   if (key === 's' || key === 'S') {
@@ -399,6 +415,15 @@ function handleKeyDown(key, event) {
   }
   if (key === 'i' || key === 'I') {
     if (state === GameState.MAP) state = GameState.INVENTORY;
+  }
+  if (key === 'h' || key === 'H') {
+    if (state === GameState.HELP_SCREEN) {
+      state = previousState || GameState.MAP;
+    } else if (state === GameState.COMBAT || state === GameState.MAP) {
+      previousState = state;
+      helpScrollY = 0;
+      state = GameState.HELP_SCREEN;
+    }
   }
 }
 
@@ -796,8 +821,104 @@ function handleMapClick(x, y) {
   }
 }
 
+// Encounter ID → background image key mapping
+const ENCOUNTER_BG_MAP = {
+  // Prison
+  giant_rat: 'bg_prison', locked_door: 'bg_prison', bone_pile: 'bg_prison',
+  crack: 'bg_prison', prison_entrance: 'bg_prison_entrance', prison_wing: 'bg_prison_wing',
+  corner_cell: 'bg_prison', kitchen: 'bg_kitchen', leave_prison: 'bg_leaving_prison',
+  // Sewers
+  splash_point: 'bg_sewer', dead_end: 'bg_sewer', tight_opening: 'bg_sewer',
+  sewer_junction: 'bg_sewer', abandoned_camp: 'bg_sewer_camp', lost_shrine: 'bg_lost_shrine',
+  upward_passage: 'bg_sewer',
+  // Mountain
+  mountain_camp: 'bg_leaving_prison', mountain_pass: 'bg_mountain_pass',
+  calm_stream: 'bg_small_stream', general_zhost: 'bg_kobold_bridge',
+  calm_grove: 'bg_calm_grove', to_the_plains: 'bg_mountain_overlook',
+  // Plains / Cave
+  bone_valley: 'bg_bone_valley', wolf_blizzard: 'bg_wolf_blizzard',
+  cave_entrance: 'bg_cave_entrance', cave_ledge: 'bg_the_ledge',
+  cave_river_landing: 'bg_cave_river', underground_river: 'bg_cave_river',
+  // Ruins
+  piranha_pool: 'bg_cave_waterfall', sahuagin_sentinel: 'bg_temple_pool',
+  pool_south: 'bg_temple_pool', pool_exit: 'bg_temple_pool',
+  conservatory_wing: 'bg_flood_temple', flooded_passage: 'bg_flood_temple',
+  dark_corridor: 'bg_flood_temple', passage_ambush: 'bg_flood_temple',
+  cave_exit: 'bg_cave_entrance',
+  // City
+  river_crossing: 'bg_river_crossing', south_gate: 'bg_south_gate',
+  city_square: 'bg_qualibaf', weaponsmith: 'bg_smith', armorsmith: 'bg_smith',
+  general_store: 'bg_general_store', inn: 'bg_inn', church: 'bg_church',
+  arcane_emporium: 'bg_arcane_emporium', city_north_gate: 'bg_qualibaf',
+  guild_hall: 'bg_guild_hall',
+  // North / Forest
+  north_crossroad: 'bg_north_crossroad', filibaf_entrance: 'bg_filibaf_entrance',
+  forest_shadows: 'bg_filibaf_entrance', forest_ambush_left: 'bg_filibaf_entrance',
+  forest_ambush_right: 'bg_filibaf_entrance',
+  // Tharnag
+  tharnag_arrival: 'bg_tharnag_siege', siege_gauntlet_1: 'bg_tharnag_siege',
+  siege_gauntlet_2: 'bg_tharnag_siege', siege_gauntlet_3: 'bg_tharnag_siege',
+  siege_gauntlet_dialog: 'bg_tharnag_siege', tharnag_side_door: 'bg_tharnag_siege',
+  grand_hall_arrival: 'bg_tharnag_quarters', dwarven_tavern: 'bg_dwarven_tavern',
+  dwarven_smithy: 'bg_dwarven_smithy',
+  // Volcano / Wastes
+  volcano_arrival: 'bg_obsidian_wastes', volcano_choice: 'bg_heart_volcano',
+  obsidian_wastes_arrival: 'bg_obsidian_wastes', wastes_north: 'bg_obsidian_wastes',
+  // Dwarven City
+  entry_corridor_arrival: 'bg_obsidian_wastes', corridor_gate_approach: 'bg_obsidian_wastes',
+  ruga_slave_master: 'bg_obsidian_wastes', throne_specter: 'bg_obsidian_wastes',
+  artisan_workshop: 'bg_dwarven_smithy',
+};
+
+// Lazy-load encounter background images
+const encounterBgImages = {};
+const ENCOUNTER_BG_FILES = {
+  bg_prison: 'PrisonBackground.jpg', bg_prison_entrance: 'PrisonEntranceBackground.jpg',
+  bg_prison_wing: 'PrisonWingBackground.jpg', bg_kitchen: 'PrisonKitchenBackground.jpg',
+  bg_leaving_prison: 'LeavingPrisonBackground.jpg',
+  bg_sewer: 'SewerBackground.jpg', bg_sewer_camp: 'SewereCampBackground.jpg',
+  bg_lost_shrine: 'LostShrineBackground.jpg',
+  bg_mountain_pass: 'MountainPass.jpg', bg_small_stream: 'SmallStream.jpg',
+  bg_kobold_bridge: 'KoboldBridgeBackground.jpg', bg_calm_grove: 'CalmGrove.jpg',
+  bg_mountain_overlook: 'MountainOverlook.jpg',
+  bg_bone_valley: 'BoneValley.jpg', bg_wolf_blizzard: 'WolfInBlizzardBackground.jpg',
+  bg_cave_entrance: 'CaveEntrance.jpg', bg_the_ledge: 'TheLedge.jpg',
+  bg_cave_river: 'CaveRiverBackground.jpg', bg_cave_waterfall: 'CaveWaterfall.jpg',
+  bg_temple_pool: 'TemplePool.jpg', bg_flood_temple: 'FloorTempleAltar.jpg',
+  bg_river_crossing: 'RiverCrossing.jpg', bg_south_gate: 'SouthGate.jpg',
+  bg_qualibaf: 'QualibafBackground.jpg', bg_smith: 'SmithBackground.jpg',
+  bg_general_store: 'GeneralStoreBackground.jpg', bg_inn: 'InnBackground.jpg',
+  bg_church: 'ChurchBackground.jpg', bg_arcane_emporium: 'ArcaneEmporium.jpg',
+  bg_guild_hall: 'GuildHallBackground.jpg', bg_north_crossroad: 'NorthCrossRoadBG.jpg',
+  bg_filibaf_entrance: 'FilibafEntranceBackground.jpg',
+  bg_tharnag_siege: 'TharnagSiegeBackground.jpg', bg_tharnag_quarters: 'TharnagPersonalQuartersBG.jpg',
+  bg_dwarven_tavern: 'DwarvenTavenBG.jpg', bg_dwarven_smithy: 'DwarvenSmithyBG.jpg',
+  bg_obsidian_wastes: 'ObsidianWastesBG.jpg', bg_heart_volcano: 'HeartOfTheVolcanoBG.jpg',
+  bg_obsidian_forge: 'ObsidianForgeBG.jpg',
+};
+
+function getEncounterBgImage(bgKey) {
+  if (encounterBgImages[bgKey]) return encounterBgImages[bgKey];
+  const filename = ENCOUNTER_BG_FILES[bgKey];
+  if (!filename) return null;
+  // Lazy load
+  const img = new Image();
+  img.onload = () => { encounterBgImages[bgKey] = img; };
+  img.src = `${BASE}assets/Backgrounds/${filename}`;
+  encounterBgImages[bgKey] = null; // mark as loading
+  return null;
+}
+
 function getEncounterBg() {
-  // Try to use current map area's background for encounters
+  // 1. Check encounter-specific background
+  if (currentEncounter) {
+    const bgKey = ENCOUNTER_BG_MAP[currentEncounter.id];
+    if (bgKey) {
+      const img = getEncounterBgImage(bgKey);
+      if (img) return img;
+    }
+  }
+  // 2. Fall back to map area image
   if (currentMap) {
     const node = currentMap.getCurrentNode();
     if (node) {
@@ -4030,6 +4151,12 @@ function draw() {
     case GameState.GAME_OVER:
       drawGameOver();
       break;
+    case GameState.HELP_SCREEN:
+      drawHelpScreen();
+      break;
+    case GameState.INGAME_MENU:
+      drawIngameMenu();
+      break;
     case GameState.TITLE_CARD:
       drawTitleCard();
       break;
@@ -4050,6 +4177,212 @@ function draw() {
 // ============================================================
 // GAME LOOP
 // ============================================================
+// ============================================================
+// HELP SCREEN
+// ============================================================
+
+const HELP_CONTENT = [
+  { title: 'Life & Cards', items: [
+    'Your HP = cards in your deck (draw pile + hand + recharge pile)',
+    'Damage removes cards from your draw pile permanently',
+    'Healing moves cards from damage pile back to draw pile',
+    'If your draw pile + hand + recharge pile = 0, you die',
+  ]},
+  { title: 'Card Costs', items: [
+    'R (Recharge) — card goes to bottom of draw pile',
+    'D (Discard) — card goes to discard pile (lost as damage)',
+    'X (Exhaust) — card removed for this combat only',
+    'B (Banish) — card permanently removed from your deck',
+    'F (Free) — card goes to discard pile, no extra cost',
+  ]},
+  { title: 'Combat Keywords', items: [
+    'Armor — absorbs damage each hit (permanent)',
+    'Shield — absorbs damage before armor (clears end of turn)',
+    'Heroism — bonus damage on next attack (consumed)',
+    'Rage — permanent bonus damage to all attacks',
+    'Block — absorbs damage after shield/armor (from defense cards)',
+  ]},
+  { title: 'Status Effects', items: [
+    'Fire — deals stacks as damage per turn, decays by 1',
+    'Ice — reduces damage dealt by stacks, decays by 1',
+    'Poison — deals 1 damage per turn, decays by 1',
+    'Shock — reduces damage dealt AND increases damage taken, decays by 1',
+  ]},
+  { title: 'Allies', items: [
+    'Summoned creatures attack at end of your turn',
+    'Allies ready at start of your turn',
+    'Companions (Thorb) persist between combats',
+  ]},
+  { title: 'Controls', items: [
+    'Click cards to play them, click enemies to target',
+    'ESC — cancel targeting / open menu',
+    'H — toggle help screen',
+    'S — save game (on map)',
+    'L — load game (on map)',
+    'I — inventory (on map)',
+    'Mouse wheel — scroll in shop/inventory/help',
+  ]},
+];
+
+function handleHelpClick(x, y) {
+  const closeBtn = { x: SCREEN_WIDTH / 2 + 300, y: SCREEN_HEIGHT - 70, w: 120, h: 40 };
+  if (hitTest(x, y, closeBtn)) {
+    state = previousState || GameState.MAP;
+  }
+}
+
+function drawHelpScreen() {
+  // Dim background
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Panel
+  const px = 190, py = 30, pw = 900, ph = 880;
+  ctx.fillStyle = 'rgba(20,10,40,0.95)';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px, py, pw, ph);
+
+  // Title
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 28px serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Game Reference', SCREEN_WIDTH / 2, py + 40);
+
+  // Content
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(px + 10, py + 60, pw - 20, ph - 120);
+  ctx.clip();
+
+  let y = py + 80 - helpScrollY;
+  ctx.textAlign = 'left';
+  for (const section of HELP_CONTENT) {
+    ctx.fillStyle = Colors.GOLD;
+    ctx.font = 'bold 18px sans-serif';
+    ctx.fillText(section.title, px + 30, y);
+    y += 28;
+    ctx.font = '14px sans-serif';
+    for (const item of section.items) {
+      ctx.fillStyle = '#ddd';
+      if (item.includes('Fire')) ctx.fillStyle = Colors.RED;
+      else if (item.includes('Ice')) ctx.fillStyle = Colors.ICE_BLUE;
+      else if (item.includes('Poison')) ctx.fillStyle = Colors.GREEN;
+      else if (item.includes('Shock')) ctx.fillStyle = Colors.SHOCK_YELLOW;
+      else if (item.includes('Shield')) ctx.fillStyle = Colors.ALLY_BLUE;
+      else if (item.includes('Heroism')) ctx.fillStyle = Colors.GOLD;
+      ctx.fillText(`  ${item}`, px + 30, y);
+      y += 22;
+    }
+    y += 12;
+  }
+  ctx.restore();
+
+  // Close button
+  const closeBtn = { x: SCREEN_WIDTH / 2 + 300, y: SCREEN_HEIGHT - 70, w: 120, h: 40 };
+  const hov = hitTest(mouseX, mouseY, closeBtn);
+  ctx.fillStyle = hov ? '#4a3a6e' : '#2a1a4e';
+  ctx.fillRect(closeBtn.x, closeBtn.y, closeBtn.w, closeBtn.h);
+  ctx.strokeStyle = hov ? Colors.GOLD : Colors.GRAY;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(closeBtn.x, closeBtn.y, closeBtn.w, closeBtn.h);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Close (H)', closeBtn.x + closeBtn.w / 2, closeBtn.y + closeBtn.h / 2);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// IN-GAME MENU
+// ============================================================
+
+function getIngameMenuBtnRects() {
+  const btnW = 250, btnH = 50, gap = 15;
+  const items = [
+    { label: 'Resume', action: 'resume' },
+    { label: 'Save Game', action: 'save', enabled: previousState === GameState.MAP },
+    { label: 'Load Game', action: 'load' },
+    { label: 'Help', action: 'help' },
+    { label: 'Main Menu', action: 'quit' },
+  ];
+  const totalH = items.length * (btnH + gap) - gap;
+  const startX = (SCREEN_WIDTH - btnW) / 2;
+  const startY = (SCREEN_HEIGHT - totalH) / 2 + 30;
+  return items.map((item, i) => ({
+    x: startX, y: startY + i * (btnH + gap), w: btnW, h: btnH, ...item,
+  }));
+}
+
+function handleIngameMenuClick(x, y) {
+  for (const btn of getIngameMenuBtnRects()) {
+    if (!hitTest(x, y, btn)) continue;
+    if (btn.action === 'resume') {
+      state = previousState || GameState.MAP;
+    } else if (btn.action === 'save' && btn.enabled) {
+      state = GameState.SAVE_GAME;
+    } else if (btn.action === 'load') {
+      state = GameState.LOAD_GAME;
+    } else if (btn.action === 'help') {
+      helpScrollY = 0;
+      state = GameState.HELP_SCREEN;
+    } else if (btn.action === 'quit') {
+      state = GameState.MENU;
+      player = null;
+      currentMap = null;
+      currentEncounter = null;
+    }
+    return;
+  }
+}
+
+function drawIngameMenu() {
+  // Dim background
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Menu box
+  const boxW = 375, boxH = 400;
+  const boxX = (SCREEN_WIDTH - boxW) / 2, boxY = (SCREEN_HEIGHT - boxH) / 2;
+  ctx.fillStyle = 'rgba(20,10,40,0.95)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  // Title
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 32px serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('PAUSED', SCREEN_WIDTH / 2, boxY + 45);
+
+  // Buttons
+  for (const btn of getIngameMenuBtnRects()) {
+    const hov = hitTest(mouseX, mouseY, btn);
+    const enabled = btn.enabled !== false;
+    ctx.fillStyle = !enabled ? '#1a1a2e' : (hov ? '#4a3a6e' : '#2a1a4e');
+    ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+    ctx.strokeStyle = !enabled ? '#333' : (hov ? Colors.GOLD : Colors.GRAY);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(btn.x, btn.y, btn.w, btn.h);
+    ctx.fillStyle = !enabled ? '#555' : (hov ? Colors.GOLD : Colors.WHITE);
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2);
+    if (!enabled) {
+      ctx.fillStyle = '#555';
+      ctx.font = '12px sans-serif';
+      ctx.fillText('(map only)', btn.x + btn.w / 2, btn.y + btn.h / 2 + 20);
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+  ctx.textAlign = 'left';
+}
+
 // ============================================================
 // FADE TRANSITIONS
 // ============================================================
