@@ -2,6 +2,7 @@
  * Card ID -> art image filename mapping.
  * Complete mapping from the Python game. Images loaded lazily on first use.
  */
+const BASE = import.meta.env.BASE_URL || '/';
 
 export const CARD_ART_MAP = {
   // === Starter / Common Cards ===
@@ -332,7 +333,7 @@ export function getCardArt(cardId) {
     loadingSet.delete(cardId);
   };
   img.onerror = () => loadingSet.delete(cardId);
-  img.src = `/assets/Cards/${filename}`;
+  img.src = `${BASE}assets/Cards/${filename}`;
   return null;
 }
 
@@ -350,6 +351,6 @@ export function getPowerArt(powerId) {
     loadingSet.delete(key);
   };
   img.onerror = () => loadingSet.delete(key);
-  img.src = `/assets/Cards/${filename}`;
+  img.src = `${BASE}assets/Cards/${filename}`;
   return null;
 }

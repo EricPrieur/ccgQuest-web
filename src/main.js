@@ -1,4 +1,7 @@
 import { GAME_VERSION, SCREEN_WIDTH, SCREEN_HEIGHT, GameState, Colors, CARD_COLORS, CardType, CostType, TargetType } from './constants.js';
+
+// Base path for assets (matches vite.config.js base)
+const BASE = import.meta.env.BASE_URL || '/';
 import { Character, CombatBuff, getPerkChoices, createToughPerk, createPreparedPerk, createGritPerk, createArsenalPerk, createTalentedPerk, createFirstStrikePerk } from './character.js';
 import { Deck } from './deck.js';
 import { Creature } from './creature.js';
@@ -210,38 +213,38 @@ function loadImage(id, src) {
 
 async function loadAssets() {
   await Promise.all([
-    loadImage('menu_bg', '/assets/Backgrounds/MainScreen.jpg'),
-    loadImage('char_select_bg', '/assets/Backgrounds/CharacterSelection.jpg'),
-    loadImage('combat_bg', '/assets/Backgrounds/PrisonBackground.jpg'),
-    loadImage('map_prison_cell', '/assets/Maps/PrisonCellMap.jpg'),
-    loadImage('map_sewers', '/assets/Maps/SewerMap.jpg'),
-    loadImage('map_upper_prison', '/assets/Maps/KoboldCastlePrisonMap.jpg'),
-    loadImage('map_mountain_path', '/assets/Maps/Chapter2MountainPathMap.jpg'),
-    loadImage('map_plains', '/assets/Maps/PlainsOfNoHopeMap.jpg'),
-    loadImage('map_cave', '/assets/Maps/UndergroundCaveMap.jpg'),
-    loadImage('map_ruins_basin', '/assets/Maps/EndofRiverBasinStartOfRuins.jpg'),
-    loadImage('map_flood_temple', '/assets/Maps/FloodTemple.jpg'),
-    loadImage('map_flooded_altar', '/assets/Maps/SacredAreaFloodedTemple.jpg'),
-    loadImage('map_temple_exit', '/assets/Maps/TempleTowardTheExit.jpg'),
-    loadImage('map_arriving_city', '/assets/Maps/ArrivingAtTheCity.jpg'),
-    loadImage('map_qualibaf', '/assets/Maps/QualibafMap.jpg'),
-    loadImage('map_north_qualibaf', '/assets/Maps/NorthGateQualibafExternalMap.jpg'),
-    loadImage('map_filibaf_forest', '/assets/Maps/FilibafForestMap.jpg'),
-    loadImage('map_tharnag', '/assets/Maps/TharnagMap.jpg'),
-    loadImage('map_volcano', '/assets/Maps/QualibafVolcano.jpg'),
-    loadImage('map_obsidian_wastes', '/assets/Maps/ObsidianWastesMap.jpg'),
-    loadImage('map_grand_hall', '/assets/Maps/TharnagGrandHall.jpg'),
-    loadImage('map_artisan_hall', '/assets/Maps/ArtisanHallMap.jpg'),
-    loadImage('map_entry_corridor', '/assets/Maps/DwarvenCityEntryCorridorMap.jpg'),
-    loadImage('map_gate_area', '/assets/Maps/DwarvenCityGateArea.jpg'),
-    loadImage('map_hall_of_ancestors', '/assets/Maps/DwarvenCityHallofAncestors.jpg'),
-    loadImage('map_monument_alley', '/assets/Maps/DwarvenCityMonumentAlley.jpg'),
-    loadImage('map_tomb_of_ancestor', '/assets/Maps/DwarvenCityTombOfAncestor.jpg'),
-    loadImage('map_grand_stairs', '/assets/Maps/DwarvenCityGrandStairs.jpg'),
-    loadImage('map_dwarven_throne_room', '/assets/Maps/DwarvenCityThroneRoom.jpg'),
-    loadImage('map_map_room', '/assets/Maps/DwarvenCityMapRoom.jpg'),
-    loadImage('map_deeper_tunnels', '/assets/Maps/DwarvenCityDeeperTunnels.jpg'),
-    loadImage('map_artisan_district', '/assets/Maps/DwarvenCityArtisanDistrict.jpg'),
+    loadImage('menu_bg', `${BASE}assets/Backgrounds/MainScreen.jpg`),
+    loadImage('char_select_bg', `${BASE}assets/Backgrounds/CharacterSelection.jpg`),
+    loadImage('combat_bg', `${BASE}assets/Backgrounds/PrisonBackground.jpg`),
+    loadImage('map_prison_cell', `${BASE}assets/Maps/PrisonCellMap.jpg`),
+    loadImage('map_sewers', `${BASE}assets/Maps/SewerMap.jpg`),
+    loadImage('map_upper_prison', `${BASE}assets/Maps/KoboldCastlePrisonMap.jpg`),
+    loadImage('map_mountain_path', `${BASE}assets/Maps/Chapter2MountainPathMap.jpg`),
+    loadImage('map_plains', `${BASE}assets/Maps/PlainsOfNoHopeMap.jpg`),
+    loadImage('map_cave', `${BASE}assets/Maps/UndergroundCaveMap.jpg`),
+    loadImage('map_ruins_basin', `${BASE}assets/Maps/EndofRiverBasinStartOfRuins.jpg`),
+    loadImage('map_flood_temple', `${BASE}assets/Maps/FloodTemple.jpg`),
+    loadImage('map_flooded_altar', `${BASE}assets/Maps/SacredAreaFloodedTemple.jpg`),
+    loadImage('map_temple_exit', `${BASE}assets/Maps/TempleTowardTheExit.jpg`),
+    loadImage('map_arriving_city', `${BASE}assets/Maps/ArrivingAtTheCity.jpg`),
+    loadImage('map_qualibaf', `${BASE}assets/Maps/QualibafMap.jpg`),
+    loadImage('map_north_qualibaf', `${BASE}assets/Maps/NorthGateQualibafExternalMap.jpg`),
+    loadImage('map_filibaf_forest', `${BASE}assets/Maps/FilibafForestMap.jpg`),
+    loadImage('map_tharnag', `${BASE}assets/Maps/TharnagMap.jpg`),
+    loadImage('map_volcano', `${BASE}assets/Maps/QualibafVolcano.jpg`),
+    loadImage('map_obsidian_wastes', `${BASE}assets/Maps/ObsidianWastesMap.jpg`),
+    loadImage('map_grand_hall', `${BASE}assets/Maps/TharnagGrandHall.jpg`),
+    loadImage('map_artisan_hall', `${BASE}assets/Maps/ArtisanHallMap.jpg`),
+    loadImage('map_entry_corridor', `${BASE}assets/Maps/DwarvenCityEntryCorridorMap.jpg`),
+    loadImage('map_gate_area', `${BASE}assets/Maps/DwarvenCityGateArea.jpg`),
+    loadImage('map_hall_of_ancestors', `${BASE}assets/Maps/DwarvenCityHallofAncestors.jpg`),
+    loadImage('map_monument_alley', `${BASE}assets/Maps/DwarvenCityMonumentAlley.jpg`),
+    loadImage('map_tomb_of_ancestor', `${BASE}assets/Maps/DwarvenCityTombOfAncestor.jpg`),
+    loadImage('map_grand_stairs', `${BASE}assets/Maps/DwarvenCityGrandStairs.jpg`),
+    loadImage('map_dwarven_throne_room', `${BASE}assets/Maps/DwarvenCityThroneRoom.jpg`),
+    loadImage('map_map_room', `${BASE}assets/Maps/DwarvenCityMapRoom.jpg`),
+    loadImage('map_deeper_tunnels', `${BASE}assets/Maps/DwarvenCityDeeperTunnels.jpg`),
+    loadImage('map_artisan_district', `${BASE}assets/Maps/DwarvenCityArtisanDistrict.jpg`),
   ]);
   assetsLoaded = true;
 }
