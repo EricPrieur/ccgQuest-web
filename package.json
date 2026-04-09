@@ -1,0 +1,14 @@
+{
+  "name": "ccgquest",
+  "version": "0.1.0",
+  "description": "CCG Quest - A collectible card game RPG",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
