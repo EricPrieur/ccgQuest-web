@@ -247,6 +247,11 @@ async function loadAssets() {
     loadImage('map_map_room', `${BASE}assets/Maps/DwarvenCityMapRoom.jpg`),
     loadImage('map_deeper_tunnels', `${BASE}assets/Maps/DwarvenCityDeeperTunnels.jpg`),
     loadImage('map_artisan_district', `${BASE}assets/Maps/DwarvenCityArtisanDistrict.jpg`),
+    // UI assets
+    loadImage('btn_large', `${BASE}assets/Icons/ButtonLarge.png`),
+    loadImage('btn_play', `${BASE}assets/Icons/PlayButton.png`),
+    loadImage('banner_large', `${BASE}assets/Icons/BannerLarge.png`),
+    loadImage('banner_small', `${BASE}assets/Icons/BannerSmall.png`),
   ]);
   assetsLoaded = true;
 }
@@ -449,25 +454,64 @@ function drawMenu() {
     ctx.fillStyle = '#1a0a2e';
     ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
   }
+
+  // Semi-transparent overlay panel behind title and buttons
+  const panelW = 540;
+  const panelH = 540;
+  const panelX = (SCREEN_WIDTH - panelW) / 2;
+  const panelY = 130;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(panelX, panelY, panelW, panelH);
+
+  // Title with shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 4;
   ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 64px serif';
+  ctx.font = 'bold 72px serif';
   ctx.textAlign = 'center';
-  ctx.fillText('CCG Quest', SCREEN_WIDTH / 2, 200);
-  ctx.fillStyle = Colors.WHITE;
-  ctx.font = '24px serif';
-  ctx.fillText('A Collectible Card Game RPG', SCREEN_WIDTH / 2, 250);
+  ctx.fillText('ccgQuest', SCREEN_WIDTH / 2, 230);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Subtitle
+  ctx.fillStyle = '#e8d59a';
+  ctx.font = 'italic 22px serif';
+  ctx.fillText('A Collectible Card Game RPG', SCREEN_WIDTH / 2, 270);
+
+  // Version number
   ctx.fillStyle = Colors.GRAY;
-  ctx.font = '16px sans-serif';
+  ctx.font = '14px sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText(`v${GAME_VERSION}`, 10, 24);
+  ctx.fillText(`v${GAME_VERSION}`, 10, 22);
 
   menuButtons.length = 0;
-  const btnW = 240, btnH = 50;
+
+  // Styled buttons with sprite art
+  const btnW = 400;
+  const btnH = 88;
   const btnX = (SCREEN_WIDTH - btnW) / 2;
-  drawButton(btnX, 360, btnW, btnH, 'New Game', startNewGame);
-  if (hasSave('1') || hasSave('2') || hasSave('3')) {
-    drawButton(btnX, 430, btnW, btnH, 'Load Game', () => { state = GameState.LOAD_GAME; });
+  let btnY = 340;
+
+  // New Game button (uses PlayButton sprite with "PLAY" baked in)
+  drawStyledButton(btnX, btnY, btnW, btnH, 'New Game', startNewGame, 'play');
+  btnY += 110;
+
+  // Load Game button (always visible, uses ButtonLarge wooden plank)
+  const hasAnySave = hasSave('1') || hasSave('2') || hasSave('3');
+  drawStyledButton(btnX, btnY, btnW, btnH, 'Load Game', () => {
+    if (hasAnySave) state = GameState.LOAD_GAME;
+  }, 'large');
+  if (!hasAnySave) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(btnX, btnY, btnW, btnH);
+    ctx.fillStyle = Colors.GRAY;
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('(no saves)', SCREEN_WIDTH / 2, btnY + btnH / 2 + 20);
   }
+
   ctx.textAlign = 'left';
 }
 
@@ -485,6 +529,54 @@ function drawButton(x, y, w, h, text, action) {
   ctx.fillText(text, x + w / 2, y + h / 2);
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
+  menuButtons.push({ x, y, w, h, action });
+}
+
+// Draw a styled button using sprite art (ButtonLarge, PlayButton, BannerLarge)
+function drawStyledButton(x, y, w, h, text, action, style = 'large', fontSize = 26) {
+  const hovered = hitTest(mouseX, mouseY, { x, y, w, h });
+  let sprite = null;
+  if (style === 'play') sprite = images.btn_play;
+  else if (style === 'large') sprite = images.btn_large;
+  else if (style === 'banner') sprite = images.banner_large;
+  else if (style === 'small') sprite = images.banner_small;
+
+  if (sprite) {
+    ctx.drawImage(sprite, x, y, w, h);
+    if (hovered) {
+      // Brighten on hover
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.15;
+      ctx.drawImage(sprite, x, y, w, h);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  } else {
+    // Fallback
+    ctx.fillStyle = hovered ? '#5a4a7e' : '#3a2a5e';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = Colors.GOLD;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  // Text overlay (skip for play style which has text baked in)
+  if (text && style !== 'play') {
+    ctx.fillStyle = hovered ? Colors.GOLD : Colors.WHITE;
+    ctx.font = `bold ${fontSize}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Subtle drop shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 2;
+    ctx.fillText(text, x + w / 2, y + h / 2);
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+  }
   menuButtons.push({ x, y, w, h, action });
 }
 
