@@ -3,6 +3,51 @@ import { CardType, CostType, TargetType } from './constants.js';
 import { Creature } from './creature.js';
 
 // ============================================================
+// Power choice tokens (not real deck cards — used by powers
+// like Elemental Infusion / Feral Form to render the choice UI)
+// ============================================================
+
+export function createFireToken() {
+  return new Card({
+    id: 'fire_token', name: 'Fire',
+    description: 'Apply 1 Fire to target.',
+    shortDesc: '1 Fire', subtype: 'ability',
+    cardType: CardType.SKILL, costType: CostType.FREE,
+    effects: [new CardEffect('apply_fire', 1, TargetType.SINGLE_ENEMY)],
+  });
+}
+
+export function createIceToken() {
+  return new Card({
+    id: 'ice_token', name: 'Ice',
+    description: 'Apply 1 Ice to target.',
+    shortDesc: '1 Ice', subtype: 'ability',
+    cardType: CardType.SKILL, costType: CostType.FREE,
+    effects: [new CardEffect('apply_ice', 1, TargetType.SINGLE_ENEMY)],
+  });
+}
+
+export function createCatFormToken() {
+  return new Card({
+    id: 'cat_form_token', name: 'Feline Form',
+    description: 'Gain 1 Heroism. Draw 1.',
+    shortDesc: '+1 Heroism\nDraw 1', subtype: 'ability',
+    cardType: CardType.SKILL, costType: CostType.FREE,
+    effects: [new CardEffect('cat_form', 1, TargetType.SELF)],
+  });
+}
+
+export function createBearFormToken() {
+  return new Card({
+    id: 'bear_form_token', name: 'Bear Form',
+    description: 'Gain 1 Shield. Draw 1.',
+    shortDesc: '+1 Shield\nDraw 1', subtype: 'ability',
+    cardType: CardType.SKILL, costType: CostType.FREE,
+    effects: [new CardEffect('bear_form', 1, TargetType.SELF)],
+  });
+}
+
+// ============================================================
 // Generic Starter Cards
 // ============================================================
 

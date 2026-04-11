@@ -189,6 +189,11 @@ export class Character {
 
   addCreature(creature) {
     creature.owner = this;
+    // Assign the lowest free slot so creatures fill 2 rows of 6 in display order
+    const used = new Set(this.creatures.map(c => c.slot).filter(s => s >= 0));
+    let slot = 0;
+    while (used.has(slot)) slot++;
+    creature.slot = slot;
     this.creatures.push(creature);
     return true;
   }

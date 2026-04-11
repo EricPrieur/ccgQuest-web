@@ -5,6 +5,18 @@
 const SAVE_KEY = 'ccgquest_save';
 const AUTO_SAVE_KEY = 'ccgquest_autosave';
 
+export const MANUAL_SLOT_COUNT = 10;
+export const AUTO_SLOT_COUNT = 10;
+
+function slotKey(slot) {
+  // Slot can be 'manual_1', 'manual_2', ..., 'auto_1', 'auto_2', ...
+  // For backward compat: 'auto' === 'auto_1', plain numbers === manual
+  if (slot === 'auto') return AUTO_SAVE_KEY;
+  if (typeof slot === 'string' && slot.startsWith('auto_')) return `${AUTO_SAVE_KEY}_${slot.slice(5)}`;
+  if (typeof slot === 'string' && slot.startsWith('manual_')) return `${SAVE_KEY}_${slot.slice(7)}`;
+  return `${SAVE_KEY}_${slot}`;
+}
+
 export function saveGame(state) {
   const data = {
     version: 1,
@@ -39,11 +51,10 @@ export function saveGame(state) {
   return data;
 }
 
-export function saveToSlot(state, slot = 'manual') {
+export function saveToSlot(state, slot = 'manual_1') {
   const data = saveGame(state);
-  const key = slot === 'auto' ? AUTO_SAVE_KEY : `${SAVE_KEY}_${slot}`;
   try {
-    localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem(slotKey(slot), JSON.stringify(data));
     return true;
   } catch (e) {
     console.error('Save failed:', e);
@@ -51,10 +62,30 @@ export function saveToSlot(state, slot = 'manual') {
   }
 }
 
-export function loadFromSlot(slot = 'manual') {
-  const key = slot === 'auto' ? AUTO_SAVE_KEY : `${SAVE_KEY}_${slot}`;
+// Save to next available auto slot, rolling over when full
+export function saveToAutoSlot(state) {
+  // Find oldest auto slot to overwrite, or first empty
+  let oldestSlot = 'auto_1';
+  let oldestTime = Infinity;
+  let firstEmpty = null;
+  for (let i = 1; i <= AUTO_SLOT_COUNT; i++) {
+    const slotName = `auto_${i}`;
+    if (!hasSave(slotName)) {
+      firstEmpty = slotName;
+      break;
+    }
+    const info = getSaveInfo(slotName);
+    if (info && info.timestamp < oldestTime) {
+      oldestTime = info.timestamp;
+      oldestSlot = slotName;
+    }
+  }
+  return saveToSlot(state, firstEmpty || oldestSlot);
+}
+
+export function loadFromSlot(slot = 'manual_1') {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = localStorage.getItem(slotKey(slot));
     if (!raw) return null;
     return JSON.parse(raw);
   } catch (e) {
@@ -63,17 +94,15 @@ export function loadFromSlot(slot = 'manual') {
   }
 }
 
-export function hasSave(slot = 'manual') {
-  const key = slot === 'auto' ? AUTO_SAVE_KEY : `${SAVE_KEY}_${slot}`;
-  return localStorage.getItem(key) !== null;
+export function hasSave(slot = 'manual_1') {
+  return localStorage.getItem(slotKey(slot)) !== null;
 }
 
-export function deleteSave(slot = 'manual') {
-  const key = slot === 'auto' ? AUTO_SAVE_KEY : `${SAVE_KEY}_${slot}`;
-  localStorage.removeItem(key);
+export function deleteSave(slot = 'manual_1') {
+  localStorage.removeItem(slotKey(slot));
 }
 
-export function getSaveInfo(slot = 'manual') {
+export function getSaveInfo(slot = 'manual_1') {
   const data = loadFromSlot(slot);
   if (!data) return null;
   return {
@@ -81,6 +110,19 @@ export function getSaveInfo(slot = 'manual') {
     gold: data.gold,
     deckSize: data.masterDeck.length,
     node: data.currentNodeId,
+    level: data.level || 1,
+    timestamp: data.timestamp,
     date: new Date(data.timestamp).toLocaleString(),
   };
+}
+
+// Check if any save exists (manual or auto)
+export function hasAnySave() {
+  for (let i = 1; i <= MANUAL_SLOT_COUNT; i++) {
+    if (hasSave(`manual_${i}`)) return true;
+  }
+  for (let i = 1; i <= AUTO_SLOT_COUNT; i++) {
+    if (hasSave(`auto_${i}`)) return true;
+  }
+  return false;
 }

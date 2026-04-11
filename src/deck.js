@@ -77,10 +77,13 @@ export class Deck {
     const idx = this.hand.indexOf(card);
     if (idx === -1) return false;
     this.hand.splice(idx, 1);
+    // Card leaving hand resets any "stay-in-hand" exhaust flag
+    card.exhausted = false;
 
     switch (card.costType) {
       case 'RECHARGE':
-        this.drawPile.unshift(card); // bottom of draw pile
+        // Goes into the recharge pile (held until end of turn, then flushed under the deck)
+        this.addToRechargePile(card);
         break;
       case 'EXHAUST':
         this.exhaustPile.push(card);
@@ -96,6 +99,14 @@ export class Deck {
         break;
     }
     return true;
+  }
+
+  // Add a card to the recharge pile.
+  // Convention: rechargePile[0] = top, rechargePile[N-1] = bottom.
+  // The first card recharged sits at the top; each subsequent card goes UNDER (further down).
+  addToRechargePile(card) {
+    card.exhausted = false;
+    this.rechargePile.push(card);
   }
 
   banishCard(card) {
@@ -162,10 +173,26 @@ export class Deck {
   }
 
   damageFromDrawPile() {
-    if (this.drawPile.length === 0) return null;
-    const card = this.drawPile.pop();
-    this.damagePile.push(card);
-    return card;
+    // Take from top of draw pile first, then from top of recharge pile.
+    // Returns null if both are empty.
+    if (this.drawPile.length > 0) {
+      const card = this.drawPile.pop();
+      this.damagePile.push(card);
+      return card;
+    }
+    if (this.rechargePile.length > 0) {
+      // Top of recharge pile = end of array (since we push to end as "bottom" — wait,
+      // recharge pile convention: index 0 = top. So top is shift().
+      const card = this.rechargePile.shift();
+      this.damagePile.push(card);
+      return card;
+    }
+    return null;
+  }
+
+  // Total cards available for "deck" damage (drawPile + rechargePile)
+  deckDamageAvailable() {
+    return this.drawPile.length + this.rechargePile.length;
   }
 
   damageFromHand(card) {
@@ -177,8 +204,15 @@ export class Deck {
   }
 
   flushRechargePile() {
+    // The recharge pile is moved UNDER the draw pile.
+    // Within the recharge pile: index 0 = top, index N-1 = bottom.
+    // Cards deeper in the recharge pile (higher index) end up deeper in the deck.
+    // Draw pile convention: index 0 = bottom (deepest), pop() draws from the top.
+    // Pushing the recharge pile cards in reverse so the deepest one ends at the very bottom.
     const count = this.rechargePile.length;
-    this.drawPile.unshift(...this.rechargePile);
+    for (const card of this.rechargePile) {
+      this.drawPile.unshift(card);
+    }
     this.rechargePile = [];
     return count;
   }

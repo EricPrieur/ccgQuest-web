@@ -314,6 +314,28 @@ export const POWER_ART_MAP = {
   obsidian_body: 'ObsidianSlime.jpg',
   lava_floor: 'MagmaFloor.jpg',
   vanish: 'Vanish.jpg',
+
+  // === Creature/Summon art (looked up by snake-cased creature name) ===
+  rat: 'SummonRat.jpg',
+  tamed_rat: 'TamedRatAbility.jpg',
+  dire_rat: 'DireRat.jpg',
+  giant_rat: 'GiantRatMonster.jpg',
+  restless_bone: 'RestlessBoneSummon.jpg',
+  slime: 'SlimeSummon.jpg',
+  pet_slime: 'SlimeSummon.jpg',
+  obsidian_slime: 'ObsidianSlime.jpg',
+  kobold_guard: 'KoboldGuard.jpg',
+  kobold_slinger: 'KoboldSlinger.jpg',
+  kobold_dragonshield: 'KoboldDragonShield.jpg',
+  thorb: 'ThorbAlly.jpg',
+  small_spider: 'PetSpider.jpg',
+  spider: 'PetSpider.jpg',
+  deathjump_spider: 'DeathjumpSpider.jpg',
+  elf_warrior: 'ElfWarrior.jpg',
+  raena: 'RaenaAlly.jpg',
+  bone_amalgam: 'BoneAmalgam.jpg',
+  wolf: 'WolfInSnow.jpg',
+  goblin_sapper: 'GoblinSapper.jpg',
 };
 
 // Lazy-loading image cache

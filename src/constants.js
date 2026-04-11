@@ -1,5 +1,5 @@
 // === Game Version ===
-export const GAME_VERSION = '0.1.0';
+export const GAME_VERSION = '0.1.7';
 
 // === Screen Dimensions ===
 export const SCREEN_WIDTH = 1280;
@@ -123,11 +123,22 @@ export const CARD_COLORS = Object.freeze({
   [CardType.RELIC]: '#ffd700',
 });
 
-// === Subtype Colors ===
+// === Subtype Colors (matches Python game) ===
 export const SUBTYPE_COLORS = Object.freeze({
-  weapon: '#b43c3c',
-  armor: '#3c3cb4',
-  ability: '#8c3c8c',
-  item: '#808080',
-  allies: '#645038',
+  weapon: '#b43c3c',        // Red
+  armor: '#3c3cb4',         // Blue
+  heavy_armor: '#3c3cb4',   // Blue
+  light_armor: '#3c3cb4',   // Blue
+  clothing: '#3c3cb4',      // Blue
+  martial: '#b43c3c',       // Red (weapon)
+  simple: '#b43c3c',        // Red
+  martial_2h: '#b43c3c',    // Red
+  ranged: '#b43c3c',        // Red
+  ranged_2h: '#b43c3c',     // Red
+  wand: '#b43c3c',          // Red
+  staff: '#b43c3c',         // Red
+  ability: '#8c3c8c',       // Purple
+  item: '#808080',          // Grey
+  allies: '#645038',        // Brown
+  relic: '#c0c0dc',         // Silver
 });

@@ -1,3 +1,5 @@
+import { createFireToken, createIceToken, createCatFormToken, createBearFormToken } from './cards.js';
+
 /**
  * A character power that can be used once per turn.
  */
@@ -62,7 +64,7 @@ export function createCleave() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Deal 1 Damage to up to 2 Creatures.',
     rechargeCost: 1,
-    shortDesc: 'R1->1 Dmg x2',
+    shortDesc: '1 Dmg x2',
   });
 }
 
@@ -73,7 +75,7 @@ export function createAimedShot() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Gain 1 Heroism, Draw 1.',
     rechargeCost: 1,
-    shortDesc: 'R1->Heroism 1\nDraw 1',
+    shortDesc: '+1 Heroism\nDraw 1',
   });
 }
 
@@ -84,7 +86,8 @@ export function createElementalInfusion() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Apply 1 Fire or 1 Ice to target.',
     rechargeCost: 1,
-    shortDesc: 'R1->Fire/Ice',
+    shortDesc: '+1 Fire/Ice',
+    choices: [createFireToken(), createIceToken()],
   });
 }
 
@@ -95,7 +98,7 @@ export function createQuickStrike() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Deal 1 Damage, Draw 1.',
     rechargeCost: 1,
-    shortDesc: 'R1->1 Dmg\nDraw 1',
+    shortDesc: '1 Dmg\nDraw 1',
   });
 }
 
@@ -107,7 +110,7 @@ export function createBattleFury() {
     effectDescription: 'Gain 1 Heroism, 1 Shield, Draw 2.',
     rechargeCost: 1,
     costIsDiscard: true,
-    shortDesc: 'D1->Hero 1\nShield 1, Draw 2',
+    shortDesc: '+1 Heroism\n+1 Shield, Draw 2',
   });
 }
 
@@ -118,7 +121,58 @@ export function createFeralForm() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Gain 1 Heroism or 1 Shield. Draw 1.',
     rechargeCost: 1,
-    shortDesc: 'R1->+1H/+1S\nDraw 1',
+    shortDesc: '+1 Heroism or\n+1 Shield, Draw 1',
+    choices: [createCatFormToken(), createBearFormToken()],
+  });
+}
+
+// === Enemy Powers ===
+
+export function createChunkyBite() {
+  return new Power({
+    id: 'chunky_bite',
+    name: 'Chunky Bite',
+    costDescription: 'Passive',
+    effectDescription: 'Bites deal +1 damage.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Bite +1',
+  });
+}
+
+export function createDireFury() {
+  return new Power({
+    id: 'dire_fury',
+    name: 'Dire Fury',
+    costDescription: 'Passive',
+    effectDescription: 'Gains rage on damage.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: '+Rage on hit',
+  });
+}
+
+export function createSplit() {
+  return new Power({
+    id: 'split',
+    name: 'Split',
+    costDescription: 'Passive',
+    effectDescription: 'Splits when damaged.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Split on hit',
+  });
+}
+
+export function createArmorPower() {
+  return new Power({
+    id: 'armor',
+    name: 'Armor',
+    costDescription: 'Passive',
+    effectDescription: '+1 Armor.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: '+1 Armor',
   });
 }
 

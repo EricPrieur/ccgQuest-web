@@ -1,4 +1,4 @@
-import { GAME_VERSION, SCREEN_WIDTH, SCREEN_HEIGHT, GameState, Colors, CARD_COLORS, CardType, CostType, TargetType } from './constants.js';
+import { GAME_VERSION, SCREEN_WIDTH, SCREEN_HEIGHT, GameState, Colors, CARD_COLORS, SUBTYPE_COLORS, CardType, CostType, TargetType } from './constants.js';
 
 // Base path for assets (matches vite.config.js base)
 const BASE = import.meta.env.BASE_URL || '/';
@@ -51,8 +51,8 @@ import {
 import { createPrisonCellMap, createMountainPathMap, createPlainsMap, createCaveMap, createRuinsBasinMap, createNorthQualibafMap, createFilibafForestMap, createTharnagMap, createVolcanoMap, createObsidianWastesMap, createTharnagInteriorMap, createEntryCorridorMap, createGateAreaMap, createHallOfAncestorsMap, createMonumentAlleyMap, createTombOfAncestorMap, createGrandStairsMap, createDwarvenThroneRoomMap, createMapRoomMap, createDeeperTunnelsMap, createArtisanDistrictMap } from './map.js';
 import { ENCOUNTER_REGISTRY, EncounterPhase } from './encounter.js';
 import { getCardArt, getPowerArt } from './card-art.js';
-import { getClassPower } from './power.js';
-import { saveToSlot, loadFromSlot, hasSave, getSaveInfo } from './save.js';
+import { Power, getClassPower, createChunkyBite, createDireFury, createSplit, createArmorPower } from './power.js';
+import { saveToSlot, saveToAutoSlot, loadFromSlot, hasSave, hasAnySave, getSaveInfo, deleteSave, MANUAL_SLOT_COUNT, AUTO_SLOT_COUNT } from './save.js';
 
 // === Canvas Setup ===
 const canvas = document.getElementById('game');
@@ -116,8 +116,19 @@ let inventoryScrollY = 0;
 let pendingLevelUp = false;
 let perkChoices = [];
 let restMode = false; // true when inventory opened during level-up rest
+let encounterTextScrollY = 0; // scroll offset for accumulated encounter text
+let encounterTextOverflow = 0; // how much the text overflows the box (set during draw)
+
+// Debug mode (toggle with backtick `)
+let debugMode = false;
 let previousState = null; // state before help/ingame menu
+let saveLoadReturnState = null; // state to return to from save/load screens
 let helpScrollY = 0;
+let loadTab = 'manual'; // 'manual' or 'auto'
+let loadSelectedIndex = -1;
+let loadConfirmDelete = false;
+let loadEntries = [];
+let loadScrollY = 0;
 
 // Fade transition state
 let fadeAlpha = 0;
@@ -137,6 +148,46 @@ let titleCardCallback = null;
 // Damage number animations
 let damageNumbers = []; // { x, y, text, color, timer, vy }
 
+// Card badge hover hit areas (cleared each frame)
+let cardBadgeHitAreas = []; // { x, y, w, h, label }
+
+// Inline icon hit areas for keyword tooltips (cleared each frame)
+let iconHitAreas = []; // { x, y, w, h, keyword }
+
+// Combat intro state
+let combatIntroTimer = 0;       // ms remaining
+let combatIntroMessage = '';    // optional message under enemy art
+
+// Character card splash (click on card to view full art)
+let characterSplashCharacter = null; // null when no splash
+let characterSplashIsPlayer = false;
+
+// Hover preview state (cards/powers in combat)
+let hoveredCardPreview = null; // a Card to render large
+let hoveredPowerPreview = null; // a Power to render large
+
+// Hit areas for log entries that have a card attached (for hover preview)
+let logCardHitAreas = []; // { x, y, w, h, card }
+
+// === Combat Layout Constants ===
+// Left section: 80% width (game area)
+// Right section: 20% width (log + buttons)
+const COMBAT_LEFT_W = Math.floor(SCREEN_WIDTH * 0.8);   // 1024
+const COMBAT_RIGHT_X = COMBAT_LEFT_W;
+const COMBAT_RIGHT_W = SCREEN_WIDTH - COMBAT_LEFT_W;    // 256
+
+// Left side split horizontally (enemy on top, player on bottom)
+const COMBAT_DIVIDER_Y = Math.floor(SCREEN_HEIGHT / 2); // 480
+const COMBAT_ENEMY_AREA = { x: 0, y: 0, w: COMBAT_LEFT_W, h: COMBAT_DIVIDER_Y };
+const COMBAT_PLAYER_AREA = { x: 0, y: COMBAT_DIVIDER_Y, w: COMBAT_LEFT_W, h: SCREEN_HEIGHT - COMBAT_DIVIDER_Y };
+
+// Right side: log + button section.
+const COMBAT_RIGHT_BTN_H = 160;
+const COMBAT_RIGHT_LOG_H = SCREEN_HEIGHT - COMBAT_RIGHT_BTN_H; // 816
+const COMBAT_RIGHT_BTN_Y = COMBAT_RIGHT_LOG_H;
+const COMBAT_LOG_AREA = { x: COMBAT_RIGHT_X, y: 0, w: COMBAT_RIGHT_W, h: COMBAT_RIGHT_LOG_H };
+const COMBAT_BTN_AREA = { x: COMBAT_RIGHT_X, y: COMBAT_RIGHT_BTN_Y, w: COMBAT_RIGHT_W, h: COMBAT_RIGHT_BTN_H };
+
 // Special encounter state
 let killCount = 0; // for kill-count encounters (wolf pack, etc.)
 let killTarget = 0; // how many kills needed to win
@@ -152,6 +203,12 @@ let powerRechargeMode = false;
 let powerRechargeCardsNeeded = 0;
 let powerRechargeCardsSelected = [];
 let selectedPower = null;
+
+// Card recharge state (for cards with recharge_extra cost like Bow, Bone Club)
+let cardRechargeMode = false;
+let cardRechargeNeeded = 0;
+let cardRechargedCards = []; // cards already paid as recharge cost
+let pendingRechargeNames = []; // names to log after the card resolves
 
 // Card registry: card_id -> creator function (for loot rewards + save/load)
 const CARD_REGISTRY = {
@@ -248,10 +305,23 @@ async function loadAssets() {
     loadImage('map_deeper_tunnels', `${BASE}assets/Maps/DwarvenCityDeeperTunnels.jpg`),
     loadImage('map_artisan_district', `${BASE}assets/Maps/DwarvenCityArtisanDistrict.jpg`),
     // UI assets
+    loadImage('backpack_bg', `${BASE}assets/Backgrounds/BackpackBackground.jpg`),
     loadImage('btn_large', `${BASE}assets/Icons/ButtonLarge.png`),
     loadImage('btn_play', `${BASE}assets/Icons/PlayButton.png`),
     loadImage('banner_large', `${BASE}assets/Icons/BannerLarge.png`),
     loadImage('banner_small', `${BASE}assets/Icons/BannerSmall.png`),
+    // UI icons
+    loadImage('icon_backpack', `${BASE}assets/Icons/Backpack.png`),
+    loadImage('icon_help', `${BASE}assets/Icons/HelpIcon.png`),
+    // Keyword icons
+    loadImage('icon_heroism', `${BASE}assets/Icons/HeroismIcon.png`),
+    loadImage('icon_shield', `${BASE}assets/Icons/ShieldIcon.png`),
+    loadImage('icon_armor', `${BASE}assets/Icons/ArmorIcon.png`),
+    loadImage('icon_fire', `${BASE}assets/Icons/FireElementIcon.png`),
+    loadImage('icon_ice', `${BASE}assets/Icons/IceElementIcon.png`),
+    loadImage('icon_poison', `${BASE}assets/Icons/PoisonIcon.png`),
+    loadImage('icon_shock', `${BASE}assets/Icons/LightningIcon.png`),
+    loadImage('icon_rage', `${BASE}assets/Icons/RageIcon.png`),
   ]);
   assetsLoaded = true;
 }
@@ -284,12 +354,44 @@ canvas.addEventListener('wheel', (e) => {
   if (state === GameState.SHOP) shopScrollY = Math.max(0, shopScrollY + scrollAmount);
   if (state === GameState.INVENTORY) inventoryScrollY = Math.max(0, inventoryScrollY + scrollAmount);
   if (state === GameState.HELP_SCREEN) helpScrollY = Math.max(0, helpScrollY + scrollAmount);
+  if (state === GameState.ENCOUNTER_TEXT) encounterTextScrollY = Math.max(0, encounterTextScrollY + scrollAmount);
+  if (state === GameState.LOAD_GAME || state === GameState.SAVE_GAME) {
+    loadScrollY = Math.max(0, loadScrollY + scrollAmount);
+  }
 }, { passive: false });
 
 // === Utility ===
-function addLog(text, color = Colors.WHITE) {
-  combatLog.push({ text, color });
-  if (combatLog.length > 50) combatLog.shift();
+function addLog(text, color = Colors.WHITE, card = null) {
+  // Effect sub-lines (indented with two spaces) get a → prefix.
+  // The arrow is rendered in orange and the rest in the entry color
+  // (defaults to white, but caller may pass a specific color to override).
+  // Parenthetical info lines like "  (2 cards recharged)" stay indented without arrow.
+  // Lines starting with specific info markers (Mode:, Recharge:, Shield, Armor, All damage)
+  // also stay indented as info, not arrow.
+  let arrow = false;
+  const callerSpecifiedColor = color !== Colors.WHITE;
+  if (text.startsWith('  ')) {
+    const inner = text.slice(2);
+    const isInfo =
+      inner.startsWith('(') ||
+      inner.startsWith('Mode:') ||
+      inner.startsWith('Recharge:') ||
+      inner.startsWith('Shield absorbs') ||
+      inner.startsWith('Armor absorbs') ||
+      inner.startsWith('Block absorbs') ||
+      inner.startsWith('All damage absorbed');
+    if (isInfo) {
+      // Info: keep indent, no arrow, gray (unless caller specified a color)
+      text = '  ' + inner;
+      if (!callerSpecifiedColor) color = Colors.GRAY;
+    } else {
+      text = '→ ' + inner;
+      if (!callerSpecifiedColor) color = Colors.WHITE;
+      arrow = true;
+    }
+  }
+  combatLog.push({ text, color, card, arrow });
+  if (combatLog.length > 100) combatLog.shift();
   // Auto-spawn damage numbers for damage messages in combat
   if ((state === GameState.COMBAT || state === GameState.TARGETING) && text.includes('dmg to') || text.includes('damage to')) {
     const match = text.match(/(\d+)\s+(?:dmg|damage|true dmg)/);
@@ -300,6 +402,26 @@ function addLog(text, color = Colors.WHITE) {
       spawnDamageNumber(x, y, `-${match[1]}`, color);
     }
   }
+}
+
+// Yellow on-screen temporary message
+let toastMessage = '';
+let toastTimer = 0;
+let toastSticky = false;
+function showToast(text, durationMs = 2500) {
+  toastMessage = text;
+  toastTimer = durationMs;
+  toastSticky = false;
+}
+function showStickyToast(text) {
+  toastMessage = text;
+  toastTimer = 1; // any positive value so drawToast renders
+  toastSticky = true;
+}
+function hideToast() {
+  toastMessage = '';
+  toastTimer = 0;
+  toastSticky = false;
 }
 
 function hitTest(x, y, rect) {
@@ -339,6 +461,18 @@ function handleClick(x, y) {
       break;
     case GameState.TARGETING:
       handleTargetingClick(x, y);
+      break;
+    case GameState.DEFENDING:
+      handleDefendingClick(x, y);
+      break;
+    case GameState.DAMAGE_SOURCE:
+      handleDamageSourceClick(x, y);
+      break;
+    case GameState.POWER_TARGETING:
+      handlePowerTargetingClick(x, y);
+      break;
+    case GameState.POWER_CHOICE:
+      handlePowerChoiceClick(x, y);
       break;
     case GameState.MODAL_SELECT:
       handleModalSelectClick(x, y);
@@ -387,25 +521,58 @@ function handleClick(x, y) {
 
 function handleKeyDown(key, event) {
   if (key === 'Escape') {
+    // First, handle modal/targeting states that ESC should cancel
     if (powerRechargeMode) {
       cancelPowerRecharge();
+    } else if (cardRechargeMode) {
+      cancelCardRecharge();
     } else if (state === GameState.MODAL_SELECT) {
       modalCard = null;
       modalTarget = null;
       state = GameState.COMBAT;
     } else if (state === GameState.TARGETING) {
+      // Refund any cards spent on recharge_extra cost
+      if (cardRechargedCards.length > 0) {
+        cancelCardRecharge();
+      }
       selectedCardIndex = -1;
+      hideToast();
       state = GameState.COMBAT;
-    } else if (state === GameState.COMBAT) {
+    } else if (state === GameState.POWER_TARGETING) {
+      cancelPowerTargeting();
+    } else if (state === GameState.POWER_CHOICE) {
+      cancelPowerChoice();
+    } else if (state === GameState.COMBAT && selectedCardIndex !== -1) {
+      // Deselect a selected card first
       selectedCardIndex = -1;
-    } else if (state === GameState.SAVE_GAME || state === GameState.LOAD_GAME) {
-      state = GameState.MAP;
-    } else if (state === GameState.SHOP || state === GameState.INVENTORY) {
-      state = GameState.MAP;
+    } else if (state === GameState.CHARACTER_SELECT) {
+      // ESC = Back button -> main menu
+      state = GameState.MENU;
+    } else if (state === GameState.ABILITY_SELECT) {
+      // ESC = Back button -> character select (only at game start, not mid-game level-up)
+      if (!player) state = GameState.CHARACTER_SELECT;
     } else if (state === GameState.HELP_SCREEN) {
       state = previousState || GameState.MAP;
     } else if (state === GameState.INGAME_MENU) {
+      // Close the menu (resume)
       state = previousState || GameState.MAP;
+    } else if (state === GameState.SAVE_GAME || state === GameState.LOAD_GAME) {
+      state = saveLoadReturnState || (player ? GameState.MAP : GameState.MENU);
+    } else if (state === GameState.SHOP) {
+      state = GameState.MAP;
+    } else if (state === GameState.INVENTORY) {
+      // Return to where we came from (combat, map, or rest mode flow)
+      if (restMode) {
+        restMode = false;
+        if (currentEncounter && !currentEncounter.isComplete) {
+          currentEncounter.advancePhase();
+          advanceEncounterPhase();
+        } else {
+          state = GameState.MAP;
+        }
+      } else {
+        state = previousState || GameState.MAP;
+      }
     } else if (state === GameState.COMBAT || state === GameState.MAP || state === GameState.ENCOUNTER_TEXT || state === GameState.ENCOUNTER_CHOICE) {
       // Open in-game menu
       previousState = state;
@@ -413,13 +580,32 @@ function handleKeyDown(key, event) {
     }
   }
   if (key === 's' || key === 'S') {
-    if (state === GameState.MAP) state = GameState.SAVE_GAME;
+    if (state === GameState.MAP) {
+      saveLoadReturnState = GameState.MAP;
+      state = GameState.SAVE_GAME;
+    }
   }
   if (key === 'l' || key === 'L') {
-    if (state === GameState.MAP) state = GameState.LOAD_GAME;
+    if (state === GameState.MAP) {
+      saveLoadReturnState = GameState.MAP;
+      loadTab = 'manual';
+      loadSelectedIndex = -1;
+      loadScrollY = 0;
+      refreshLoadEntries();
+      state = GameState.LOAD_GAME;
+    }
   }
   if (key === 'i' || key === 'I') {
-    if (state === GameState.MAP) state = GameState.INVENTORY;
+    if (state === GameState.MAP || state === GameState.COMBAT) {
+      previousState = state;
+      state = GameState.INVENTORY;
+    } else if (state === GameState.INVENTORY && !restMode) {
+      exitInventory();
+    }
+  }
+  if (key === '`') {
+    debugMode = !debugMode;
+    addLog(`Debug mode ${debugMode ? 'ON' : 'OFF'}`, debugMode ? Colors.GREEN : Colors.GRAY);
   }
   if (key === 'h' || key === 'H') {
     if (state === GameState.HELP_SCREEN) {
@@ -455,12 +641,12 @@ function drawMenu() {
     ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
   }
 
-  // Semi-transparent overlay panel behind title and buttons
+  // Semi-transparent black panel behind title and buttons
   const panelW = 540;
   const panelH = 540;
   const panelX = (SCREEN_WIDTH - panelW) / 2;
   const panelY = 130;
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
   ctx.fillRect(panelX, panelY, panelW, panelH);
 
   // Title with shadow
@@ -499,17 +685,22 @@ function drawMenu() {
   btnY += 110;
 
   // Load Game button (always visible, uses ButtonLarge wooden plank)
-  const hasAnySave = hasSave('1') || hasSave('2') || hasSave('3');
-  drawStyledButton(btnX, btnY, btnW, btnH, 'Load Game', () => {
-    if (hasAnySave) state = GameState.LOAD_GAME;
-  }, 'large');
-  if (!hasAnySave) {
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(btnX, btnY, btnW, btnH);
-    ctx.fillStyle = Colors.GRAY;
-    ctx.font = '14px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('(no saves)', SCREEN_WIDTH / 2, btnY + btnH / 2 + 20);
+  const hasSaves = hasAnySave();
+  if (hasSaves) {
+    drawStyledButton(btnX, btnY, btnW, btnH, 'Load Game', () => {
+      saveLoadReturnState = GameState.MENU;
+      loadTab = 'manual';
+      loadSelectedIndex = -1;
+      refreshLoadEntries();
+      state = GameState.LOAD_GAME;
+    }, 'large');
+  } else {
+    // Disabled state: render sprite at lower opacity, no click handler
+    ctx.globalAlpha = 0.45;
+    drawStyledButton(btnX, btnY, btnW, btnH, 'Load Game', null, 'large');
+    ctx.globalAlpha = 1;
+    // Remove the click handler we just registered
+    menuButtons.pop();
   }
 
   ctx.textAlign = 'left';
@@ -608,6 +799,13 @@ function getClassRects() {
 }
 
 function handleCharSelectClick(x, y) {
+  // Back button
+  const backBtn = { x: 40, y: SCREEN_HEIGHT - 100, w: 200, h: 70 };
+  if (hitTest(x, y, backBtn)) {
+    state = GameState.MENU;
+    return;
+  }
+
   for (const r of getClassRects()) {
     if (hitTest(x, y, r)) {
       selectClass(r.name);
@@ -649,7 +847,7 @@ function startGameWithAbility(ability) {
   backpack = [];
 
   // Show title card then start first encounter
-  showTitleCard('Part 1: The White Claw', 'Chapter 1: The Prison', () => {
+  showTitleCard('Part 1: The White Claw', '', () => {
     startNodeEncounter('bed');
   });
 }
@@ -661,10 +859,29 @@ function drawCharacterSelect() {
     ctx.fillStyle = '#1a0a2e';
     ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
   }
+
+  // Semi-transparent panel behind title for clarity
+  const titlePanelW = 600;
+  const titlePanelH = 100;
+  const titlePanelX = (SCREEN_WIDTH - titlePanelW) / 2;
+  const titlePanelY = 40;
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(titlePanelX, titlePanelY, titlePanelW, titlePanelH);
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(titlePanelX, titlePanelY, titlePanelW, titlePanelH);
+
+  // Title with shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
   ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 36px serif';
+  ctx.font = 'bold 44px serif';
   ctx.textAlign = 'center';
-  ctx.fillText('Choose Your Class', SCREEN_WIDTH / 2, 100);
+  ctx.fillText('Choose Your Class', SCREEN_WIDTH / 2, titlePanelY + 60);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 
   const classArtIds = {
     Paladin: 'paladin_class', Ranger: 'ranger_class', Wizard: 'wizard_class',
@@ -681,7 +898,7 @@ function drawCharacterSelect() {
       let sx = 0, sy = 0, sw = art.width, sh = art.height;
       if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
       else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
-      ctx.globalAlpha = hovered ? 1 : 0.8;
+      ctx.globalAlpha = hovered ? 1 : 0.85;
       ctx.drawImage(art, sx, sy, sw, sh, r.x, r.y, r.w, r.h);
       ctx.globalAlpha = 1;
     } else {
@@ -691,21 +908,43 @@ function drawCharacterSelect() {
       ctx.globalAlpha = 1;
     }
 
-    ctx.strokeStyle = hovered ? Colors.GOLD : Colors.GRAY;
-    ctx.lineWidth = hovered ? 3 : 2;
+    ctx.strokeStyle = hovered ? Colors.GOLD : '#888';
+    ctx.lineWidth = hovered ? 4 : 2;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
 
-    // Name bar at bottom
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(r.x, r.y + r.h - 55, r.w, 55);
-    ctx.fillStyle = Colors.WHITE;
-    ctx.font = 'bold 22px sans-serif';
+    // Name bar at bottom — taller, more opaque
+    const nameBarH = 70;
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(r.x, r.y + r.h - nameBarH, r.w, nameBarH);
+    // Top edge highlight
+    ctx.strokeStyle = hovered ? Colors.GOLD : '#666';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(r.x, r.y + r.h - nameBarH);
+    ctx.lineTo(r.x + r.w, r.y + r.h - nameBarH);
+    ctx.stroke();
+
+    // Class name with shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 4;
+    ctx.fillStyle = hovered ? Colors.GOLD : Colors.WHITE;
+    ctx.font = 'bold 24px serif';
     ctx.textAlign = 'center';
-    ctx.fillText(r.name, r.x + r.w / 2, r.y + r.h - 30);
-    ctx.font = '13px sans-serif';
-    ctx.fillStyle = Colors.GRAY;
-    ctx.fillText(r.desc, r.x + r.w / 2, r.y + r.h - 10);
+    ctx.fillText(r.name, r.x + r.w / 2, r.y + r.h - 40);
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+
+    // Description — brighter, larger
+    ctx.fillStyle = '#e0e0e0';
+    ctx.font = '14px sans-serif';
+    ctx.fillText(r.desc, r.x + r.w / 2, r.y + r.h - 15);
   }
+
+  // Back button
+  const backBtn = { x: 40, y: SCREEN_HEIGHT - 100, w: 200, h: 70 };
+  menuButtons.length = menuButtons.length; // keep menuButtons in scope
+  drawStyledButton(backBtn.x, backBtn.y, backBtn.w, backBtn.h, '< Back', () => { state = GameState.MENU; }, 'large', 22);
+
   ctx.textAlign = 'left';
 }
 
@@ -727,8 +966,8 @@ function getAbilityCardRects() {
 }
 
 function handleAbilitySelectClick(x, y) {
-  // Back button
-  const backBtn = { x: 40, y: SCREEN_HEIGHT - 80, w: 150, h: 50 };
+  // Back button (matches character select style)
+  const backBtn = { x: 40, y: SCREEN_HEIGHT - 100, w: 200, h: 70 };
   if (hitTest(x, y, backBtn)) {
     state = GameState.CHARACTER_SELECT;
     return;
@@ -782,87 +1021,27 @@ function drawAbilitySelect() {
   ctx.textAlign = 'center';
   ctx.fillText('Choose Your Starting Ability', SCREEN_WIDTH / 2, 80);
 
-  ctx.fillStyle = Colors.GRAY;
-  ctx.font = '18px sans-serif';
-  ctx.fillText(`${selectedClass} - Pick one ability card to add to your deck`, SCREEN_WIDTH / 2, 120);
+  ctx.fillStyle = '#e0e0e0';
+  ctx.font = '20px sans-serif';
+  ctx.fillText(`${selectedClass} — Pick one ability card to add to your deck`, SCREEN_WIDTH / 2, 120);
 
   const rects = getAbilityCardRects();
   for (let i = 0; i < abilityChoices.length; i++) {
     const card = abilityChoices[i];
     const r = rects[i];
     const hovered = hitTest(mouseX, mouseY, r);
-    const art = getCardArt(card.id);
-
-    if (art) {
-      // Draw art filling card area (crop to fit)
-      const imgAspect = art.width / art.height;
-      const cardAspect = r.w / r.h;
-      let sx = 0, sy = 0, sw = art.width, sh = art.height;
-      if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
-      else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
-      ctx.globalAlpha = hovered ? 1 : 0.9;
-      ctx.drawImage(art, sx, sy, sw, sh, r.x, r.y, r.w, r.h);
-      ctx.globalAlpha = 1;
-    } else {
-      const typeColor = CARD_COLORS[card.cardType] || '#444';
-      ctx.fillStyle = typeColor;
-      ctx.globalAlpha = hovered ? 1 : 0.85;
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.globalAlpha = 1;
-    }
-
-    // Border
-    ctx.strokeStyle = hovered ? Colors.GOLD : '#888';
-    ctx.lineWidth = hovered ? 3 : 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-
-    // Name bar at top
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(r.x, r.y, r.w, 40);
-    ctx.fillStyle = Colors.WHITE;
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(card.name, r.x + r.w / 2, r.y + 26);
-
-    // Description panel at bottom
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(r.x, r.y + r.h - 90, r.w, 90);
-
-    const costLabels = { RECHARGE: 'Recharge', EXHAUST: 'Exhaust', BANISH: 'Banish', DISCARD: 'Discard', FREE: 'Free' };
-    ctx.fillStyle = Colors.GOLD;
-    ctx.font = '12px sans-serif';
-    ctx.fillText(`${card.subtype || card.cardType}  •  ${costLabels[card.costType] || card.costType}`, r.x + r.w / 2, r.y + r.h - 72);
-
-    ctx.fillStyle = '#eee';
-    ctx.font = '14px sans-serif';
-    const descLines = wrapText(card.description, r.w - 20, 14);
-    let descY = r.y + r.h - 52;
-    for (const line of descLines.slice(0, 3)) {
-      ctx.fillText(line, r.x + r.w / 2, descY);
-      descY += 18;
-    }
+    drawCard(card, r.x, r.y, r.w, r.h, hovered, hovered, 'full');
 
     if (hovered) {
       ctx.fillStyle = Colors.GOLD;
       ctx.font = 'bold 14px sans-serif';
-      ctx.fillText('Click to select', r.x + r.w / 2, r.y + r.h - 5);
+      ctx.textAlign = 'center';
+      ctx.fillText('Click to select', r.x + r.w / 2, r.y + r.h + 18);
     }
   }
 
-  // Back button
-  const backBtn = { x: 40, y: SCREEN_HEIGHT - 80, w: 150, h: 50 };
-  const backHov = hitTest(mouseX, mouseY, backBtn);
-  ctx.fillStyle = backHov ? '#4a3a6e' : '#2a1a4e';
-  ctx.fillRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h);
-  ctx.strokeStyle = backHov ? Colors.GOLD : Colors.GRAY;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h);
-  ctx.fillStyle = backHov ? Colors.GOLD : Colors.WHITE;
-  ctx.font = 'bold 18px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('< Back', backBtn.x + backBtn.w / 2, backBtn.y + backBtn.h / 2);
-  ctx.textBaseline = 'alphabetic';
+  // Back button (matches character select style)
+  drawStyledButton(40, SCREEN_HEIGHT - 100, 200, 70, '< Back', () => { state = GameState.CHARACTER_SELECT; }, 'large', 22);
 
   ctx.textAlign = 'left';
 }
@@ -1131,7 +1310,7 @@ function advanceEncounterPhase() {
 
     state = GameState.MAP;
     // Auto-save
-    saveToSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack }, 'auto');
+    saveToAutoSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack });
     return;
   }
 
@@ -1139,6 +1318,7 @@ function advanceEncounterPhase() {
   switch (phase.phaseType) {
     case EncounterPhase.TEXT:
       encounterTextIndex = 0;
+      encounterTextScrollY = 0;
       state = GameState.ENCOUNTER_TEXT;
       break;
     case EncounterPhase.CHOICE:
@@ -1199,12 +1379,14 @@ function setupEnemyForCombat(enemyId) {
       for (let i = 0; i < 6; i++) enemy.deck.addCard(createBite());
       for (let i = 0; i < 4; i++) enemy.deck.addCard(createToughHide());
       for (let i = 0; i < 4; i++) enemy.deck.addCard(createSkreeeeeeeek());
+      enemy.addPower(createChunkyBite());
     },
     bone_pile: () => {
       enemy = new Character('Bone Pile');
       enemy.deck = new Deck();
       for (let i = 0; i < 6; i++) enemy.deck.addCard(createBigBone());
       for (let i = 0; i < 4; i++) enemy.deck.addCard(createLooseBone());
+      enemy.addPower(createArmorPower());
     },
     slime: () => {
       enemy = new Character('Slime');
@@ -1574,8 +1756,13 @@ function drawMap() {
 function handleEncounterTextClick() {
   const phase = currentEncounter.currentPhase;
   if (!phase) return;
-  encounterTextIndex++;
-  if (encounterTextIndex >= phase.texts.length) {
+  // If there are more paragraphs to reveal, reveal the next one
+  if (encounterTextIndex + 1 < phase.texts.length) {
+    encounterTextIndex++;
+    // Auto-scroll to bottom so the new paragraph is visible
+    encounterTextScrollY = encounterTextOverflow;
+  } else {
+    // All paragraphs shown, advance to next phase
     currentEncounter.advancePhase();
     advanceEncounterPhase();
   }
@@ -1585,52 +1772,103 @@ function drawEncounterText() {
   drawEncounterBg();
 
   const phase = currentEncounter.currentPhase;
-  if (!phase || encounterTextIndex >= phase.texts.length) return;
+  if (!phase) return;
 
-  const entry = phase.texts[encounterTextIndex];
-  const boxY = SCREEN_HEIGHT - 280;
-  const boxH = 240;
-  const boxX = 60;
-  const boxW = SCREEN_WIDTH - 120;
+  // Bigger text box, centered
+  const boxW = SCREEN_WIDTH - 160;
+  const boxH = 460;
+  const boxX = (SCREEN_WIDTH - boxW) / 2;
+  const boxY = (SCREEN_HEIGHT - boxH) / 2 + 30; // shifted down so title sits higher
 
-  // Text box
-  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  // Encounter title — higher up
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 40px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  ctx.fillText(currentEncounter.name, Math.round(SCREEN_WIDTH / 2), boxY - 30);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Text box background
+  ctx.fillStyle = 'rgba(0,0,0,0.82)';
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.strokeStyle = Colors.GOLD;
   ctx.lineWidth = 2;
   ctx.strokeRect(boxX, boxY, boxW, boxH);
 
-  // Speaker
-  if (entry.speaker) {
-    ctx.fillStyle = Colors.GOLD;
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(entry.speaker === '!' ? '!!!' : entry.speaker, boxX + 20, boxY + 30);
-  }
+  // Render all revealed paragraphs stacked, top-aligned, scrollable
+  const padding = 24;
+  const innerX = boxX + padding;
+  const innerY = boxY + padding;
+  const innerW = boxW - padding * 2;
+  const innerH = boxH - padding * 2 - 30; // leave room for continue prompt
 
-  // Text (word-wrapped)
-  ctx.fillStyle = Colors.WHITE;
-  ctx.font = '16px sans-serif';
+  // Clip to inner area
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(innerX, innerY, innerW, innerH);
+  ctx.clip();
+
+  ctx.font = '21px Georgia, serif';
   ctx.textAlign = 'left';
-  const maxWidth = boxW - 40;
-  const lines = wrapTextLong(entry.text, maxWidth, 16);
-  let textY = boxY + (entry.speaker ? 55 : 35);
-  for (const line of lines) {
-    ctx.fillText(line, boxX + 20, textY);
-    textY += 22;
+  const lineH = 30;
+  const paragraphGap = 18;
+  let cursorY = innerY - encounterTextScrollY;
+
+  const visibleCount = Math.min(encounterTextIndex + 1, phase.texts.length);
+  for (let i = 0; i < visibleCount; i++) {
+    const entry = phase.texts[i];
+
+    // Speaker
+    if (entry.speaker) {
+      ctx.fillStyle = Colors.GOLD;
+      ctx.font = 'bold 23px Georgia, serif';
+      ctx.fillText(entry.speaker === '!' ? '!!!' : entry.speaker, innerX, cursorY + 22);
+      cursorY += 32;
+      ctx.font = '21px Georgia, serif';
+    }
+
+    ctx.fillStyle = Colors.WHITE;
+    const lines = wrapTextLong(entry.text, innerW, 21);
+    for (const line of lines) {
+      cursorY += lineH;
+      ctx.fillText(line, innerX, cursorY);
+    }
+    cursorY += paragraphGap;
   }
 
-  // Continue prompt
+  ctx.restore();
+
+  // Calculate overflow for scroll handling
+  const totalContentH = (cursorY - paragraphGap) - (innerY - encounterTextScrollY);
+  encounterTextOverflow = Math.max(0, totalContentH - innerH);
+  // Clamp scroll
+  if (encounterTextScrollY > encounterTextOverflow) encounterTextScrollY = encounterTextOverflow;
+
+  // Scrollbar if needed
+  if (encounterTextOverflow > 0) {
+    const trackX = boxX + boxW - 8;
+    const trackY = innerY;
+    const trackH = innerH;
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(trackX, trackY, 4, trackH);
+    const thumbH = Math.max(20, trackH * (innerH / (innerH + encounterTextOverflow)));
+    const thumbY = trackY + (encounterTextScrollY / encounterTextOverflow) * (trackH - thumbH);
+    ctx.fillStyle = Colors.GOLD;
+    ctx.fillRect(trackX, thumbY, 4, thumbH);
+  }
+
+  // Continue prompt at the bottom of the box
   ctx.fillStyle = Colors.GRAY;
   ctx.font = '14px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(`Click to continue (${encounterTextIndex + 1}/${phase.texts.length})`, SCREEN_WIDTH / 2, boxY + boxH - 15);
-
-  // Encounter title
-  ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 28px serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(currentEncounter.name, SCREEN_WIDTH / 2, 60);
+  const promptText = encounterTextIndex + 1 < phase.texts.length
+    ? `Click to continue  (${encounterTextIndex + 1}/${phase.texts.length})`
+    : `Click to proceed  (${encounterTextIndex + 1}/${phase.texts.length})`;
+  ctx.fillText(promptText, SCREEN_WIDTH / 2, boxY + boxH - 16);
 
   ctx.textAlign = 'left';
 }
@@ -1985,15 +2223,28 @@ function startCombat() {
 
   const hs = getPlayerHandSize();
   player.deck.startCombat(hs, MAX_HAND_SIZE);
-  enemy.deck.startCombat(enemy._handSize || 2, 10);
+  const enemyStartHand = enemy._handSize || 2;
+  enemy.deck.startCombat(enemyStartHand, 10);
 
   addLog('--- Combat Start ---', Colors.GOLD);
   addLog(`${player.name} vs ${enemy.name}`, Colors.WHITE);
+  addLog(`${enemy.name} draws ${enemy.deck.hand.length} cards`, Colors.GRAY);
 
   // Apply perk effects at combat start
   applyPerksCombatStart();
 
   addLog(`Your turn! Play cards from your hand.`, Colors.GREEN);
+
+  // Trigger combat intro splash showing the enemy
+  combatIntroTimer = 3000; // 3 seconds
+  if (killTarget > 0) {
+    combatIntroMessage = `Defeat ${killTarget} enemies!`;
+  } else if (survivalRounds > 0) {
+    combatIntroMessage = `Survive ${survivalRounds} rounds!`;
+  } else {
+    combatIntroMessage = `Combat with ${enemy.name}!`;
+  }
+
   state = GameState.COMBAT;
 }
 
@@ -2053,7 +2304,7 @@ function applyPerksStartOfTurn() {
     const hasWeapon = hand.some(c => c.subtype && (c.subtype.includes('martial') || c.subtype === 'ranged' || c.subtype === 'weapon' || c.subtype === 'simple' || c.subtype === 'wand'));
     if (!hasWeapon) {
       const drawn = player.deck.draw(arsenalStacks, MAX_HAND_SIZE);
-      for (const d of drawn) addLog(`  Arsenal: Draw ${d.name}`, Colors.BLUE);
+      for (const d of drawn) addLog(`  Arsenal: Draw ${d.name}`, Colors.BLUE, d);
     }
   }
   // Talented: draw if no ability in hand
@@ -2062,44 +2313,404 @@ function applyPerksStartOfTurn() {
     const hasAbility = hand.some(c => c.cardType === CardType.ABILITY || c.subtype === 'ability');
     if (!hasAbility) {
       const drawn = player.deck.draw(talentedStacks, MAX_HAND_SIZE);
-      for (const d of drawn) addLog(`  Talented: Draw ${d.name}`, Colors.BLUE);
+      for (const d of drawn) addLog(`  Talented: Draw ${d.name}`, Colors.BLUE, d);
     }
   }
 }
 
 // --- Card layout ---
-const CARD_W = 100;
-const CARD_H = 140;
+// Hand cards are 2/3 the size of the character card (220x300 → 147x200)
+const CARD_W = 147;
+const CARD_H = 200;
 const CARD_GAP = 8;
 
 function getHandCardRects(hand) {
-  const totalW = hand.length * (CARD_W + CARD_GAP) - CARD_GAP;
-  const startX = (SCREEN_WIDTH - totalW) / 2;
+  // Hand is positioned to the right of the player character card,
+  // within the left "game area" (excluding the right column).
+  // Cards stack/overlap when there are too many to fit at full spacing,
+  // matching the py game's formula.
+  const charRect = getCharacterCardRect(true);
+  const handAreaX = charRect.x + charRect.w + 24;
+  const handAreaW = COMBAT_LEFT_W - handAreaX - 16;
+  const total = hand.length;
   const y = SCREEN_HEIGHT - CARD_H - 20;
+
+  if (total === 0) return [];
+
+  // Spacing formula matches the py game: ideal = card width + 12;
+  // when too many cards, shrink down to a minimum of ~50 visible px per card.
+  const idealSpacing = CARD_W + CARD_GAP;
+  const MIN_VISIBLE = 50;
+  let spacing;
+  if (total <= 1) {
+    spacing = idealSpacing;
+  } else {
+    const maxSpacingForFit = (handAreaW - CARD_W) / (total - 1);
+    spacing = Math.min(idealSpacing, Math.max(MIN_VISIBLE, maxSpacingForFit));
+  }
+
+  // Center the laid-out hand within its area when there's room.
+  const totalW = (total - 1) * spacing + CARD_W;
+  const startX = totalW > handAreaW
+    ? handAreaX
+    : handAreaX + (handAreaW - totalW) / 2;
+
   return hand.map((_, i) => ({
-    x: startX + i * (CARD_W + CARD_GAP),
+    x: startX + i * spacing,
     y, w: CARD_W, h: CARD_H,
   }));
+}
+
+// Hover/click hit area: only the visible portion of an overlapping card.
+// The last card is fully visible; others are clipped to their next neighbor.
+function getHandCardHoverRect(rects, index) {
+  const r = rects[index];
+  if (index === rects.length - 1) return r;
+  const next = rects[index + 1];
+  return { x: r.x, y: r.y, w: Math.max(8, next.x - r.x), h: r.h };
+}
+
+// Compute the (x, y) for a slot in a creature grid placed to the right of a character card.
+// Enemies use 2 rows of 6 starting at the top of the enemy character card.
+// Players use 1 row of 6 placed above the player hand (in the empty space at the top of the player area).
+function getCreatureSlotRect(ownerIsPlayer, slot) {
+  const charRect = getCharacterCardRect(ownerIsPlayer);
+  const startX = charRect.x + charRect.w + 16;
+  const startY = ownerIsPlayer
+    ? COMBAT_PLAYER_AREA.y + 8 // top of the player area, above the hand and the char card
+    : charRect.y;              // top of the enemy character card
+  const col = slot % CREATURE_COLS;
+  const row = Math.floor(slot / CREATURE_COLS);
+  const x = startX + col * (CREATURE_CARD_W + CREATURE_GRID_GAP);
+  const y = startY + row * (CREATURE_CARD_H + CREATURE_GRID_GAP);
+  return { x, y, w: CREATURE_CARD_W, h: CREATURE_CARD_H };
 }
 
 function getEnemyCreatureRects() {
   const creatures = enemy.creatures;
   if (creatures.length === 0) return [];
-  const totalW = creatures.length * (70 + 6) - 6;
-  const startX = (SCREEN_WIDTH - totalW) / 2;
-  const y = 200;
-  return creatures.map((_, i) => ({
-    x: startX + i * 76, y, w: 70, h: 90,
-  }));
+  return creatures.map((c, i) => {
+    const slot = (c.slot >= 0 ? c.slot : i);
+    return getCreatureSlotRect(false, slot);
+  });
+}
+
+function getPlayerCreatureRects() {
+  const creatures = player.creatures;
+  if (creatures.length === 0) return [];
+  return creatures.map((c, i) => {
+    const slot = (c.slot >= 0 ? c.slot : i);
+    return getCreatureSlotRect(true, slot);
+  });
 }
 
 // --- Drawing cards ---
-function drawCard(card, x, y, w, h, highlighted = false, hovered = false) {
-  const typeColor = CARD_COLORS[card.cardType] || '#444';
-  const art = getCardArt(card.id);
+// Keyword → icon image key + tooltip definition
+const KEYWORD_ICONS = {
+  heroism: { iconKey: 'icon_heroism', label: 'Heroism', desc: 'Bonus damage to next attack (consumed)' },
+  shield: { iconKey: 'icon_shield', label: 'Shield', desc: 'Absorbs damage before HP. Persists between turns.' },
+  shields: { iconKey: 'icon_shield', label: 'Shield', desc: 'Absorbs damage before HP. Persists between turns.' },
+  armor: { iconKey: 'icon_armor', label: 'Armor', desc: 'Absorbs damage from each hit (permanent)' },
+  fire: { iconKey: 'icon_fire', label: 'Fire', desc: 'Deals damage equal to stacks each turn, decays by 1' },
+  ice: { iconKey: 'icon_ice', label: 'Ice', desc: 'Reduces damage dealt by stacks, decays by 1' },
+  poison: { iconKey: 'icon_poison', label: 'Poison', desc: 'Deals 1 unpreventable damage per turn' },
+  shock: { iconKey: 'icon_shock', label: 'Shock', desc: '-1 dmg dealt and +1 dmg taken per stack' },
+  rage: { iconKey: 'icon_rage', label: 'Rage', desc: 'Permanent bonus damage to all attacks' },
+};
 
+// Tokenize text into words and inline icons
+// Returns array of { type: 'text'|'icon', text?, keyword?, iconKey? }
+function tokenizeKeywordText(text) {
+  // Split into words while preserving delimiters
+  const tokens = [];
+  // Match keywords (case-insensitive whole word) - longest first to avoid partial matches
+  const keywords = ['Heroism', 'Shields', 'Shield', 'Armor', 'Fire', 'Ice', 'Poison', 'Shock', 'Rage'];
+  const pattern = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
+  let lastIdx = 0;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      tokens.push({ type: 'text', text: text.slice(lastIdx, match.index) });
+    }
+    const kw = match[1].toLowerCase();
+    const info = KEYWORD_ICONS[kw];
+    if (info) {
+      tokens.push({ type: 'icon', keyword: kw, iconKey: info.iconKey });
+    } else {
+      tokens.push({ type: 'text', text: match[1] });
+    }
+    lastIdx = match.index + match[1].length;
+  }
+  if (lastIdx < text.length) {
+    tokens.push({ type: 'text', text: text.slice(lastIdx) });
+  }
+  return tokens;
+}
+
+// Count how many lines text would wrap to (matches drawIconText layout)
+function countWrappedLines(text, maxWidth, fontSize) {
+  const tokens = tokenizeKeywordText(text);
+  const iconSize = Math.floor(fontSize * 1.3);
+  ctx.font = `${fontSize}px sans-serif`;
+  const units = [];
+  for (const tok of tokens) {
+    if (tok.type === 'icon') {
+      units.push({ type: 'icon', width: iconSize });
+    } else {
+      const parts = tok.text.split(/(\s+)/);
+      for (const p of parts) {
+        if (p) units.push({ type: 'text', text: p, width: ctx.measureText(p).width });
+      }
+    }
+  }
+  let lines = 1;
+  let lineW = 0;
+  for (const u of units) {
+    if (u.type === 'text' && /^\s+$/.test(u.text || '') && lineW === 0) continue;
+    if (lineW + u.width > maxWidth && lineW > 0) {
+      lines++;
+      lineW = u.type === 'text' && /^\s+$/.test(u.text || '') ? 0 : u.width;
+    } else {
+      lineW += u.width;
+    }
+  }
+  return lines;
+}
+
+// Render text with inline icons, word-wrapped within maxWidth, centered.
+// Returns total height used.
+function drawIconText(text, centerX, startY, maxWidth, fontSize, color = '#eee') {
+  const tokens = tokenizeKeywordText(text);
+  const iconSize = Math.floor(fontSize * 1.3);
+  const lineH = Math.max(fontSize + 4, iconSize + 2);
+  ctx.font = `${fontSize}px sans-serif`;
+
+  // Build word-level units (split text tokens on whitespace)
+  const units = [];
+  for (const tok of tokens) {
+    if (tok.type === 'icon') {
+      units.push(tok);
+    } else {
+      const parts = tok.text.split(/(\s+)/);
+      for (const p of parts) {
+        if (p) units.push({ type: 'text', text: p });
+      }
+    }
+  }
+
+  // Measure unit widths
+  for (const u of units) {
+    if (u.type === 'icon') u.width = iconSize;
+    else u.width = ctx.measureText(u.text).width;
+  }
+
+  // Lay out into lines
+  const lines = []; // each line: { units: [], width }
+  let line = { units: [], width: 0 };
+  for (const u of units) {
+    // Skip leading whitespace on a line
+    if (u.type === 'text' && /^\s+$/.test(u.text) && line.width === 0) continue;
+    if (line.width + u.width > maxWidth && line.units.length > 0) {
+      lines.push(line);
+      line = { units: [], width: 0 };
+      if (u.type === 'text' && /^\s+$/.test(u.text)) continue;
+    }
+    line.units.push(u);
+    line.width += u.width;
+  }
+  if (line.units.length > 0) lines.push(line);
+
+  // Draw lines
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    let cx = centerX - ln.width / 2;
+    const cy = startY + i * lineH + lineH / 2;
+    for (const u of ln.units) {
+      if (u.type === 'icon') {
+        const img = images[u.iconKey];
+        if (img) {
+          ctx.drawImage(img, cx, cy - iconSize / 2, iconSize, iconSize);
+        } else {
+          // Fallback: draw colored box
+          ctx.fillStyle = '#888';
+          ctx.fillRect(cx, cy - iconSize / 2, iconSize, iconSize);
+          ctx.fillStyle = color;
+        }
+        // Register hit area for tooltip
+        iconHitAreas.push({
+          x: cx, y: cy - iconSize / 2, w: iconSize, h: iconSize,
+          keyword: u.keyword,
+        });
+        cx += u.width;
+      } else {
+        ctx.fillStyle = color;
+        ctx.fillText(u.text, cx, cy);
+        cx += u.width;
+      }
+    }
+  }
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  return lines.length * lineH;
+}
+
+function drawIconTooltip() {
+  for (const area of iconHitAreas) {
+    if (!hitTest(mouseX, mouseY, area)) continue;
+    const info = KEYWORD_ICONS[area.keyword];
+    if (!info) return;
+    // Draw 2-line tooltip: bold label + description
+    ctx.font = 'bold 13px sans-serif';
+    const labelW = ctx.measureText(info.label).width;
+    ctx.font = '12px sans-serif';
+    const descW = ctx.measureText(info.desc).width;
+    const padX = 8, padY = 6;
+    const boxW = Math.max(labelW, descW) + padX * 2;
+    const boxH = 36 + padY * 2;
+    let bx = area.x + area.w / 2 - boxW / 2;
+    let by = area.y - boxH - 6;
+    if (bx + boxW > SCREEN_WIDTH) bx = SCREEN_WIDTH - boxW - 4;
+    if (bx < 4) bx = 4;
+    if (by < 4) by = area.y + area.h + 6;
+
+    ctx.fillStyle = 'rgba(10,10,30,0.95)';
+    ctx.fillRect(bx, by, boxW, boxH);
+    ctx.strokeStyle = Colors.GOLD;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, boxW, boxH);
+
+    ctx.fillStyle = Colors.GOLD;
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(info.label, bx + boxW / 2, by + padY + 12);
+
+    ctx.fillStyle = '#ddd';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(info.desc, bx + boxW / 2, by + padY + 30);
+
+    ctx.textAlign = 'left';
+    return;
+  }
+}
+
+// Left-aligned variant of drawIconText for help/multi-line content
+function drawIconTextLeft(text, startX, startY, maxWidth, fontSize, color = '#eee') {
+  const tokens = tokenizeKeywordText(text);
+  const iconSize = Math.floor(fontSize * 1.3);
+  const lineH = Math.max(fontSize + 4, iconSize + 2);
+  ctx.font = `${fontSize}px Georgia, serif`;
+
+  const units = [];
+  for (const tok of tokens) {
+    if (tok.type === 'icon') {
+      units.push(tok);
+    } else {
+      const parts = tok.text.split(/(\s+)/);
+      for (const p of parts) {
+        if (p) units.push({ type: 'text', text: p });
+      }
+    }
+  }
+  for (const u of units) {
+    if (u.type === 'icon') u.width = iconSize;
+    else u.width = ctx.measureText(u.text).width;
+  }
+
+  // Lay out into lines (left aligned with hanging indent of 0)
+  const lines = [];
+  let line = { units: [], width: 0 };
+  for (const u of units) {
+    if (u.type === 'text' && /^\s+$/.test(u.text) && line.width === 0) continue;
+    if (line.width + u.width > maxWidth && line.units.length > 0) {
+      lines.push(line);
+      line = { units: [], width: 0 };
+      if (u.type === 'text' && /^\s+$/.test(u.text)) continue;
+    }
+    line.units.push(u);
+    line.width += u.width;
+  }
+  if (line.units.length > 0) lines.push(line);
+
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    let cx = startX;
+    const cy = startY + i * lineH + lineH / 2;
+    for (const u of ln.units) {
+      if (u.type === 'icon') {
+        const img = images[u.iconKey];
+        if (img) {
+          ctx.drawImage(img, Math.round(cx), Math.round(cy - iconSize / 2), iconSize, iconSize);
+        } else {
+          ctx.fillStyle = '#888';
+          ctx.fillRect(cx, cy - iconSize / 2, iconSize, iconSize);
+          ctx.fillStyle = color;
+        }
+        iconHitAreas.push({
+          x: cx, y: cy - iconSize / 2, w: iconSize, h: iconSize,
+          keyword: u.keyword,
+        });
+        cx += u.width;
+      } else {
+        ctx.fillStyle = color;
+        ctx.fillText(u.text, Math.round(cx), Math.round(cy));
+        cx += u.width;
+      }
+    }
+  }
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  return lines.length * lineH;
+}
+
+function drawBadgeTooltip() {
+  for (const area of cardBadgeHitAreas) {
+    if (!hitTest(mouseX, mouseY, area)) continue;
+    // Draw small tooltip above the badge
+    ctx.font = 'bold 13px sans-serif';
+    const tw = ctx.measureText(area.label).width;
+    const padX = 8, padY = 4;
+    const boxW = tw + padX * 2;
+    const boxH = 13 + padY * 2;
+    let bx = area.x + area.w / 2 - boxW / 2;
+    let by = area.y - boxH - 4;
+    if (bx + boxW > SCREEN_WIDTH) bx = SCREEN_WIDTH - boxW - 4;
+    if (bx < 4) bx = 4;
+    if (by < 4) by = area.y + area.h + 4;
+
+    ctx.fillStyle = 'rgba(10,10,30,0.95)';
+    ctx.fillRect(bx, by, boxW, boxH);
+    ctx.strokeStyle = Colors.GOLD;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, boxW, boxH);
+    ctx.fillStyle = Colors.WHITE;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(area.label, bx + boxW / 2, by + boxH / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    return; // only show one tooltip
+  }
+}
+
+// Get the border color for a card based on subtype (falls back to card type)
+function getCardBorderColor(card) {
+  if (card.subtype && SUBTYPE_COLORS[card.subtype]) return SUBTYPE_COLORS[card.subtype];
+  return CARD_COLORS[card.cardType] || '#666';
+}
+
+function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size = 'small') {
+  const art = getCardArt(card.id);
+  const borderColor = getCardBorderColor(card);
+  const isFullSize = size === 'full';
+
+  // 1. Background: full art if available, else colored fill
   if (art) {
-    // Draw card art filling the card area
     const imgAspect = art.width / art.height;
     const cardAspect = w / h;
     let sx = 0, sy = 0, sw = art.width, sh = art.height;
@@ -2110,69 +2721,147 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false) {
       sh = art.width / cardAspect;
       sy = (art.height - sh) / 2;
     }
-    ctx.globalAlpha = hovered ? 1 : 0.9;
     ctx.drawImage(art, sx, sy, sw, sh, x, y, w, h);
-    ctx.globalAlpha = 1;
-
-    // Name bar at top
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(x, y, w, 22);
-    ctx.fillStyle = Colors.WHITE;
-    ctx.font = 'bold 11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(card.name, x + w / 2, y + 15);
-
-    // Desc bar at bottom
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(x, y + h - 30, w, 30);
-    ctx.fillStyle = '#ddd';
-    ctx.font = '10px sans-serif';
-    const descLines = wrapText(card.shortDesc || card.description, w - 8, 10);
-    let descY = y + h - 20;
-    for (const line of descLines.slice(0, 2)) {
-      ctx.fillText(line, x + w / 2, descY);
-      descY += 12;
-    }
   } else {
-    // Fallback: colored rectangle
-    ctx.fillStyle = typeColor;
-    ctx.globalAlpha = hovered ? 1 : 0.9;
+    ctx.fillStyle = borderColor;
     ctx.fillRect(x, y, w, h);
-    ctx.globalAlpha = 1;
-
-    ctx.fillStyle = Colors.WHITE;
-    ctx.font = 'bold 12px sans-serif';
-    ctx.textAlign = 'center';
-    const nameLines = wrapText(card.name, w - 8, 12);
-    let textY = y + 16;
-    for (const line of nameLines) {
-      ctx.fillText(line, x + w / 2, textY);
-      textY += 14;
-    }
-
-    ctx.fillStyle = '#ddd';
-    ctx.font = '11px sans-serif';
-    const descLines = wrapText(card.shortDesc || card.description, w - 10, 11);
-    let descY = y + h / 2 + 5;
-    for (const line of descLines) {
-      ctx.fillText(line, x + w / 2, descY);
-      descY += 13;
-    }
   }
 
-  // Cost type badge (top-left)
-  const costLabels = { RECHARGE: 'R', EXHAUST: 'X', BANISH: 'B', DISCARD: 'D', FREE: 'F' };
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(x, y, 16, 16);
-  ctx.font = 'bold 10px sans-serif';
+  // 2. Tight name box at top — auto-sized to wrap around the text (no colored border)
+  const nameFont = 'bold ' + Math.max(8, Math.floor(w * 0.085)) + 'px sans-serif';
+  ctx.font = nameFont;
+  const nameMetrics = ctx.measureText(card.name);
+  const nameW = Math.min(w - 4, nameMetrics.width + 12);
+  const nameH = Math.max(14, Math.floor(w * 0.13));
+  const nameX = x + (w - nameW) / 2;
+  const nameY = y + 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(nameX, nameY, nameW, nameH);
   ctx.fillStyle = Colors.GOLD;
-  ctx.textAlign = 'left';
-  ctx.fillText(costLabels[card.costType] || '', x + 3, y + 12);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(card.name, x + w / 2, nameY + nameH / 2 + 1);
+  ctx.textBaseline = 'alphabetic';
 
-  // Border
-  ctx.strokeStyle = highlighted ? Colors.GOLD : (hovered ? Colors.WHITE : '#666');
-  ctx.lineWidth = highlighted ? 3 : (hovered ? 2 : 1);
+  // 3. Description box at bottom
+  if (isFullSize) {
+    // Full size: fixed 1/4 card height box with full description, inset from edges
+    const inset = 6;
+    const descBoxH = Math.floor(h / 4);
+    const descBoxX = x + inset;
+    const descBoxY = y + h - descBoxH - inset;
+    const descBoxW = w - inset * 2;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.78)';
+    ctx.fillRect(descBoxX, descBoxY, descBoxW, descBoxH);
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(descBoxX, descBoxY, descBoxW, descBoxH);
+
+    const descFontSize = Math.max(11, Math.floor(w * 0.058));
+    const descText = card.description || card.shortDesc || '';
+    // Center vertically by computing height first
+    const lines = countWrappedLines(descText, descBoxW - 16, descFontSize);
+    const iconSize = Math.floor(descFontSize * 1.3);
+    const lineH = Math.max(descFontSize + 4, iconSize + 2);
+    const totalH = lines * lineH;
+    const startY = descBoxY + (descBoxH - totalH) / 2;
+    drawIconText(descText, x + w / 2, startY, descBoxW - 16, descFontSize, '#f0f0f0');
+  } else if (card.shortDesc || card.description) {
+    // Small size: tight auto-sized box with short desc
+    const descText = card.shortDesc || card.description;
+    const descFontSize = Math.max(8, Math.floor(w * 0.085));
+    const lines = countWrappedLines(descText, w - 12, descFontSize);
+    const linesToShow = Math.min(2, lines);
+    const iconSize = Math.floor(descFontSize * 1.3);
+    const lineH = Math.max(descFontSize + 2, iconSize + 1);
+    const descBoxH = linesToShow * lineH + 4;
+    const descBoxY = y + h - descBoxH - 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(x + 2, descBoxY, w - 4, descBoxH);
+    drawIconText(descText, x + w / 2, descBoxY + 2, w - 12, descFontSize, '#eee');
+  }
+
+  // 3b. Tier and rarity badge (bottom-right, full size only)
+  if (isFullSize) {
+    const RARITY_CODES = { common: 'C', uncommon: 'U', rare: 'R', epic: 'E', legendary: 'L' };
+    const RARITY_LABELS = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare', epic: 'Epic', legendary: 'Legendary' };
+    const RARITY_COLORS = {
+      common: '#8b5a2b', uncommon: '#c0c0c0', rare: '#4682e6',
+      epic: '#b482ff', legendary: '#ffd700',
+    };
+    const rarity = card.rarity || 'common';
+    const tier = Math.max(card.tier || 1, 1);
+    const code = RARITY_CODES[rarity] || 'C';
+    const color = RARITY_COLORS[rarity] || RARITY_COLORS.common;
+
+    const badgeFontSize = Math.max(8, Math.floor(w * 0.045));
+    ctx.font = `bold ${badgeFontSize}px sans-serif`;
+    const codeW = ctx.measureText(code).width;
+    const tierText = `T${tier}`;
+    const tierW = ctx.measureText(tierText).width;
+    const padX = 4, padY = 2;
+    const sepW = 4;
+    const totalW = codeW + tierW + padX * 4 + sepW;
+    const badgeH = badgeFontSize + padY * 2;
+    const badgeX = x + w - totalW - 6;
+    const badgeY = y + h - badgeH - 6;
+
+    // Background
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(badgeX, badgeY, totalW, badgeH);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(badgeX, badgeY, totalW, badgeH);
+
+    // Rarity letter (left half)
+    const codeBoxW = codeW + padX * 2;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(code, badgeX + codeBoxW / 2, badgeY + badgeH / 2 + 1);
+
+    // Separator line
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(badgeX + codeBoxW + sepW / 2, badgeY + 2);
+    ctx.lineTo(badgeX + codeBoxW + sepW / 2, badgeY + badgeH - 2);
+    ctx.stroke();
+
+    // Tier label (right half)
+    const tierBoxX = badgeX + codeBoxW + sepW;
+    const tierBoxW = tierW + padX * 2;
+    ctx.fillStyle = '#e0e0e0';
+    ctx.fillText(tierText, tierBoxX + tierBoxW / 2, badgeY + badgeH / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+
+    // Register hover hit areas for tooltips
+    cardBadgeHitAreas.push({
+      x: badgeX, y: badgeY, w: codeBoxW, h: badgeH,
+      label: RARITY_LABELS[rarity] || 'Common',
+    });
+    cardBadgeHitAreas.push({
+      x: tierBoxX, y: badgeY, w: tierBoxW, h: badgeH,
+      label: `Tier ${tier}`,
+    });
+  }
+
+  // 4. Border — uses subtype color (or gold when highlighted)
+  ctx.strokeStyle = highlighted ? Colors.GOLD : (hovered ? '#fff' : borderColor);
+  ctx.lineWidth = highlighted ? 4 : (hovered ? 3 : 2);
   ctx.strokeRect(x, y, w, h);
+
+  // 5. Exhausted (stays-in-hand) overlay: dim + Zzz
+  if (card.exhausted) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = Colors.ORANGE;
+    ctx.font = `bold ${Math.max(20, Math.floor(w * 0.28))}px Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Zzz', x + w / 2, y + h / 2);
+    ctx.textBaseline = 'alphabetic';
+  }
 
   ctx.textAlign = 'left';
 }
@@ -2216,70 +2905,75 @@ function drawCombat() {
   // Background
   drawEncounterBg();
 
+  // Clear log card hit areas at the start of the frame so panel/log pushes
+  // (made later in this frame) are read fresh by the hover pass at the end.
+  logCardHitAreas.length = 0;
+
+  // --- Layout panel backgrounds (subtle dividers to delimit sections) ---
+  // Right column background (log + buttons)
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(COMBAT_RIGHT_X, 0, COMBAT_RIGHT_W, SCREEN_HEIGHT);
+  // Vertical divider line between left and right
+  ctx.fillStyle = 'rgba(255,215,0,0.4)';
+  ctx.fillRect(COMBAT_RIGHT_X - 1, 0, 2, SCREEN_HEIGHT);
+  // Horizontal divider between log and buttons
+  ctx.fillRect(COMBAT_RIGHT_X, COMBAT_RIGHT_BTN_Y - 1, COMBAT_RIGHT_W, 2);
+
   // --- Enemy area (top) ---
   drawCharacterPanel(enemy, 'enemy');
 
-  // Enemy creatures
+  // Enemy creatures (grid up to 2 rows of 6 to the right of the enemy character card)
   const creatureRects = getEnemyCreatureRects();
   for (let i = 0; i < enemy.creatures.length; i++) {
     const c = enemy.creatures[i];
     const r = creatureRects[i];
-    const hov = hitTest(mouseX, mouseY, r);
-    ctx.fillStyle = hov ? '#5a3030' : '#3a2020';
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = state === GameState.TARGETING ? Colors.RED : '#666';
-    ctx.lineWidth = state === GameState.TARGETING ? 2 : 1;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.fillStyle = Colors.WHITE;
-    ctx.font = 'bold 11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(c.name, r.x + r.w / 2, r.y + 20);
-    ctx.font = '11px sans-serif';
-    ctx.fillText(`${c.attack}/${c.currentHp}`, r.x + r.w / 2, r.y + 40);
-    if (c.shield > 0) {
-      ctx.fillStyle = Colors.ALLY_BLUE;
-      ctx.fillText(`S:${c.shield}`, r.x + r.w / 2, r.y + 55);
-    }
+    drawCreatureCard(c, r, false);
   }
 
   // --- Player area (bottom) ---
   drawCharacterPanel(player, 'player');
 
   // --- Player hand ---
+  hoveredCardPreview = null;
+  hoveredPowerPreview = null;
+
+  // (Log/panel hover detection runs at the end of drawCombat after everything is populated.)
   const handRects = getHandCardRects(player.deck.hand);
+  // Determine which card is hovered first (use visible-portion hit areas, topmost first)
+  // Topmost card visually is the LAST one (drawn last so rendered on top).
+  let hoveredHandIndex = -1;
+  for (let i = player.deck.hand.length - 1; i >= 0; i--) {
+    const hr = getHandCardHoverRect(handRects, i);
+    if (hitTest(mouseX, mouseY, hr)) { hoveredHandIndex = i; break; }
+  }
+  // Draw all cards in order so later cards overlap earlier ones,
+  // EXCEPT the hovered (and selected) cards — draw them last so they sit on top.
   for (let i = 0; i < player.deck.hand.length; i++) {
+    if (i === hoveredHandIndex || i === selectedCardIndex) continue;
     const card = player.deck.hand[i];
     const r = handRects[i];
-    const hov = hitTest(mouseX, mouseY, r);
-    const selected = i === selectedCardIndex;
-    drawCard(card, r.x, selected ? r.y - 20 : r.y, r.w, r.h, selected, hov);
+    drawCard(card, r.x, r.y, r.w, r.h, false, false);
+  }
+  // Now draw hovered card on top (and selected one if different)
+  if (selectedCardIndex >= 0 && selectedCardIndex < player.deck.hand.length && selectedCardIndex !== hoveredHandIndex) {
+    const card = player.deck.hand[selectedCardIndex];
+    const r = handRects[selectedCardIndex];
+    drawCard(card, r.x, r.y - 20, r.w, r.h, true, false);
+  }
+  if (hoveredHandIndex >= 0) {
+    const card = player.deck.hand[hoveredHandIndex];
+    const r = handRects[hoveredHandIndex];
+    const selected = hoveredHandIndex === selectedCardIndex;
+    drawCard(card, r.x, selected ? r.y - 20 : r.y, r.w, r.h, selected, true);
+    hoveredCardPreview = card;
   }
 
   // --- Player Allies ---
   if (player.creatures.length > 0) {
-    const allyStartX = 240;
-    const allyY = SCREEN_HEIGHT - 200;
+    // Allies are drawn as mini cards in 1 row of 6 to the right of the player character card
+    const allyRects = getPlayerCreatureRects();
     for (let i = 0; i < player.creatures.length; i++) {
-      const ally = player.creatures[i];
-      const ax = allyStartX + i * 76;
-      const aw = 70, ah = 90;
-      const hov = hitTest(mouseX, mouseY, { x: ax, y: allyY, w: aw, h: ah });
-      ctx.fillStyle = hov ? '#2a5a3a' : '#1a3a2a';
-      ctx.fillRect(ax, allyY, aw, ah);
-      ctx.strokeStyle = ally.exhausted ? '#555' : Colors.GREEN;
-      ctx.lineWidth = ally.exhausted ? 1 : 2;
-      ctx.strokeRect(ax, allyY, aw, ah);
-      ctx.fillStyle = Colors.WHITE;
-      ctx.font = 'bold 11px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(ally.name, ax + aw / 2, allyY + 20);
-      ctx.font = '11px sans-serif';
-      ctx.fillText(`${ally.attack}/${ally.currentHp}`, ax + aw / 2, allyY + 40);
-      if (!ally.exhausted) {
-        ctx.fillStyle = Colors.GREEN;
-        ctx.font = '9px sans-serif';
-        ctx.fillText('Ready', ax + aw / 2, allyY + 55);
-      }
+      drawCreatureCard(player.creatures[i], allyRects[i], true);
     }
   }
 
@@ -2288,54 +2982,379 @@ function drawCombat() {
     drawPowerArea();
   }
 
-  // --- Power Recharge mode hint ---
-  if (powerRechargeMode) {
-    ctx.fillStyle = Colors.GOLD;
-    ctx.font = 'bold 16px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`Select ${powerRechargeCardsNeeded} card(s) from hand to recharge (ESC to cancel)`, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 30);
-  }
+  // --- Enemy Power ---
+  drawEnemyPowerArea();
 
-  // --- End Turn button ---
-  if (isPlayerTurn && !powerRechargeMode) {
-    const btnX = SCREEN_WIDTH - 160, btnY = SCREEN_HEIGHT - 180, btnW = 130, btnH = 40;
-    drawButton(btnX, btnY, btnW, btnH, 'End Turn', endPlayerTurn);
-  }
+  // (Power recharge prompt now shown via sticky toast — see handlePowerClick)
 
-  // --- Turn indicator ---
-  ctx.font = 'bold 18px sans-serif';
+  // --- Turn indicator banner on the divider line between enemy/player ---
+  const bannerH = 28;
+  const bannerY = COMBAT_DIVIDER_Y - bannerH / 2;
+  const bannerColor = isPlayerTurn ? 'rgba(60, 160, 60, 0.85)' : 'rgba(180, 60, 60, 0.85)';
+  ctx.fillStyle = bannerColor;
+  ctx.fillRect(0, bannerY, COMBAT_LEFT_W, bannerH);
+  ctx.strokeStyle = isPlayerTurn ? Colors.GREEN : Colors.RED;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, bannerY, COMBAT_LEFT_W, bannerH);
+
+  ctx.font = 'bold 18px Georgia, serif';
   ctx.textAlign = 'center';
-  if (isPlayerTurn) {
-    ctx.fillStyle = Colors.GREEN;
-    ctx.fillText('Your Turn', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 5);
-  } else {
-    ctx.fillStyle = Colors.RED;
-    ctx.fillText('Enemy Turn...', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 5);
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = Colors.WHITE;
+  ctx.fillText(isPlayerTurn ? 'YOUR TURN' : "ENEMY'S TURN", COMBAT_LEFT_W / 2, COMBAT_DIVIDER_Y);
+  ctx.textBaseline = 'alphabetic';
+
+  // --- Targeting arrow (hint shown via toast) ---
+  if (state === GameState.TARGETING) {
+    // Draw red targeting arrow from selected card center to cursor
+    if (selectedCardIndex >= 0 && selectedCardIndex < player.deck.hand.length) {
+      const handRects = getHandCardRects(player.deck.hand);
+      const r = handRects[selectedCardIndex];
+      const startX = r.x + r.w / 2;
+      const startY = r.y + r.h / 2 - 20; // -20 because selected card lifts up
+      drawTargetingArrow(startX, startY, mouseX, mouseY, Colors.RED);
+    }
+  } else if (state === GameState.POWER_TARGETING && selectedPower) {
+    // Arrow from the power card to the cursor
+    const idx = player.powers.indexOf(selectedPower);
+    if (idx !== -1) {
+      const r = getCharacterPowerRect(true, idx);
+      const startX = r.x + r.w / 2;
+      const startY = r.y + r.h / 2;
+      drawTargetingArrow(startX, startY, mouseX, mouseY, Colors.RED);
+    }
   }
 
-  // --- Targeting hint ---
-  if (state === GameState.TARGETING) {
-    ctx.fillStyle = Colors.GOLD;
-    ctx.font = 'bold 16px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Click enemy or creature to attack (ESC to cancel)', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 30);
-  }
+  // --- Right column buttons (End Turn, Inventory, Help) ---
+  drawCombatButtons();
 
   // --- Combat log ---
   drawCombatLog();
 
-  // --- Tooltip on hovered card ---
-  drawCardTooltip();
+  // --- Log/panel hover detection (must run after both panels and log have populated) ---
+  // Hovering a log entry, a discard pile label, or any panel hit area shows the full card preview.
+  // Only override the hand-card hover (set above) if the user is actually pointing at a panel/log area.
+  for (const area of logCardHitAreas) {
+    if (hitTest(mouseX, mouseY, area)) {
+      if (area.card instanceof Power) {
+        hoveredPowerPreview = area.card;
+      } else if (area.card && typeof area.card.copy === 'function') {
+        const fresh = area.card.copy();
+        fresh.exhausted = false;
+        hoveredCardPreview = fresh;
+      } else {
+        hoveredCardPreview = area.card;
+      }
+      break;
+    }
+  }
+
+  // --- Combat intro splash ---
+  if (combatIntroTimer > 0) drawCombatIntro();
+
+  // --- Card / power hover preview (follows cursor) ---
+  if (combatIntroTimer <= 0 && !characterSplashCharacter) {
+    drawHoverPreview();
+  }
+
+  // --- Character card splash overlay ---
+  if (characterSplashCharacter) drawCharacterSplash();
 
   ctx.textAlign = 'left';
 }
 
+// Draw a full-size preview card following the cursor (top-right of cursor by default)
+function drawHoverPreview() {
+  if (!hoveredCardPreview && !hoveredPowerPreview) return;
+
+  // Preview card size (~py 312x438, scaled smaller for our screen)
+  const previewW = 240;
+  const previewH = 336;
+  const margin = 12;
+
+  // Default position: above and right of cursor
+  let x = mouseX + 24;
+  let y = mouseY - previewH - 16;
+
+  // Flip to left if too close to right edge
+  if (x + previewW + margin > SCREEN_WIDTH) {
+    x = mouseX - previewW - 24;
+  }
+  // Flip below if too close to top
+  if (y < margin) {
+    y = mouseY + 24;
+  }
+  // Clamp to screen bounds
+  x = Math.max(margin, Math.min(x, SCREEN_WIDTH - previewW - margin));
+  y = Math.max(margin, Math.min(y, SCREEN_HEIGHT - previewH - margin));
+
+  if (hoveredCardPreview) {
+    // Draw a full-size version of the card
+    drawCard(hoveredCardPreview, x, y, previewW, previewH, false, false, 'full');
+  } else if (hoveredPowerPreview) {
+    drawPowerPreviewCard(hoveredPowerPreview, x, y, previewW, previewH);
+  }
+}
+
+// Draw a full-size preview of a power card (similar to a card but without modes/etc)
+function drawPowerPreviewCard(power, x, y, w, h) {
+  const art = getPowerArt(power.id);
+
+  if (art) {
+    const imgAspect = art.width / art.height;
+    const cardAspect = w / h;
+    let sx = 0, sy = 0, sw = art.width, sh = art.height;
+    if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
+    else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
+    ctx.drawImage(art, sx, sy, sw, sh, x, y, w, h);
+  } else {
+    ctx.fillStyle = '#643c64';
+    ctx.fillRect(x, y, w, h);
+  }
+
+  // Tight name box at top — auto-sized to wrap around the text (matches drawCard full size)
+  const nameFontSize = Math.max(11, Math.floor(w * 0.085));
+  ctx.font = `bold ${nameFontSize}px sans-serif`;
+  const nameLines = wrapText(power.name, w - 16, nameFontSize);
+  const nameLineH = nameFontSize + 4;
+  let maxLineW = 0;
+  for (const line of nameLines) {
+    const m = ctx.measureText(line).width;
+    if (m > maxLineW) maxLineW = m;
+  }
+  const nameBoxW = Math.min(w - 8, maxLineW + 16);
+  const nameBoxH = nameLines.length * nameLineH + 6;
+  const nameBoxX = x + (w - nameBoxW) / 2;
+  const nameBoxY = y + 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
+  ctx.fillStyle = Colors.GOLD;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let nLy = nameBoxY + nameLineH / 2 + 3;
+  for (const line of nameLines) {
+    ctx.fillText(line, x + w / 2, nLy);
+    nLy += nameLineH;
+  }
+  ctx.textBaseline = 'alphabetic';
+
+  // Description box at bottom (about 1/4 of card height like full size cards)
+  const descBoxH = Math.floor(h / 4);
+  const descBoxX = x + 8;
+  const descBoxY = y + h - descBoxH - 8;
+  const descBoxW = w - 16;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+  ctx.fillRect(descBoxX, descBoxY, descBoxW, descBoxH);
+  ctx.strokeStyle = '#8c3c8c';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(descBoxX, descBoxY, descBoxW, descBoxH);
+
+  // Draw description with inline keyword icons
+  const descText = power.effectDescription || power.fullDescription || '';
+  const fontSize = 14;
+  const lineCount = countWrappedLines(descText, descBoxW - 12, fontSize);
+  const iconSize = Math.floor(fontSize * 1.3);
+  const lineH = Math.max(fontSize + 4, iconSize + 2);
+  const totalH = lineCount * lineH;
+  const startY = descBoxY + (descBoxH - totalH) / 2;
+  drawIconText(descText, x + w / 2, startY, descBoxW - 12, fontSize, '#f0f0f0');
+  ctx.textBaseline = 'alphabetic';
+
+  // Purple border
+  ctx.strokeStyle = '#8c3c8c';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, w, h);
+
+  ctx.textAlign = 'left';
+}
+
+// Draw a chunky arrow from start to end (matches py game)
+function drawToast() {
+  // Fade out in last 400ms
+  const alpha = (!toastSticky && toastTimer < 400) ? toastTimer / 400 : 1;
+  ctx.font = 'bold 22px Georgia, serif';
+  ctx.textAlign = 'center';
+  const tw = ctx.measureText(toastMessage).width;
+  const padX = 24, padY = 12;
+  const boxW = tw + padX * 2;
+  const boxH = 22 + padY * 2;
+  const x = (SCREEN_WIDTH - boxW) / 2;
+  const y = SCREEN_HEIGHT / 2 - 100;
+
+  ctx.fillStyle = `rgba(0,0,0,${0.8 * alpha})`;
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.strokeStyle = `rgba(255, 215, 0, ${alpha})`;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, boxW, boxH);
+
+  ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(toastMessage, x + boxW / 2, y + boxH / 2);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+}
+
+function drawTargetingArrow(x1, y1, x2, y2, color = Colors.RED) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const length = Math.sqrt(dx * dx + dy * dy);
+  if (length < 10) return;
+
+  const thickness = 6;
+  const arrowLength = 25;
+  const arrowWidth = 14;
+
+  // Main line
+  ctx.strokeStyle = color;
+  ctx.lineWidth = thickness;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+
+  // Arrowhead
+  const ndx = dx / length;
+  const ndy = dy / length;
+  const baseX = x2 - ndx * arrowLength;
+  const baseY = y2 - ndy * arrowLength;
+  const perpX = -ndy * arrowWidth;
+  const perpY = ndx * arrowWidth;
+  const leftX = baseX + perpX;
+  const leftY = baseY + perpY;
+  const rightX = baseX - perpX;
+  const rightY = baseY - perpY;
+
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(leftX, leftY);
+  ctx.lineTo(rightX, rightY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = Colors.WHITE;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function drawCharacterSplash() {
+  const c = characterSplashCharacter;
+  if (!c) return;
+
+  // Dim background
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Pick the portrait art id
+  const portraitArtId = characterSplashIsPlayer
+    ? `${selectedClass.toLowerCase()}_class`
+    : c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const art = getCardArt(portraitArtId);
+
+  // Compute display rect (max ~85% of screen, preserve aspect)
+  let drawW, drawH;
+  if (art) {
+    const maxH = SCREEN_HEIGHT - 100;
+    const maxW = SCREEN_WIDTH - 200;
+    const scale = Math.min(maxW / art.width, maxH / art.height);
+    drawW = art.width * scale;
+    drawH = art.height * scale;
+  } else {
+    drawH = SCREEN_HEIGHT - 200;
+    drawW = drawH * 0.75;
+  }
+  const x = (SCREEN_WIDTH - drawW) / 2;
+  const y = (SCREEN_HEIGHT - drawH) / 2;
+
+  if (art) {
+    ctx.drawImage(art, x, y, drawW, drawH);
+  } else {
+    ctx.fillStyle = characterSplashIsPlayer ? '#1a3a4e' : '#3a1a1a';
+    ctx.fillRect(x, y, drawW, drawH);
+  }
+}
+
+function drawCombatIntro() {
+  // Fade out in last 400ms
+  const fadeDuration = 400;
+  const alpha = combatIntroTimer < fadeDuration ? combatIntroTimer / fadeDuration : 1;
+
+  // Dim background
+  ctx.fillStyle = `rgba(0,0,0,${0.78 * alpha})`;
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Get monster art (try multiple keys: enemy name lowercased, monster portraits in card art)
+  const enemyArtIds = [
+    enemy.name.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+    enemy.name.toLowerCase().replace(/ /g, '_').replace(/'/g, ''),
+  ];
+  let art = null;
+  for (const id of enemyArtIds) {
+    art = getCardArt(id);
+    if (art) break;
+  }
+  // Fallback: try common monster portraits
+  if (!art) {
+    const fallbacks = {
+      'Giant Rat': 'giant_rat',
+      'Bone Pile': 'bone_pile_monster',
+      'Slime': 'slime_monster',
+      'Kobold Warden': 'kobold_warden',
+      'Dire Rat': 'dire_rat',
+      'Kobold Patrol': 'kobold_warden',
+    };
+    if (fallbacks[enemy.name]) art = getCardArt(fallbacks[enemy.name]);
+  }
+
+  if (art) {
+    const maxH = SCREEN_HEIGHT - 80;
+    const maxW = SCREEN_WIDTH - 120;
+    const scale = Math.min(maxW / art.width, maxH / art.height);
+    const w = art.width * scale;
+    const h = art.height * scale;
+    const x = (SCREEN_WIDTH - w) / 2;
+    const y = (SCREEN_HEIGHT - h) / 2;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(art, x, y, w, h);
+    ctx.globalAlpha = 1;
+
+    // Gold border around the art
+    ctx.strokeStyle = `rgba(255, 215, 0, ${alpha})`;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  // Message higher up on the image (about 1/4 from the top)
+  const msgY = Math.round(SCREEN_HEIGHT * 0.22);
+  ctx.font = 'bold 42px Georgia, serif';
+  ctx.textAlign = 'center';
+  const tw = ctx.measureText(combatIntroMessage).width;
+  // Black semi-transparent backing (no border)
+  ctx.fillStyle = `rgba(0,0,0,${0.8 * alpha})`;
+  ctx.fillRect(SCREEN_WIDTH / 2 - tw / 2 - 20, msgY - 36, tw + 40, 56);
+  ctx.shadowColor = `rgba(0,0,0,${alpha})`;
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+  ctx.fillText(combatIntroMessage, SCREEN_WIDTH / 2, msgY);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Click hint
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = `rgba(180,180,180,${alpha * 0.8})`;
+  ctx.fillText('Click to begin', SCREEN_WIDTH / 2, SCREEN_HEIGHT - 30);
+  ctx.textAlign = 'left';
+}
+
 function drawCardTooltip() {
-  // Find hovered hand card
+  // Find hovered hand card (topmost first)
   const handRects = getHandCardRects(player.deck.hand);
-  for (let i = 0; i < handRects.length; i++) {
+  for (let i = handRects.length - 1; i >= 0; i--) {
     const r = handRects[i];
-    if (hitTest(mouseX, mouseY, r)) {
+    if (hitTest(mouseX, mouseY, getHandCardHoverRect(handRects, i))) {
       const card = player.deck.hand[i];
       drawTooltipBox(card, r.x + r.w + 10, r.y - 60);
       return;
@@ -2428,84 +3447,313 @@ function getSummonPreview(card) {
   return previews[card.id] || null;
 }
 
+// === Combat character/power card sizes (matches py game proportions) ===
+const COMBAT_CHAR_W = 220;
+const COMBAT_CHAR_H = 300;
+const COMBAT_POWER_W = 105;
+const COMBAT_POWER_H = 140;
+// Creature mini-cards: same size as power cards
+const CREATURE_CARD_W = COMBAT_POWER_W;
+const CREATURE_CARD_H = COMBAT_POWER_H;
+const CREATURE_GRID_GAP = 8;
+const CREATURE_COLS = 6;
+
+// Get the rect for the character "big card" inside the player or enemy area
+function getCharacterCardRect(isPlayer) {
+  const area = isPlayer ? COMBAT_PLAYER_AREA : COMBAT_ENEMY_AREA;
+  // Character card takes ~2/3 of the area height (300/480 ≈ 0.625)
+  const x = area.x + 16;
+  const y = isPlayer
+    ? area.y + (area.h - COMBAT_CHAR_H) - 16  // anchored toward bottom (1/3 of height above for power)
+    : area.y + 16;                             // anchored toward top (1/3 of height below for power)
+  return { x, y, w: COMBAT_CHAR_W, h: COMBAT_CHAR_H };
+}
+
+// Get the rect for the i-th power card (smaller, above player or below enemy)
+// Powers laid out left-to-right, left-aligned with the character card.
+function getCharacterPowerRect(isPlayer, index = 0) {
+  const charRect = getCharacterCardRect(isPlayer);
+  const x = charRect.x + index * (COMBAT_POWER_W + 8);
+  const y = isPlayer
+    ? charRect.y - COMBAT_POWER_H - 6  // above the player card (2px closer)
+    : charRect.y + COMBAT_CHAR_H + 6;  // below the enemy card (2px closer)
+  return { x, y, w: COMBAT_POWER_W, h: COMBAT_POWER_H };
+}
+
 function drawCharacterPanel(character, side) {
   const isPlayer = side === 'player';
-  const panelX = 20;
-  const panelY = isPlayer ? SCREEN_HEIGHT - 200 : 20;
-  const panelW = 200;
-  const panelH = 100;
+  const rect = getCharacterCardRect(isPlayer);
 
-  // Portrait art (left side of panel)
-  const portraitW = 60;
+  // Targetable highlight (red border outside the card) — drawn first
+  if ((state === GameState.TARGETING || state === GameState.POWER_TARGETING) && !isPlayer) {
+    ctx.strokeStyle = Colors.RED;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(rect.x - 4, rect.y - 4, rect.w + 8, rect.h + 8);
+  }
+
+  // Portrait art fills the card
   const portraitArtId = isPlayer
     ? `${selectedClass.toLowerCase()}_class`
     : character.name.toLowerCase().replace(/ /g, '_');
   const portrait = getCardArt(portraitArtId);
+  const hasArt = !!portrait;
 
-  if (portrait) {
+  if (hasArt) {
     const imgAspect = portrait.width / portrait.height;
-    const pAspect = portraitW / panelH;
+    const cardAspect = rect.w / rect.h;
     let sx = 0, sy = 0, sw = portrait.width, sh = portrait.height;
-    if (imgAspect > pAspect) { sw = portrait.height * pAspect; sx = (portrait.width - sw) / 2; }
-    else { sh = portrait.width / pAspect; sy = (portrait.height - sh) / 2; }
-    ctx.drawImage(portrait, sx, sy, sw, sh, panelX, panelY, portraitW, panelH);
+    if (imgAspect > cardAspect) { sw = portrait.height * cardAspect; sx = (portrait.width - sw) / 2; }
+    else { sh = portrait.width / cardAspect; sy = (portrait.height - sh) / 2; }
+    ctx.drawImage(portrait, sx, sy, sw, sh, rect.x, rect.y, rect.w, rect.h);
+  } else {
+    ctx.fillStyle = isPlayer ? '#1a3a4e' : '#3a1a1a';
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
   }
 
-  // Panel background (right of portrait)
-  const infoX = panelX + (portrait ? portraitW : 0);
-  const infoW = panelW - (portrait ? portraitW : 0);
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(infoX, panelY, infoW, panelH);
-  ctx.strokeStyle = isPlayer ? Colors.GREEN : Colors.RED;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(panelX, panelY, panelW, panelH);
+  // White border (matches py game)
+  ctx.strokeStyle = Colors.WHITE;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
+  // Semi-transparent overlay inside the border for text readability (matches py: alpha 120)
+  if (hasArt) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.47)';
+    ctx.fillRect(rect.x + 3, rect.y + 3, rect.w - 6, rect.h - 6);
+  }
+
+  // Character name (with level only for player) at top, white
   ctx.fillStyle = Colors.WHITE;
-  ctx.font = 'bold 14px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText(character.name, infoX + 6, panelY + 18);
+  ctx.font = 'bold 18px Georgia, serif';
+  ctx.textAlign = 'center';
+  const displayName = isPlayer && player
+    ? `${character.name} (${player.level || 1})`
+    : character.name;
+  ctx.fillText(displayName, rect.x + rect.w / 2, rect.y + 26);
 
+  // Card counts: Hand / Deck / Discard centered
+  const infoTop = rect.y + 50;
+  const handCount = character.deck.hand.length;
+  const deckCount = character.deck.drawPile.length;
+  const rechargeCount = character.deck.rechargePile.length;
+  const discardCount = character.deck.discardPile.length;
+
+  ctx.font = '15px sans-serif';
+  ctx.fillStyle = Colors.WHITE;
+  ctx.fillText(`Hand: ${handCount}`, rect.x + rect.w / 2, infoTop);
+
+  let deckText = `Deck: ${deckCount}`;
+  if (rechargeCount > 0) deckText += `(${rechargeCount})`;
+  ctx.fillText(deckText, rect.x + rect.w / 2, infoTop + 22);
+
+  // "Discard: N" — hover the row to preview the top discarded card
+  ctx.fillStyle = '#aaa';
+  const discardLabel = `Discard: ${discardCount}`;
+  ctx.fillText(discardLabel, rect.x + rect.w / 2, infoTop + 44);
+  if (discardCount > 0) {
+    const discardW = ctx.measureText(discardLabel).width;
+    const topCard = character.deck.discardPile[character.deck.discardPile.length - 1];
+    logCardHitAreas.push({
+      x: rect.x + rect.w / 2 - discardW / 2 - 4,
+      y: infoTop + 44 - 14,
+      w: discardW + 8,
+      h: 18,
+      card: topCard,
+    });
+  }
+
+  // Status icons row (shield, heroism, etc.) above the HP bar
+  const iconRowY = rect.y + rect.h - 70;
+  let iconX = rect.x + 10;
+  const iconSize = 22;
+  const drawStatusIcon = (iconKey, value, color, keyword) => {
+    if (value <= 0) return;
+    const img = images[iconKey];
+    if (img) {
+      ctx.drawImage(img, iconX, iconRowY, iconSize, iconSize);
+      // Register hover hit area so the keyword tooltip system shows the definition
+      if (keyword) {
+        iconHitAreas.push({ x: iconX, y: iconRowY, w: iconSize, h: iconSize, keyword });
+      }
+      iconX += iconSize + 2;
+    }
+    ctx.fillStyle = color;
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(value.toString(), iconX, iconRowY + 17);
+    iconX += ctx.measureText(value.toString()).width + 8;
+  };
+  drawStatusIcon('icon_shield', character.shield, Colors.ALLY_BLUE, 'shield');
+  drawStatusIcon('icon_heroism', character.heroism, Colors.GOLD, 'heroism');
+  drawStatusIcon('icon_armor', character.armor || 0, Colors.GRAY, 'armor');
+  drawStatusIcon('icon_rage', character.rage || 0, Colors.RED, 'rage');
+  drawStatusIcon('icon_fire', character.getStatus('FIRE') || 0, Colors.ORANGE, 'fire');
+  drawStatusIcon('icon_ice', character.getStatus('ICE') || 0, Colors.ICE_BLUE, 'ice');
+  drawStatusIcon('icon_poison', character.getStatus('POISON') || 0, Colors.GREEN, 'poison');
+  drawStatusIcon('icon_shock', character.getStatus('SHOCK') || 0, Colors.SHOCK_YELLOW, 'shock');
+
+  // HP bar at the bottom of the card (green)
   const hp = getHP(character);
   const maxHp = getMaxHP(character);
-  const dmg = getDamage(character);
-
-  // HP bar
-  const barX = infoX + 6, barY = panelY + 28, barW = infoW - 12, barH = 14;
-  ctx.fillStyle = '#333';
+  const barX = rect.x + 10, barW = rect.w - 20, barH = 22;
+  const barY = rect.y + rect.h - barH - 10;
+  ctx.fillStyle = '#222';
   ctx.fillRect(barX, barY, barW, barH);
   const hpPct = maxHp > 0 ? hp / maxHp : 0;
   ctx.fillStyle = hpPct > 0.5 ? Colors.GREEN : (hpPct > 0.25 ? Colors.GOLD : Colors.RED);
   ctx.fillRect(barX, barY, barW * hpPct, barH);
-  ctx.strokeStyle = '#888';
+  ctx.strokeStyle = Colors.WHITE;
   ctx.lineWidth = 1;
   ctx.strokeRect(barX, barY, barW, barH);
   ctx.fillStyle = Colors.WHITE;
-  ctx.font = '12px sans-serif';
+  ctx.font = 'bold 14px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(`HP: ${hp}/${maxHp}`, barX + barW / 2, barY + 12);
+  ctx.fillText(`HP: ${hp}/${maxHp}`, barX + barW / 2, barY + 16);
 
-  // Stats
   ctx.textAlign = 'left';
-  ctx.font = '11px sans-serif';
-  let statY = panelY + 55;
-  ctx.fillStyle = '#aaa';
-  ctx.fillText(`Hand:${character.deck.hand.length} Draw:${character.deck.drawPile.length} Dmg:${dmg}`, infoX + 6, statY);
-  statY += 14;
-  if (character.shield > 0) {
-    ctx.fillStyle = Colors.ALLY_BLUE;
-    ctx.fillText(`Shield: ${character.shield}`, infoX + 6, statY);
-  }
-  if (character.heroism > 0) {
+}
+
+// Draw a creature as a card-shaped mini card (half of the main character card).
+// Player allies use a blue border; enemies use brown. Targetable highlights with red,
+// already-picked (multi-target) highlights with gold.
+function drawCreatureCard(creature, rect, isPlayer) {
+  const targetingNow = state === GameState.TARGETING || state === GameState.POWER_TARGETING;
+  const isTargetable = targetingNow && !isPlayer;
+  const isPicked = state === GameState.POWER_TARGETING && powerTargets.includes(creature);
+
+  // Outer highlight
+  if (isPicked) {
     ctx.fillStyle = Colors.GOLD;
-    ctx.fillText(`Heroism: ${character.heroism}`, infoX + 75, statY);
+    ctx.fillRect(rect.x - 4, rect.y - 4, rect.w + 8, rect.h + 8);
+  } else if (isTargetable) {
+    ctx.strokeStyle = Colors.RED;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6);
   }
+
+  // Try creature art first (image keyed off snake-cased creature name)
+  const artKey = (creature.name || '').toLowerCase().replace(/ /g, '_');
+  const art = getCardArt(artKey);
+  if (art) {
+    const imgAspect = art.width / art.height;
+    const cardAspect = rect.w / rect.h;
+    let sx = 0, sy = 0, sw = art.width, sh = art.height;
+    if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
+    else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
+    ctx.drawImage(art, sx, sy, sw, sh, rect.x, rect.y, rect.w, rect.h);
+  } else {
+    ctx.fillStyle = isPlayer ? '#1a3a4e' : '#3a2020';
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  }
+
+  // Border (blue for player ally, brown for enemy)
+  ctx.strokeStyle = isPlayer ? Colors.ALLY_BLUE : Colors.BROWN;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+
+  // Name at top — wrap to 2 lines if needed
+  const nameFontSize = 11;
+  ctx.font = `bold ${nameFontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const maxNameW = rect.w - 6;
+  const nameLines = wrapText(creature.name, maxNameW, nameFontSize);
+  // Subtle backing for readability
+  const nameBgH = Math.min(nameLines.length, 2) * (nameFontSize + 2) + 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(rect.x + 2, rect.y + 2, rect.w - 4, nameBgH);
+  ctx.fillStyle = Colors.GOLD;
+  let ny = rect.y + 4;
+  for (let i = 0; i < Math.min(nameLines.length, 2); i++) {
+    ctx.fillText(nameLines[i], rect.x + rect.w / 2, ny);
+    ny += nameFontSize + 2;
+  }
+
+  // HP bar (right half of bottom row)
+  const rowBottom = rect.y + rect.h - 4;
+  const hpBarH = 12;
+  const hpBarX = rect.x + rect.w / 2;
+  const hpBarW = rect.w / 2 - 6;
+  const hpBarY = rowBottom - hpBarH;
+  ctx.fillStyle = '#222';
+  ctx.fillRect(hpBarX, hpBarY, hpBarW, hpBarH);
+  const hpPct = creature.maxHp > 0 ? Math.max(0, creature.currentHp) / creature.maxHp : 0;
+  ctx.fillStyle = hpPct > 0.5 ? Colors.GREEN : (hpPct > 0.25 ? Colors.GOLD : Colors.RED);
+  ctx.fillRect(hpBarX, hpBarY, hpBarW * hpPct, hpBarH);
+  ctx.strokeStyle = Colors.WHITE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(hpBarX, hpBarY, hpBarW, hpBarH);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${creature.currentHp}/${creature.maxHp}`, hpBarX + hpBarW / 2, hpBarY + hpBarH / 2 + 1);
+
+  // Attack number on the left of the bottom row
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = Colors.WHITE;
+  ctx.textAlign = 'left';
+  ctx.fillText(`${creature.attack}`, rect.x + 6, hpBarY + hpBarH / 2 + 1);
+
+  // Status badges row (above HP/attack): shield, heroism on the left; fire/ice/poison stacked
+  const badgeY = hpBarY - 16;
+  let bx = rect.x + 6;
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  if (creature.shield > 0) {
+    ctx.fillStyle = Colors.ALLY_BLUE;
+    ctx.fillText(`S${creature.shield}`, bx, badgeY + 6);
+    bx += 18;
+  }
+  if (creature.heroism > 0) {
+    ctx.fillStyle = Colors.GOLD;
+    ctx.fillText(`H${creature.heroism}`, bx, badgeY + 6);
+    bx += 18;
+  }
+  if (creature.armor > 0) {
+    ctx.fillStyle = Colors.GRAY;
+    ctx.fillText(`A${creature.armor}`, bx, badgeY + 6);
+    bx += 18;
+  }
+  // Right side: fire / ice / poison
+  let rx = rect.x + rect.w - 6;
+  if (creature.fireStacks > 0) {
+    ctx.fillStyle = Colors.ORANGE;
+    ctx.textAlign = 'right';
+    ctx.fillText(`F${creature.fireStacks}`, rx, badgeY + 6);
+    rx -= 20;
+  }
+  if (creature.iceStacks > 0) {
+    ctx.fillStyle = Colors.ICE_BLUE;
+    ctx.textAlign = 'right';
+    ctx.fillText(`I${creature.iceStacks}`, rx, badgeY + 6);
+    rx -= 20;
+  }
+  if (creature.poisonStacks > 0) {
+    ctx.fillStyle = Colors.GREEN;
+    ctx.textAlign = 'right';
+    ctx.fillText(`P${creature.poisonStacks}`, rx, badgeY + 6);
+  }
+
+  // Exhausted overlay (Zzz) — primarily for player allies
+  if (creature.exhausted && isPlayer) {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.fillStyle = Colors.ORANGE;
+    ctx.font = 'bold 18px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Zzz', rect.x + rect.w / 2, rect.y + rect.h / 2);
+  }
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
 }
 
 function drawCombatLog() {
-  const logX = SCREEN_WIDTH - 320;
-  const logY = 20;
-  const logW = 300;
-  const logH = 300;
+  const logX = COMBAT_LOG_AREA.x + 8;
+  const logY = COMBAT_LOG_AREA.y + 8;
+  const logW = COMBAT_LOG_AREA.w - 16;
+  const logH = COMBAT_LOG_AREA.h - 16;
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(logX, logY, logW, logH);
@@ -2513,85 +3761,312 @@ function drawCombatLog() {
   ctx.lineWidth = 1;
   ctx.strokeRect(logX, logY, logW, logH);
 
+  // (logCardHitAreas is cleared at the start of drawCombat — don't clear here.)
+
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'left';
-  const maxLines = Math.floor(logH / 16);
-  const start = Math.max(0, combatLog.length - maxLines);
-  for (let i = start; i < combatLog.length; i++) {
+  const lineH = 15;
+  const maxWidth = logW - 12;
+
+  // Build wrapped lines from bottom up to fill the visible area
+  const wrappedEntries = [];
+  for (let i = combatLog.length - 1; i >= 0; i--) {
     const entry = combatLog[i];
-    ctx.fillStyle = entry.color;
-    ctx.fillText(entry.text, logX + 6, logY + 14 + (i - start) * 16);
+    const lines = wrapTextLong(entry.text, maxWidth, 12);
+    // Push lines in order so the entry stays in reading order
+    for (let j = lines.length - 1; j >= 0; j--) {
+      wrappedEntries.unshift({
+        text: lines[j], color: entry.color, card: entry.card,
+        isFirstLine: j === 0, arrow: entry.arrow && j === 0,
+      });
+    }
+    // Stop when we have enough lines
+    if (wrappedEntries.length * lineH > logH) break;
+  }
+
+  // Render bottom-aligned (newest at bottom)
+  const visibleLines = Math.floor((logH - 4) / lineH);
+  const startIdx = Math.max(0, wrappedEntries.length - visibleLines);
+  let y = logY + 14;
+  for (let i = startIdx; i < wrappedEntries.length; i++) {
+    const e = wrappedEntries[i];
+    if (e.arrow && e.text.startsWith('→ ')) {
+      // Render arrow in orange, rest in entry color (white by default)
+      ctx.fillStyle = Colors.ORANGE;
+      ctx.fillText('→', logX + 6, y);
+      const arrowW = ctx.measureText('→ ').width;
+      ctx.fillStyle = e.color;
+      ctx.fillText(e.text.slice(2), logX + 6 + arrowW, y);
+    } else {
+      ctx.fillStyle = e.color;
+      ctx.fillText(e.text, logX + 6, y);
+    }
+    if (e.card && e.isFirstLine) {
+      // Register hit area for this log entry's card
+      logCardHitAreas.push({
+        x: logX + 4, y: y - 12, w: maxWidth + 4, h: lineH,
+        card: e.card,
+      });
+    }
+    y += lineH;
+  }
+}
+
+// --- Combat right-column buttons ---
+// Layout: top row has backpack + help icons on the LEFT (and I Win on the right when debug),
+// End Turn button (original size) below.
+function getCombatButtonRects() {
+  const padding = 8;
+  const iconSize = 40;
+  const rowH = 50; // taller row to give I Win banner some height
+  const iconY = COMBAT_BTN_AREA.y + padding + (rowH - iconSize) / 2;
+  // Icons aligned to the left
+  const backpackX = COMBAT_BTN_AREA.x + padding;
+  const helpX = backpackX + iconSize + 8;
+  // I Win banner on the right (debug only) — fits inside the button area
+  const iconsRightEdge = helpX + iconSize;
+  const iWinW = COMBAT_BTN_AREA.w - (iconsRightEdge - COMBAT_BTN_AREA.x) - padding * 2 - 10;
+  const iWinX = COMBAT_BTN_AREA.x + COMBAT_BTN_AREA.w - iWinW - padding;
+  // End Turn button below the icons
+  const endTurnW = COMBAT_BTN_AREA.w - padding * 2;
+  const endTurnH = COMBAT_BTN_AREA.h - rowH - padding * 3;
+  return {
+    backpack: { x: backpackX, y: iconY, w: iconSize, h: iconSize },
+    help: { x: helpX, y: iconY, w: iconSize, h: iconSize },
+    iWin: { x: iWinX, y: COMBAT_BTN_AREA.y + padding, w: iWinW, h: rowH },
+    endTurn: {
+      x: COMBAT_BTN_AREA.x + padding,
+      y: COMBAT_BTN_AREA.y + padding + rowH + padding,
+      w: endTurnW,
+      h: endTurnH,
+    },
+  };
+}
+
+// Clean icon button — no background panel, just the icon with optional hover ring
+function drawIconButton(rect, iconKey, action, label = '') {
+  const hovered = hitTest(mouseX, mouseY, rect);
+  const img = images[iconKey];
+
+  if (img) {
+    if (hovered) {
+      // Subtle gold glow ring on hover
+      ctx.shadowColor = Colors.GOLD;
+      ctx.shadowBlur = 8;
+    }
+    ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+  } else if (label) {
+    ctx.fillStyle = hovered ? Colors.GOLD : Colors.WHITE;
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  if (action) menuButtons.push({ ...rect, action });
+}
+
+function drawCombatButtons() {
+  const rects = getCombatButtonRects();
+  const enabled = isPlayerTurn && !powerRechargeMode && combatIntroTimer <= 0;
+
+  // End Turn button (LEFT, large)
+  if (enabled) {
+    drawStyledButton(rects.endTurn.x, rects.endTurn.y, rects.endTurn.w, rects.endTurn.h, 'End Turn', endPlayerTurn, 'large', 20);
+  } else {
+    ctx.globalAlpha = 0.4;
+    drawStyledButton(rects.endTurn.x, rects.endTurn.y, rects.endTurn.w, rects.endTurn.h, 'End Turn', null, 'large', 20);
+    ctx.globalAlpha = 1;
+    menuButtons.pop();
+  }
+
+  // Backpack icon (right side, top row left)
+  drawIconButton(rects.backpack, 'icon_backpack', () => {
+    previousState = state;
+    state = GameState.INVENTORY;
+  }, 'Bag');
+
+  // Help icon (right side, top row right)
+  drawIconButton(rects.help, 'icon_help', () => {
+    previousState = state;
+    helpScrollY = 0;
+    state = GameState.HELP_SCREEN;
+  }, '?');
+
+  // I Win banner (debug only, right of icons) — uses the wooden plank sprite
+  if (debugMode) {
+    const r = rects.iWin;
+    drawStyledButton(r.x, r.y, r.w, r.h, 'I WIN', () => {
+      // Debug: instantly win the combat
+      if (enemy) {
+        for (const c of enemy.creatures) c.currentHp = 0;
+        enemy.creatures = [];
+        if (enemy.deck) {
+          enemy.deck.drawPile = [];
+          enemy.deck.hand = [];
+          enemy.deck.rechargePile = [];
+        }
+        enemy._invulnerable = false;
+        killCount = killTarget;
+        addLog('Debug: I Win!', Colors.GOLD);
+        checkCombatEnd();
+      }
+    }, 'large', 16);
   }
 }
 
 // --- Power rendering ---
-const POWER_W = 100;
-const POWER_H = 70;
+const POWER_W = COMBAT_POWER_W;
+const POWER_H = COMBAT_POWER_H;
 
-function getPowerRect() {
-  // Power card positioned left of hand area
-  return { x: 20, y: SCREEN_HEIGHT - CARD_H - 55, w: POWER_W, h: POWER_H };
+function getPowerRect(index = 0) {
+  // Power card(s) sit above the player character card, left-aligned
+  return getCharacterPowerRect(true, index);
+}
+
+// Draw a single power card at a given rect
+function drawPowerCard(power, r, clickable) {
+  const hovered = hitTest(mouseX, mouseY, r);
+  if (hovered) hoveredPowerPreview = power;
+  const art = getPowerArt(power.id);
+  const usable = clickable && power.canUse() && isPlayerTurn && !powerRechargeMode;
+
+  if (art) {
+    const imgAspect = art.width / art.height;
+    const cardAspect = r.w / r.h;
+    let sx = 0, sy = 0, sw = art.width, sh = art.height;
+    if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
+    else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
+    if (power.exhausted) ctx.globalAlpha = 0.5;
+    ctx.drawImage(art, sx, sy, sw, sh, r.x, r.y, r.w, r.h);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = power.exhausted ? '#333' : '#643c64'; // (100, 60, 100)
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+
+  // Tight name box at top — auto-sized to wrap around the text (matches drawCard style)
+  const nameFontSize = Math.max(9, Math.floor(r.w * 0.11));
+  ctx.font = `bold ${nameFontSize}px sans-serif`;
+  const nameLines = wrapText(power.name, r.w - 8, nameFontSize);
+  const nameLineH = nameFontSize + 2;
+  // Find widest line so the box is sized to text width
+  let maxLineW = 0;
+  for (const line of nameLines) {
+    const m = ctx.measureText(line).width;
+    if (m > maxLineW) maxLineW = m;
+  }
+  const nameBoxW = Math.min(r.w - 4, maxLineW + 10);
+  const nameBoxH = nameLines.length * nameLineH + 4;
+  const nameBoxX = r.x + (r.w - nameBoxW) / 2;
+  const nameBoxY = r.y + 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
+  ctx.fillStyle = Colors.GOLD;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let nameLineY = nameBoxY + nameLineH / 2 + 2;
+  for (const line of nameLines) {
+    ctx.fillText(line, r.x + r.w / 2, nameLineY);
+    nameLineY += nameLineH;
+  }
+  ctx.textBaseline = 'alphabetic';
+
+  // Short desc box at bottom (with inline keyword icons)
+  if (power.shortDesc) {
+    const descLines = power.shortDesc.split('\n');
+    const fontSize = 10;
+    const iconSize = Math.floor(fontSize * 1.3);
+    const lineH = Math.max(fontSize + 2, iconSize + 1);
+    const descBoxH = descLines.length * lineH + 6;
+    const descBoxY = r.y + r.h - descBoxH - 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(r.x + 2, descBoxY, r.w - 4, descBoxH);
+    let dy = descBoxY + 3;
+    for (const line of descLines) {
+      drawIconText(line, r.x + r.w / 2, dy, r.w - 6, fontSize, '#eee');
+      dy += lineH;
+    }
+  }
+
+  // Purple border (matches py game)
+  const PURPLE = '#8c3c8c';
+  ctx.strokeStyle = PURPLE;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+  // White border when this power is the selected one (matches selected card style)
+  if (clickable && selectedPower === power) {
+    ctx.strokeStyle = Colors.WHITE;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(r.x - 2, r.y - 2, r.w + 4, r.h + 4);
+  }
+
+  // Exhausted: Zzz overlay
+  if (power.exhausted) {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = Colors.ORANGE;
+    ctx.font = 'bold 18px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Zzz', r.x + r.w / 2, r.y + r.h / 2);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  ctx.textAlign = 'left';
 }
 
 function drawPowerArea() {
   for (let i = 0; i < player.powers.length; i++) {
     const power = player.powers[i];
-    const baseRect = getPowerRect();
-    const r = { ...baseRect, x: baseRect.x + i * (POWER_W + 6) };
-    const hovered = hitTest(mouseX, mouseY, r);
-    const art = getPowerArt(power.id);
-    const usable = power.canUse() && isPlayerTurn && !powerRechargeMode;
-
-    if (art) {
-      const imgAspect = art.width / art.height;
-      const cardAspect = r.w / r.h;
-      let sx = 0, sy = 0, sw = art.width, sh = art.height;
-      if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
-      else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
-      ctx.globalAlpha = power.exhausted ? 0.4 : (hovered ? 1 : 0.85);
-      ctx.drawImage(art, sx, sy, sw, sh, r.x, r.y, r.w, r.h);
-      ctx.globalAlpha = 1;
-    } else {
-      ctx.fillStyle = power.exhausted ? '#333' : (usable ? '#5a2a7a' : '#3a1a4a');
-      ctx.globalAlpha = hovered ? 1 : 0.85;
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.globalAlpha = 1;
-    }
-
-    // Name overlay
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(r.x, r.y, r.w, 18);
-    ctx.fillStyle = usable ? Colors.GOLD : Colors.GRAY;
-    ctx.font = 'bold 10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(power.name, r.x + r.w / 2, r.y + 13);
-
-    // Short desc
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(r.x, r.y + r.h - 20, r.w, 20);
-    ctx.fillStyle = '#ccc';
-    ctx.font = '9px sans-serif';
-    ctx.fillText(power.shortDesc.split('\n')[0], r.x + r.w / 2, r.y + r.h - 7);
-
-    // Border
-    ctx.strokeStyle = usable ? Colors.GOLD : (power.exhausted ? '#444' : '#666');
-    ctx.lineWidth = usable && hovered ? 3 : 1;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-
-    // Exhausted overlay
-    if (power.exhausted) {
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = Colors.GRAY;
-      ctx.font = 'bold 14px sans-serif';
-      ctx.fillText('Zzz', r.x + r.w / 2, r.y + r.h / 2 + 5);
-    }
+    const r = getCharacterPowerRect(true, i);
+    drawPowerCard(power, r, true);
   }
-  ctx.textAlign = 'left';
+}
+
+function drawEnemyPowerArea() {
+  if (!enemy || !enemy.powers || enemy.powers.length === 0) return;
+  for (let i = 0; i < enemy.powers.length; i++) {
+    const power = enemy.powers[i];
+    const r = getCharacterPowerRect(false, i);
+    drawPowerCard(power, r, false);
+  }
 }
 
 // --- Combat click handling ---
 function handleCombatClick(x, y) {
+  // Click dismisses combat intro splash
+  if (combatIntroTimer > 0) {
+    combatIntroTimer = 0;
+    return;
+  }
+
+  // Click dismisses character card splash
+  if (characterSplashCharacter) {
+    characterSplashCharacter = null;
+    return;
+  }
+
+  // Click on player or enemy character card → show splash (only if not in targeting/recharge mode)
+  if (!powerRechargeMode && state === GameState.COMBAT) {
+    const playerCardRect = getCharacterCardRect(true);
+    if (hitTest(x, y, playerCardRect)) {
+      characterSplashCharacter = player;
+      characterSplashIsPlayer = true;
+      return;
+    }
+    const enemyCardRect = getCharacterCardRect(false);
+    if (hitTest(x, y, enemyCardRect)) {
+      characterSplashCharacter = enemy;
+      characterSplashIsPlayer = false;
+      return;
+    }
+  }
+
   if (!isPlayerTurn) return;
 
   // Power recharge mode: clicking hand cards to recharge
@@ -2600,48 +4075,85 @@ function handleCombatClick(x, y) {
     return;
   }
 
+  // Card recharge mode: clicking hand cards to pay recharge_extra cost
+  if (cardRechargeMode) {
+    handleCardRechargeClick(x, y);
+    return;
+  }
+
   // Check power card click
   for (let i = 0; i < player.powers.length; i++) {
     const power = player.powers[i];
-    const baseRect = getPowerRect();
-    const r = { ...baseRect, x: baseRect.x + i * (POWER_W + 6) };
+    const r = getCharacterPowerRect(true, i);
     if (hitTest(x, y, r)) {
       handlePowerClick(power);
       return;
     }
   }
 
-  // Check End Turn button
-  const btnX = SCREEN_WIDTH - 160, btnY = SCREEN_HEIGHT - 180, btnW = 130, btnH = 40;
-  if (hitTest(x, y, { x: btnX, y: btnY, w: btnW, h: btnH })) {
-    endPlayerTurn();
-    return;
+  // Check right-column combat buttons (end turn, inventory, help)
+  for (const btn of menuButtons) {
+    if (hitTest(x, y, btn) && btn.action) {
+      btn.action();
+      return;
+    }
   }
 
-  // Check hand cards
+  // Check hand cards (use visible-portion hit areas, iterate topmost first
+  // because later cards in the array are drawn over earlier ones when stacked)
   const handRects = getHandCardRects(player.deck.hand);
-  for (let i = 0; i < handRects.length; i++) {
-    const r = handRects[i];
+  for (let i = handRects.length - 1; i >= 0; i--) {
+    const r = getHandCardHoverRect(handRects, i);
     if (hitTest(x, y, r)) {
-      if (selectedCardIndex === i) {
-        const card = player.deck.hand[i];
+      const card = player.deck.hand[i];
+      // Exhausted (stays-in-hand) cards already used this turn
+      if (card.exhausted) {
+        showToast(`${card.name} already used this turn.`);
+        return;
+      }
+      // Defense cards can't be played proactively
+      if (card.cardType === CardType.DEFENSE) {
+        showToast('Defense cards are played when the enemy attacks.');
+        return;
+      }
+      if (selectedCardIndex !== i) {
+        selectedCardIndex = i;
+        if (card.isModal) {
+          modalCard = card;
+          modalTarget = null;
+          state = GameState.MODAL_SELECT;
+          return;
+        }
+        // Check for recharge_extra cost
+        const rechargeNeeded = getCardRechargeExtra(card);
+        if (rechargeNeeded > 0) {
+          // Need other cards in hand to pay the cost
+          const otherCards = player.deck.hand.filter((c, j) => j !== i).length;
+          if (otherCards < rechargeNeeded) {
+            addLog(`Not enough cards in hand to pay Recharge +${rechargeNeeded} cost.`, Colors.RED);
+            selectedCardIndex = -1;
+            return;
+          }
+          cardRechargeMode = true;
+          cardRechargeNeeded = rechargeNeeded;
+          cardRechargedCards = [];
+          pendingRechargeNames = [];
+          showStickyToast(`Recharge: Click another card to recharge as cost (${rechargeNeeded} more, ESC to cancel)`);
+          return;
+        }
+        // No extra recharge cost: proceed normally
+        if (canPlayWithoutTarget(card)) {
+          playCardSelf(i);
+        } else if (needsTarget(card)) {
+          state = GameState.TARGETING;
+          showStickyToast('Click on an enemy to attack (or click elsewhere to cancel)');
+        }
+      } else {
+        // Clicked the same card again
         if (canPlayWithoutTarget(card)) {
           playCardSelf(i);
         } else {
           selectedCardIndex = -1;
-        }
-      } else {
-        selectedCardIndex = i;
-        const card = player.deck.hand[i];
-        if (card.isModal) {
-          // Modal card: enter mode selection, then target
-          modalCard = card;
-          modalTarget = null;
-          state = GameState.MODAL_SELECT;
-        } else if (canPlayWithoutTarget(card)) {
-          playCardSelf(i);
-        } else if (needsTarget(card)) {
-          state = GameState.TARGETING;
         }
       }
       return;
@@ -2652,11 +4164,140 @@ function handleCombatClick(x, y) {
   selectedCardIndex = -1;
 }
 
+// Handle clicks during card recharge mode (paying extra recharge cost)
+function handleCardRechargeClick(x, y) {
+  // Click another hand card to pay it as recharge cost (topmost first)
+  const handRects = getHandCardRects(player.deck.hand);
+  for (let i = handRects.length - 1; i >= 0; i--) {
+    if (i === selectedCardIndex) continue;
+    if (hitTest(x, y, getHandCardHoverRect(handRects, i))) {
+      const card = player.deck.hand[i];
+      // Move to recharge pile (held until end of turn, then flushed under the deck)
+      player.deck.hand.splice(i, 1);
+      player.deck.addToRechargePile(card);
+      cardRechargedCards.push(card);
+      pendingRechargeNames.push(card.name);
+
+      // Adjust selectedCardIndex if needed (we removed a card)
+      if (i < selectedCardIndex) selectedCardIndex--;
+
+      cardRechargeNeeded--;
+      if (cardRechargeNeeded <= 0) {
+        // Done paying cost — proceed to targeting (or self-play)
+        cardRechargeMode = false;
+        const selectedCard = player.deck.hand[selectedCardIndex];
+        if (canPlayWithoutTarget(selectedCard)) {
+          hideToast();
+          playCardSelf(selectedCardIndex);
+          for (const n of pendingRechargeNames) addLog(`  Recharge: ${n}`);
+          pendingRechargeNames = [];
+          cardRechargedCards = [];
+        } else {
+          state = GameState.TARGETING;
+          showStickyToast('Click on an enemy to attack (or click elsewhere to cancel)');
+        }
+      } else {
+        showStickyToast(`Recharge: Click another card to recharge as cost (${cardRechargeNeeded} more, ESC to cancel)`);
+      }
+      return;
+    }
+  }
+  // Clicked elsewhere — cancel and refund recharged cards
+  cancelCardRecharge();
+}
+
+// === DEFENDING phase: prompt player to play defense cards reactively ===
+function handleDefendingClick(x, y) {
+  // Click defense cards in hand to play them (topmost first)
+  const handRects = getHandCardRects(player.deck.hand);
+  for (let i = handRects.length - 1; i >= 0; i--) {
+    if (!hitTest(x, y, getHandCardHoverRect(handRects, i))) continue;
+    const card = player.deck.hand[i];
+    if (card.cardType !== CardType.DEFENSE) {
+      showToast('Only defense cards can be played here.');
+      return;
+    }
+    // Play the defense card
+    player.deck.playCard(card);
+    addLog(`You play ${card.name}`, Colors.GREEN, card);
+    for (const eff of card.currentEffects) {
+      if (eff.effectType === 'block') {
+        player.addBlock(eff.value);
+        addLog(`  +${eff.value} Block`, Colors.BLUE);
+      } else if (eff.effectType === 'gain_shield') {
+        player.shield += eff.value;
+        addLog(`  +${eff.value} Shield (S:${player.shield})`, Colors.ALLY_BLUE);
+      } else if (eff.effectType === 'draw') {
+        const drawn = player.deck.draw(eff.value, MAX_HAND_SIZE);
+        for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
+      }
+    }
+    // Re-apply auto-mitigation against the pending damage
+    pendingIncomingDamage = autoMitigateDamage(pendingIncomingDamage);
+    if (pendingIncomingDamage <= 0) {
+      addLog(`  All damage absorbed!`);
+      finishIncomingDamage();
+    } else {
+      // Update toast with new remaining
+      showStickyToast(`Incoming ${pendingIncomingDamage} damage. Click defense cards or pass.`);
+    }
+    return;
+  }
+  // Click a "Pass" / "Take damage" button to skip
+  const passBtn = getDefendingPassBtnRect();
+  if (hitTest(x, y, passBtn)) {
+    enterTakeDamagePhase();
+  }
+}
+
+function drawDefendingOverlay() {
+  // Pass button
+  const r = getDefendingPassBtnRect();
+  const hov = hitTest(mouseX, mouseY, r);
+  ctx.fillStyle = hov ? '#a44' : '#722';
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = 'bold 16px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Pass (take damage)', r.x + r.w / 2, r.y + r.h / 2);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+}
+
+function getDefendingPassBtnRect() {
+  return { x: SCREEN_WIDTH / 2 - 110, y: COMBAT_DIVIDER_Y + 35, w: 220, h: 44 };
+}
+
+function cancelCardRecharge() {
+  // Refund any recharged cards back to hand (they were placed in the recharge pile)
+  for (const c of cardRechargedCards) {
+    const idx = player.deck.rechargePile.indexOf(c);
+    if (idx !== -1) player.deck.rechargePile.splice(idx, 1);
+    player.deck.hand.push(c);
+  }
+  cardRechargedCards = [];
+  pendingRechargeNames = [];
+  cardRechargeMode = false;
+  cardRechargeNeeded = 0;
+  selectedCardIndex = -1;
+  hideToast();
+  addLog('Cancelled.', Colors.GRAY);
+}
+
 function handleTargetingClick(x, y) {
-  // Click on enemy panel to target enemy directly
-  const enemyPanelRect = { x: 20, y: 20, w: 200, h: 100 };
-  if (hitTest(x, y, enemyPanelRect)) {
+  // Click on enemy character card to target enemy directly
+  const enemyCardRect = getCharacterCardRect(false);
+  if (hitTest(x, y, enemyCardRect)) {
+    const names = pendingRechargeNames.slice();
+    cardRechargedCards = []; // commit recharged cards
+    pendingRechargeNames = [];
+    hideToast();
     playCardOnEnemy(selectedCardIndex);
+    for (const n of names) addLog(`  Recharge: ${n}`);
     return;
   }
 
@@ -2664,20 +4305,38 @@ function handleTargetingClick(x, y) {
   const creatureRects = getEnemyCreatureRects();
   for (let i = 0; i < creatureRects.length; i++) {
     if (hitTest(x, y, creatureRects[i])) {
+      const names = pendingRechargeNames.slice();
+      cardRechargedCards = []; // commit recharged cards
+      pendingRechargeNames = [];
+      hideToast();
       playCardOnCreature(selectedCardIndex, enemy.creatures[i]);
+      for (const n of names) addLog(`  Recharge: ${n}`);
       return;
     }
   }
 
-  // ESC or click elsewhere to cancel
+  // Click elsewhere → cancel and refund recharged cards
+  if (cardRechargedCards.length > 0) {
+    cancelCardRecharge();
+  }
+  hideToast();
   selectedCardIndex = -1;
   state = GameState.COMBAT;
 }
 
 let attacksThisTurn = 0; // for sneak_attack scaling
 
+// Returns the recharge_extra cost for a card (number of cards to recharge as cost beyond base)
+function getCardRechargeExtra(card) {
+  for (const eff of card.currentEffects || []) {
+    if (eff.effectType === 'recharge_extra') return eff.value;
+  }
+  return 0;
+}
+
 function canPlayWithoutTarget(card) {
-  if (card.cardType === CardType.DEFENSE) return true;
+  // Defense cards can ONLY be played reactively when defending against enemy attacks
+  if (card.cardType === CardType.DEFENSE) return false;
   if (card.cardType === CardType.CREATURE) return true; // summons are self-targeting
   if (card.effects.length > 0 && card.effects[0].target === TargetType.SELF) return true;
   if (card.effects.some(e => e.target === TargetType.ALL_ENEMIES)) return true;
@@ -2694,6 +4353,26 @@ function needsTarget(card) {
   );
 }
 
+// Reactively play any defense cards still in the enemy's hand (during player turn).
+// Called just before player damage lands on the enemy character.
+function enemyAutoPlayDefenses() {
+  if (!enemy || !enemy.deck) return;
+  const defenseCards = enemy.deck.hand.filter(c => c.cardType === CardType.DEFENSE);
+  for (const card of defenseCards) {
+    enemy.deck.playCard(card);
+    addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
+    for (const eff of card.currentEffects) {
+      if (eff.effectType === 'block') {
+        enemy.addBlock(eff.value);
+        addLog(`  +${eff.value} Block`, Colors.BLUE);
+      } else if (eff.effectType === 'gain_shield') {
+        enemy.shield += eff.value;
+        addLog(`  +${eff.value} Shield (S:${enemy.shield})`, Colors.ALLY_BLUE);
+      }
+    }
+  }
+}
+
 // --- Resolve a single effect on a target ---
 function resolveEffect(eff, caster, target) {
   switch (eff.effectType) {
@@ -2704,14 +4383,21 @@ function resolveEffect(eff, caster, target) {
       const incomingMod = getIncomingDamageModifier(target instanceof Creature ? enemy : target);
       dmg += incomingMod;
       dmg = Math.max(0, dmg);
+      // Enemy reactively plays defense cards before damage lands on enemy character
+      if (!(target instanceof Creature) && target === enemy) {
+        enemyAutoPlayDefenses();
+      }
       if (target instanceof Creature) {
+        const before = target.shield + target.currentHp;
         const actual = target.takeDamage(dmg);
-        addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
+        const blocked = Math.max(0, dmg - actual);
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
         if (!target.isAlive) { addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
       } else {
         const [blocked, taken] = target.takeDamageWithDefense(dmg);
-        if (blocked > 0) addLog(`  (${blocked} blocked)`, Colors.BLUE);
-        addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${target.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
       }
       attacksThisTurn++;
       break;
@@ -2842,14 +4528,14 @@ function resolveEffect(eff, caster, target) {
       break;
     case 'gain_shield':
       caster.shield += eff.value;
-      addLog(`  +${eff.value} Shield`, Colors.ALLY_BLUE);
+      addLog(`  +${eff.value} Shield (S:${caster.shield})`, Colors.ALLY_BLUE);
       break;
     case 'heal':
       healPlayer(eff.value);
       break;
     case 'draw': {
       const drawn = caster.deck.draw(eff.value, MAX_HAND_SIZE);
-      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE);
+      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
     }
     case 'gain_heroism':
@@ -2891,14 +4577,7 @@ function resolveEffect(eff, caster, target) {
       break;
     }
     case 'recharge_extra':
-      // Already handled by cost system; extra recharge from hand
-      // For simplicity, auto-recharge top card from hand
-      if (caster.deck.hand.length > 0) {
-        const rechargeCard = caster.deck.hand[caster.deck.hand.length - 1];
-        caster.deck.hand.pop();
-        caster.deck.drawPile.unshift(rechargeCard);
-        addLog(`  Recharged: ${rechargeCard.name}`, Colors.GRAY);
-      }
+      // Cost is paid via the card recharge phase before targeting; nothing to do here.
       break;
     case 'damage_all': {
       const dmg = eff.value + caster.heroism;
@@ -2953,12 +4632,22 @@ function resolveEffect(eff, caster, target) {
 }
 
 // --- Playing cards ---
+function cardStaysInHand(card) {
+  return (card.currentEffects || []).some(e => e.effectType === 'stays_in_hand');
+}
+
 function playCardSelf(handIndex) {
   const card = player.deck.hand[handIndex];
-  player.deck.playCard(card);
-  addLog(`Played: ${card.name}`, Colors.GREEN);
+  const stays = cardStaysInHand(card);
+  if (stays) {
+    card.exhausted = true;
+  } else {
+    player.deck.playCard(card);
+  }
+  addLog(stays ? `You use ${card.name} (stays in hand)` : `You play ${card.name}`, Colors.GREEN, card);
 
   for (const eff of card.currentEffects) {
+    if (eff.effectType === 'stays_in_hand') continue;
     resolveEffect(eff, player, enemy);
   }
 
@@ -2969,10 +4658,16 @@ function playCardSelf(handIndex) {
 
 function playCardOnEnemy(handIndex) {
   const card = player.deck.hand[handIndex];
-  player.deck.playCard(card);
-  addLog(`Played: ${card.name}`, Colors.GREEN);
+  const stays = cardStaysInHand(card);
+  if (stays) {
+    card.exhausted = true;
+  } else {
+    player.deck.playCard(card);
+  }
+  addLog(stays ? `You use ${card.name} (stays in hand)` : `You play ${card.name}`, Colors.GREEN, card);
 
   for (const eff of card.currentEffects) {
+    if (eff.effectType === 'stays_in_hand') continue;
     resolveEffect(eff, player, enemy);
   }
 
@@ -2983,10 +4678,21 @@ function playCardOnEnemy(handIndex) {
 
 function playCardOnCreature(handIndex, creature) {
   const card = player.deck.hand[handIndex];
-  player.deck.playCard(card);
-  addLog(`Played: ${card.name} on ${creature.name}`, Colors.GREEN);
+  const stays = cardStaysInHand(card);
+  if (stays) {
+    card.exhausted = true;
+  } else {
+    player.deck.playCard(card);
+  }
+  addLog(
+    stays
+      ? `You use ${card.name} on ${creature.name} (stays in hand)`
+      : `You play ${card.name} on ${creature.name}`,
+    Colors.GREEN, card,
+  );
 
   for (const eff of card.currentEffects) {
+    if (eff.effectType === 'stays_in_hand') continue;
     if (eff.target === TargetType.SINGLE_ENEMY || eff.target === TargetType.RANDOM_ENEMY) {
       resolveEffect(eff, player, creature);
     } else {
@@ -3032,11 +4738,11 @@ function healPlayer(amount) {
 function handlePowerClick(power) {
   if (power.isPassive) return;
   if (power.exhausted) {
-    addLog('Power already used this turn.', Colors.GRAY);
+    showToast('Power already used this turn.');
     return;
   }
   if (!power.canUse()) {
-    addLog(`Need ${power.rechargeCost} card(s) in hand to use ${power.name}.`, Colors.RED);
+    showToast(`Need ${power.rechargeCost} card(s) in hand to use ${power.name}.`);
     return;
   }
 
@@ -3047,7 +4753,12 @@ function handlePowerClick(power) {
     powerRechargeCardsNeeded = power.rechargeCost;
     powerRechargeCardsSelected = [];
     selectedCardIndex = -1;
-    addLog(`${power.name}: Select ${power.rechargeCost} card(s) to recharge.`, Colors.GOLD);
+    const verb = power.costIsDiscard ? 'discard' : 'recharge';
+    showStickyToast(`${power.name}: Click ${power.rechargeCost} card(s) to ${verb} (ESC to cancel)`);
+  } else if (powerHasChoices(power)) {
+    enterPowerChoice(power);
+  } else if (powerNeedsTargets(power)) {
+    enterPowerTargeting(power);
   } else {
     executePower(power);
   }
@@ -3056,23 +4767,36 @@ function handlePowerClick(power) {
 function handlePowerRechargeClick(x, y) {
   // ESC check is in handleKeyDown
   const handRects = getHandCardRects(player.deck.hand);
-  for (let i = 0; i < handRects.length; i++) {
-    if (hitTest(x, y, handRects[i])) {
+  for (let i = handRects.length - 1; i >= 0; i--) {
+    if (hitTest(x, y, getHandCardHoverRect(handRects, i))) {
       const card = player.deck.hand[i];
       // Remove card from hand and recharge/discard it
       player.deck.hand.splice(i, 1);
+      card.exhausted = false; // leaving hand clears stay-in-hand exhaust
       if (selectedPower.costIsDiscard) {
         player.deck.discardPile.push(card);
-        addLog(`  Discarded: ${card.name}`, Colors.GRAY);
       } else {
-        player.deck.drawPile.unshift(card); // bottom of draw pile
-        addLog(`  Recharged: ${card.name}`, Colors.BLUE);
+        player.deck.addToRechargePile(card); // held until end of turn
       }
+      powerRechargeCardsSelected.push(card);
       powerRechargeCardsNeeded--;
 
       if (powerRechargeCardsNeeded <= 0) {
+        const paid = powerRechargeCardsSelected.length;
+        const verbPast = selectedPower.costIsDiscard ? 'discarded' : 'recharged';
         powerRechargeMode = false;
-        executePower(selectedPower);
+        hideToast();
+        addLog(`  (${paid} card${paid > 1 ? 's' : ''} ${verbPast})`);
+        if (powerHasChoices(selectedPower)) {
+          enterPowerChoice(selectedPower);
+        } else if (powerNeedsTargets(selectedPower)) {
+          enterPowerTargeting(selectedPower);
+        } else {
+          executePower(selectedPower);
+        }
+      } else {
+        const verb = selectedPower.costIsDiscard ? 'discard' : 'recharge';
+        showStickyToast(`${selectedPower.name}: Click ${powerRechargeCardsNeeded} more card(s) to ${verb} (ESC to cancel)`);
       }
       return;
     }
@@ -3085,22 +4809,321 @@ function handlePowerRechargeClick(x, y) {
 function cancelPowerRecharge() {
   // Undo recharged cards back to hand
   for (const card of powerRechargeCardsSelected) {
+    // Pull back from wherever we placed it (recharge pile or discard pile for discard-cost powers)
+    const rcIdx = player.deck.rechargePile.indexOf(card);
+    if (rcIdx !== -1) player.deck.rechargePile.splice(rcIdx, 1);
+    const discIdx = player.deck.discardPile.indexOf(card);
+    if (discIdx !== -1) player.deck.discardPile.splice(discIdx, 1);
     player.deck.hand.push(card);
   }
   powerRechargeMode = false;
   powerRechargeCardsNeeded = 0;
   powerRechargeCardsSelected = [];
   selectedPower = null;
+  hideToast();
   addLog('Power cancelled.', Colors.GRAY);
+}
+
+// === Powers that need target selection (like weapon attacks) ===
+let powerTargets = [];
+let powerMaxTargets = 0;
+let powerChoices = [];          // current choice card list (e.g. Fire, Ice)
+let powerChoiceRects = [];      // hit areas for the rendered choice cards
+let powerChoiceCancelRect = null;
+let chosenPowerEffect = null;   // which choice the player picked (drives subsequent targeting)
+
+function enterPowerChoice(power) {
+  powerChoices = power.choices.slice();
+  powerChoiceRects = [];
+  state = GameState.POWER_CHOICE;
+  // Title is rendered on top of the overlay; no toast needed.
+  hideToast();
+}
+
+function cancelPowerChoice() {
+  // Refund recharged cards back to hand and un-exhaust the power
+  if (selectedPower) {
+    selectedPower.exhausted = false;
+    for (const card of powerRechargeCardsSelected) {
+      const rcIdx = player.deck.rechargePile.indexOf(card);
+      if (rcIdx !== -1) player.deck.rechargePile.splice(rcIdx, 1);
+      const discIdx = player.deck.discardPile.indexOf(card);
+      if (discIdx !== -1) player.deck.discardPile.splice(discIdx, 1);
+      player.deck.hand.push(card);
+    }
+  }
+  powerRechargeCardsSelected = [];
+  powerChoices = [];
+  powerChoiceRects = [];
+  powerChoiceCancelRect = null;
+  chosenPowerEffect = null;
+  selectedPower = null;
+  state = GameState.COMBAT;
+  hideToast();
+  addLog('Power cancelled.', Colors.GRAY);
+}
+
+function handlePowerChoiceClick(x, y) {
+  // Card choices
+  for (let i = 0; i < powerChoiceRects.length; i++) {
+    if (hitTest(x, y, powerChoiceRects[i])) {
+      const choice = powerChoices[i];
+      onPowerChoicePicked(choice);
+      return;
+    }
+  }
+  // Cancel button
+  if (powerChoiceCancelRect && hitTest(x, y, powerChoiceCancelRect)) {
+    cancelPowerChoice();
+  }
+}
+
+function onPowerChoicePicked(choice) {
+  const power = selectedPower;
+  // Self-targeting choices resolve immediately
+  if (choice.id === 'cat_form_token') {
+    powerChoices = [];
+    powerChoiceRects = [];
+    power.use();
+    addLog(`Used power: ${power.name}`, Colors.GREEN, power);
+    addLog(`  Mode: Feline Form`);
+    player.heroism += 1;
+    addLog(`  +1 Heroism (H:${player.heroism})`, Colors.GOLD);
+    const drawn = player.deck.draw(1, MAX_HAND_SIZE);
+    for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
+    selectedPower = null;
+    state = GameState.COMBAT;
+    hideToast();
+    checkCombatEnd();
+    return;
+  }
+  if (choice.id === 'bear_form_token') {
+    powerChoices = [];
+    powerChoiceRects = [];
+    power.use();
+    addLog(`Used power: ${power.name}`, Colors.GREEN, power);
+    addLog(`  Mode: Bear Form`);
+    player.shield += 1;
+    addLog(`  +1 Shield (S:${player.shield})`, Colors.ALLY_BLUE);
+    const drawn = player.deck.draw(1, MAX_HAND_SIZE);
+    for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
+    selectedPower = null;
+    state = GameState.COMBAT;
+    hideToast();
+    checkCombatEnd();
+    return;
+  }
+  // Otherwise, the choice needs an enemy target — enter POWER_TARGETING.
+  chosenPowerEffect = choice.id;
+  powerChoices = [];
+  powerChoiceRects = [];
+  hideToast();
+  enterPowerTargeting(power);
+}
+
+function drawPowerChoiceOverlay() {
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Title
+  const title = `${selectedPower ? selectedPower.name : 'Power'}: Choose an effect`;
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 32px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(title, SCREEN_WIDTH / 2, 110);
+
+  // Choice cards (full size, side by side)
+  const cardW = 240;
+  const cardH = 336;
+  const gap = 40;
+  const totalW = powerChoices.length * cardW + (powerChoices.length - 1) * gap;
+  const startX = Math.floor((SCREEN_WIDTH - totalW) / 2);
+  const cardY = 160;
+
+  powerChoiceRects = [];
+  for (let i = 0; i < powerChoices.length; i++) {
+    const cx = startX + i * (cardW + gap);
+    const r = { x: cx, y: cardY, w: cardW, h: cardH };
+    powerChoiceRects.push(r);
+    const hov = hitTest(mouseX, mouseY, r);
+    if (hov) {
+      ctx.strokeStyle = Colors.GOLD;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
+    }
+    drawCard(powerChoices[i], r.x, r.y, r.w, r.h, false, false, 'full');
+  }
+
+  // Cancel button (red, below)
+  const cw = 220, ch = 50;
+  const cx = Math.floor((SCREEN_WIDTH - cw) / 2);
+  const cy = cardY + cardH + 30;
+  powerChoiceCancelRect = { x: cx, y: cy, w: cw, h: ch };
+  const cancelHov = hitTest(mouseX, mouseY, powerChoiceCancelRect);
+  ctx.fillStyle = cancelHov ? '#642828' : '#3c1818';
+  ctx.fillRect(cx, cy, cw, ch);
+  ctx.strokeStyle = Colors.RED;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx, cy, cw, ch);
+  ctx.fillStyle = Colors.RED;
+  ctx.font = 'bold 22px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Cancel (Esc)', cx + cw / 2, cy + ch / 2);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+}
+
+function powerHasChoices(power) {
+  return Array.isArray(power.choices) && power.choices.length > 0;
+}
+
+function powerNeedsTargets(power) {
+  // Powers that go straight to targeting after paying the cost
+  return power.id === 'cleave';
+}
+
+function powerTargetCount(power) {
+  if (power.id === 'cleave') return 2;
+  if (power.id === 'elemental_infusion') return 1;
+  return 0;
+}
+
+function enterPowerTargeting(power) {
+  powerTargets = [];
+  powerMaxTargets = powerTargetCount(power);
+  state = GameState.POWER_TARGETING;
+  showStickyToast(`${power.name}: Click target (${powerMaxTargets - powerTargets.length} left, click elsewhere to finish)`);
+}
+
+function cancelPowerTargeting() {
+  // Refund the power so it can be used again this turn (its cost was already paid).
+  // We refund the recharged cards back to hand and reset exhausted state.
+  if (selectedPower) {
+    selectedPower.exhausted = false;
+    for (const card of powerRechargeCardsSelected) {
+      const rcIdx = player.deck.rechargePile.indexOf(card);
+      if (rcIdx !== -1) player.deck.rechargePile.splice(rcIdx, 1);
+      const discIdx = player.deck.discardPile.indexOf(card);
+      if (discIdx !== -1) player.deck.discardPile.splice(discIdx, 1);
+      player.deck.hand.push(card);
+    }
+  }
+  powerRechargeCardsSelected = [];
+  powerTargets = [];
+  powerMaxTargets = 0;
+  chosenPowerEffect = null;
+  selectedPower = null;
+  state = GameState.COMBAT;
+  hideToast();
+  addLog('Power cancelled.', Colors.GRAY);
+}
+
+function handlePowerTargetingClick(x, y) {
+  // Click on enemy character → add as target
+  const enemyCardRect = getCharacterCardRect(false);
+  if (hitTest(x, y, enemyCardRect)) {
+    if (!powerTargets.includes(enemy)) {
+      powerTargets.push(enemy);
+      checkPowerTargetingComplete();
+    }
+    return;
+  }
+  // Click on enemy creature → add as target
+  const creatureRects = getEnemyCreatureRects();
+  for (let i = 0; i < creatureRects.length; i++) {
+    if (hitTest(x, y, creatureRects[i])) {
+      const c = enemy.creatures[i];
+      if (!powerTargets.includes(c)) {
+        powerTargets.push(c);
+        checkPowerTargetingComplete();
+      }
+      return;
+    }
+  }
+  // Click elsewhere → finish with current targets (if any)
+  if (powerTargets.length > 0) {
+    resolvePowerTargeting();
+  } else {
+    cancelPowerTargeting();
+  }
+}
+
+function checkPowerTargetingComplete() {
+  if (powerTargets.length >= powerMaxTargets) {
+    resolvePowerTargeting();
+  } else {
+    showStickyToast(`${selectedPower.name}: Click target (${powerMaxTargets - powerTargets.length} left, click elsewhere to finish)`);
+  }
+}
+
+function resolvePowerTargeting() {
+  hideToast();
+  const power = selectedPower;
+  const targets = powerTargets.slice();
+  powerTargets = [];
+  powerMaxTargets = 0;
+  state = GameState.COMBAT;
+
+  power.use();
+  addLog(`Used power: ${power.name}`, Colors.GREEN, power);
+
+  if (power.id === 'cleave') {
+    const dmg = 1 + player.heroism;
+    if (player.heroism > 0) { addLog(`  (Heroism +${player.heroism})`, Colors.GOLD); player.heroism = 0; }
+    for (const t of targets) {
+      if (t === enemy) {
+        enemyAutoPlayDefenses();
+        const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+      } else {
+        const actual = t.takeDamage(dmg);
+        const blocked = Math.max(0, dmg - actual);
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${t.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
+        if (!t.isAlive) { addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+      }
+    }
+    countAndRemoveDeadCreatures();
+  } else if (power.id === 'elemental_infusion') {
+    // Apply Fire or Ice based on the picked choice
+    const t = targets[0];
+    const isIce = chosenPowerEffect === 'ice_token';
+    if (isIce) {
+      addLog(`  Mode: Ice`);
+      if (t === enemy) {
+        enemy.applyStatus('ICE', 1);
+        addLog(`  +1 Ice on ${enemy.name}`, Colors.ICE_BLUE);
+      } else {
+        t.iceStacks = (t.iceStacks || 0) + 1;
+        addLog(`  +1 Ice on ${t.name}`, Colors.ICE_BLUE);
+      }
+    } else {
+      addLog(`  Mode: Fire`);
+      if (t === enemy) {
+        enemy.applyStatus('FIRE', 1);
+        addLog(`  +1 Fire on ${enemy.name}`, Colors.RED);
+      } else {
+        t.fireStacks = (t.fireStacks || 0) + 1;
+        addLog(`  +1 Fire on ${t.name}`, Colors.RED);
+      }
+    }
+    chosenPowerEffect = null;
+  }
+
+  selectedPower = null;
+  checkCombatEnd();
 }
 
 function executePower(power) {
   power.use();
-  addLog(`Used power: ${power.name}`, Colors.GOLD);
+  addLog(`Used power: ${power.name}`, Colors.GREEN, power);
 
   switch (power.id) {
     case 'cleave': {
-      // Deal 1 damage to up to 2 creatures
+      // (Cleave is handled via the targeting flow; this branch is a fallback.)
       const dmg = 1 + player.heroism;
       if (player.heroism > 0) { addLog(`  (Heroism +${player.heroism})`, Colors.GOLD); player.heroism = 0; }
       let hits = 0;
@@ -3111,7 +5134,6 @@ function executePower(power) {
         if (!c.isAlive) { addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
         hits++;
       }
-      // If fewer than 2 creatures, hit enemy with remaining
       if (hits < 2 && enemy.isAlive) {
         const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
         addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
@@ -3123,7 +5145,7 @@ function executePower(power) {
       player.heroism += 1;
       addLog(`  +1 Heroism (H:${player.heroism})`, Colors.GOLD);
       const drawn = player.deck.draw(1, MAX_HAND_SIZE);
-      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE);
+      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
     }
     case 'elemental_infusion': {
@@ -3140,7 +5162,7 @@ function executePower(power) {
       if (blocked > 0) addLog(`  (${blocked} blocked)`, Colors.BLUE);
       addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
       const drawn = player.deck.draw(1, MAX_HAND_SIZE);
-      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE);
+      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
     }
     case 'battle_fury': {
@@ -3148,7 +5170,7 @@ function executePower(power) {
       player.shield += 1;
       addLog(`  +1 Heroism, +1 Shield`, Colors.GOLD);
       const drawn = player.deck.draw(2, MAX_HAND_SIZE);
-      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE);
+      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
     }
     case 'feral_form': {
@@ -3156,7 +5178,7 @@ function executePower(power) {
       player.heroism += 1;
       addLog(`  Feline Form! +1 Heroism`, Colors.GOLD);
       const drawn = player.deck.draw(1, MAX_HAND_SIZE);
-      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE);
+      for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
     }
     default:
@@ -3165,6 +5187,175 @@ function executePower(power) {
 
   selectedPower = null;
   checkCombatEnd();
+}
+
+// === Player Incoming Damage Flow ===
+// Phase 1: auto-mitigation (shield → armor → block)
+// Phase 2: DEFENDING (play defense cards or pass)
+// Phase 3: DAMAGE_SOURCE (player picks each point: discard hand card OR mill draw pile)
+
+let pendingIncomingDamage = 0; // remaining damage after auto-mitigation in current flow
+
+// Apply auto-mitigation layers (shield/armor/block) and log them.
+// Returns remaining damage after auto-mitigation.
+function autoMitigateDamage(dmg) {
+  let remaining = dmg;
+  if (player.shield > 0 && remaining > 0) {
+    const absorbed = Math.min(player.shield, remaining);
+    player.shield -= absorbed;
+    remaining -= absorbed;
+    addLog(`  Shield absorbs ${absorbed} damage (S:${player.shield} remaining)`);
+  }
+  if (player.armor > 0 && remaining > 0) {
+    const absorbed = Math.min(player.armor, remaining);
+    remaining -= absorbed;
+    addLog(`  Armor absorbs ${absorbed} damage`);
+  }
+  if (player.currentBlock > 0 && remaining > 0) {
+    const absorbed = Math.min(player.currentBlock, remaining);
+    player.currentBlock -= absorbed;
+    remaining -= absorbed;
+    addLog(`  Block absorbs ${absorbed} damage`);
+  }
+  return remaining;
+}
+
+// Entry point: player is taking `dmg` incoming damage.
+function startIncomingDamage(dmg, label = 'damage to you') {
+  if (dmg <= 0) return;
+  addLog(`  ${dmg} ${label}`, Colors.RED);
+  showStickyToast(`Incoming ${dmg} damage!`);
+  const remaining = autoMitigateDamage(dmg);
+  if (remaining <= 0) {
+    addLog(`  All damage absorbed!`);
+    hideToast();
+    return;
+  }
+  pendingIncomingDamage = remaining;
+  // Phase 2: defending (if defense cards available)
+  if (player.deck.hand.some(c => c.cardType === CardType.DEFENSE)) {
+    state = GameState.DEFENDING;
+    showStickyToast(`Incoming ${remaining} damage. Click defense cards or pass.`);
+    return;
+  }
+  // No defenses → straight to take-damage choice
+  enterTakeDamagePhase();
+}
+
+function enterTakeDamagePhase() {
+  if (pendingIncomingDamage <= 0) {
+    finishIncomingDamage();
+    return;
+  }
+  // If hand + deck (draw + recharge) both empty → defeat
+  const deckAvail = player.deck.deckDamageAvailable();
+  if (player.deck.hand.length === 0 && deckAvail === 0) {
+    pendingIncomingDamage = 0;
+    state = GameState.COMBAT;
+    hideToast();
+    addLog('DEFEATED!', Colors.RED);
+    state = GameState.GAME_OVER;
+    return;
+  }
+  state = GameState.DAMAGE_SOURCE;
+  if (deckAvail === 0) {
+    showStickyToast(`Deck empty! Click ${pendingIncomingDamage} card(s) from hand to discard.`);
+  } else {
+    showStickyToast(`Take ${pendingIncomingDamage} damage: click hand card to discard, or "Take from Deck"`);
+  }
+}
+
+function finishIncomingDamage() {
+  pendingIncomingDamage = 0;
+  hideToast();
+  state = GameState.COMBAT;
+  if (checkCombatEnd()) return;
+  // If we were resolving the end-of-enemy-turn damage flow, transition to the player turn now.
+  if (awaitingEnemyDamage) {
+    completePlayerTurnTransition();
+  }
+}
+
+// Click handler for DAMAGE_SOURCE state
+function handleDamageSourceClick(x, y) {
+  // "Take from Deck" button (only if deck has any cards across draw + recharge piles).
+  // Single click takes ALL remaining damage from the deck (or as much as the deck has).
+  const deckBtn = getTakeFromDeckBtnRect();
+  const deckAvail = player.deck.deckDamageAvailable();
+  if (hitTest(x, y, deckBtn) && deckAvail > 0) {
+    const toTake = Math.min(pendingIncomingDamage, deckAvail);
+    const milled = [];
+    for (let i = 0; i < toTake; i++) {
+      const card = player.deck.damageFromDrawPile();
+      if (!card) break;
+      milled.push(card);
+      pendingIncomingDamage--;
+    }
+    if (milled.length > 0) {
+      addLog(`  Took ${milled.length} from deck:`);
+      // One sub-line per card so each is hoverable in the log
+      for (const c of milled) addLog(`  Discarded: ${c.name}`, Colors.WHITE, c);
+    }
+    if (pendingIncomingDamage <= 0) finishIncomingDamage();
+    else enterTakeDamagePhase();
+    return;
+  }
+  // Click hand card → discard for 1 damage (topmost first)
+  const handRects = getHandCardRects(player.deck.hand);
+  for (let i = handRects.length - 1; i >= 0; i--) {
+    if (!hitTest(x, y, getHandCardHoverRect(handRects, i))) continue;
+    const card = player.deck.hand[i];
+    player.deck.hand.splice(i, 1);
+    card.exhausted = false;
+    player.deck.discardPile.push(card);
+    addLog(`  Discarded: ${card.name}`, Colors.WHITE, card);
+    pendingIncomingDamage--;
+    if (pendingIncomingDamage <= 0) finishIncomingDamage();
+    else enterTakeDamagePhase();
+    return;
+  }
+}
+
+function getTakeFromDeckBtnRect() {
+  return { x: SCREEN_WIDTH / 2 - 110, y: COMBAT_DIVIDER_Y + 35, w: 220, h: 44 };
+}
+
+function drawDamageSourceOverlay() {
+  // Flashing red glow on hand cards to indicate they're clickable to discard
+  const pulse = (Math.sin(performance.now() / 200) + 1) / 2; // 0..1
+  const glowAlpha = 0.4 + 0.45 * pulse;
+  const handRects = getHandCardRects(player.deck.hand);
+  for (let i = 0; i < handRects.length; i++) {
+    const r = handRects[i];
+    ctx.save();
+    ctx.shadowColor = `rgba(255, 60, 60, ${glowAlpha})`;
+    ctx.shadowBlur = 18;
+    ctx.strokeStyle = `rgba(255, 60, 60, ${glowAlpha})`;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(r.x - 2, r.y - 2, r.w + 4, r.h + 4);
+    ctx.restore();
+  }
+
+  // "Take from Deck" button — red themed, label shows damage left to discard
+  const r = getTakeFromDeckBtnRect();
+  const deckAvail = player.deck.deckDamageAvailable();
+  const deckEmpty = deckAvail === 0;
+  const hov = !deckEmpty && hitTest(mouseX, mouseY, r);
+  ctx.fillStyle = deckEmpty ? '#444' : (hov ? '#9a2828' : '#641818');
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.strokeStyle = Colors.RED;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = 'bold 16px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const label = deckEmpty
+    ? `Deck empty — discard ${pendingIncomingDamage} from hand`
+    : `Take ${pendingIncomingDamage} from Deck`;
+  ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
 }
 
 function endPlayerTurn() {
@@ -3181,9 +5372,16 @@ function endPlayerTurn() {
   if (checkCombatEnd()) return;
 
   player.clearBlock();
-  player.shield = 0; // Shield clears at end of turn
-  const drawn = player.deck.endTurn(getPlayerHandSize(), MAX_HAND_SIZE);
-  for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE);
+  // Shield persists between turns — only block clears
+  // Flush the recharge pile back under the deck.
+  player.deck.flushRechargePile();
+  // Refill UP TO hand size — draw nothing if hand is already at or above hand size.
+  const handSize = getPlayerHandSize();
+  const toDraw = Math.max(0, handSize - player.deck.hand.length);
+  if (toDraw > 0) {
+    const drawn = player.deck.draw(toDraw, MAX_HAND_SIZE);
+    if (drawn.length > 0) addLog(`You draw ${drawn.length} card${drawn.length > 1 ? 's' : ''}`, Colors.GREEN);
+  }
 
   selectedCardIndex = -1;
   isPlayerTurn = false;
@@ -3271,11 +5469,18 @@ function processPlayerAllyAttacks() {
 }
 
 // --- Enemy AI ---
+let enemyDamageAccumulator = 0; // total damage from enemy attacks this turn (cards + creatures)
+let awaitingEnemyDamage = false; // true while the player is resolving enemy damage flow
+
 function startEnemyTurn() {
   enemyTurnNumber++;
   addLog('--- Enemy Turn ---', Colors.RED);
   if (survivalRounds > 0) addLog(`  Round ${enemyTurnNumber}/${survivalRounds}`, Colors.GRAY);
   enemy.clearBlock();
+  // Ready creatures at the start of their owner's turn — summons made last turn become available now
+  for (const c of enemy.creatures) c.ready();
+  enemyDamageAccumulator = 0;
+  awaitingEnemyDamage = false;
 
   // Process status effects on enemy at start of their turn
   processStatusEffects(enemy, enemy.name);
@@ -3289,11 +5494,10 @@ function startEnemyTurn() {
   for (const card of hand) {
     if (card.cardType === CardType.ATTACK) {
       enemyActions.push({ type: 'play', card, action: 'attack' });
-    } else if (card.cardType === CardType.DEFENSE) {
-      enemyActions.push({ type: 'play', card, action: 'defend' });
     } else if (card.cardType === CardType.CREATURE) {
       enemyActions.push({ type: 'play', card, action: 'summon' });
     }
+    // DEFENSE cards are not queued — they auto-play reactively when player attacks the enemy
   }
   enemyActions.push({ type: 'end' });
 
@@ -3324,23 +5528,24 @@ function updateEnemyTurn(dt) {
   enemy.deck.playCard(card);
 
   if (action.action === 'attack') {
-    addLog(`${enemy.name} plays ${card.name}`, Colors.RED);
+    addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
     for (const eff of card.currentEffects) {
       if (eff.effectType === 'damage') {
         let dmg = Math.max(0, eff.value + enemy.heroism + enemy.rage + getDamageModifier(enemy));
         dmg += getIncomingDamageModifier(player);
         dmg = Math.max(0, dmg);
         if (enemy.heroism > 0) enemy.heroism = 0;
-        const [blocked, taken] = player.takeDamageWithDefense(dmg);
-        if (blocked > 0) addLog(`  (${blocked} blocked)`, Colors.BLUE);
-        addLog(`  ${taken} damage to you!`, Colors.RED);
+        // Accumulate damage; the full damage flow runs once at end of enemy turn
+        enemyDamageAccumulator += dmg;
+        addLog(`  ${dmg} damage incoming`, Colors.RED);
       } else if (eff.effectType === 'unpreventable_damage') {
+        // Unpreventable damage still applies immediately (bypasses defense flow)
         player.takeDamageFromDeck(eff.value);
         addLog(`  ${eff.value} true damage to you!`, Colors.RED);
       }
     }
   } else if (action.action === 'defend') {
-    addLog(`${enemy.name} plays ${card.name}`, Colors.BLUE);
+    addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
     for (const eff of card.currentEffects) {
       if (eff.effectType === 'block') {
         enemy.addBlock(eff.value);
@@ -3348,19 +5553,19 @@ function updateEnemyTurn(dt) {
       }
     }
   } else if (action.action === 'summon') {
-    addLog(`${enemy.name} plays ${card.name}`, Colors.ORANGE);
+    addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
     for (const eff of card.currentEffects) {
       if (eff.effectType === 'summon_random') {
         const count = Math.floor(Math.random() * eff.value) + 1;
-        // Determine creature type based on card
         const isGuard = card.id === 'guards';
+        const baseName = isGuard ? 'Kobold Guard' : 'Rat';
         for (let i = 0; i < count; i++) {
           const creature = isGuard
             ? new Creature({ name: 'Kobold Guard', attack: 2, maxHp: 1 })
             : new Creature({ name: 'Rat', attack: 1, maxHp: 1 });
           enemy.addCreature(creature);
-          addLog(`  Summoned ${creature.name}!`, Colors.ORANGE);
         }
+        addLog(`  ${count} ${baseName}${count > 1 ? 's' : ''} summoned`, Colors.ORANGE);
       }
     }
   }
@@ -3369,21 +5574,44 @@ function updateEnemyTurn(dt) {
 }
 
 function finishEnemyTurn() {
-  // Enemy draws
-  const drawn = enemy.deck.endTurn(enemy._handSize || 2, 10);
-  for (const d of drawn) addLog(`  ${enemy.name} draws`, Colors.GRAY);
-
-  // Ready creatures
-  for (const c of enemy.creatures) c.ready();
-
-  // Creature attacks
+  // Creature attacks — accumulate damage instead of applying immediately.
+  // Creatures summoned this turn are still exhausted (default for new Creatures)
+  // and skip the attack here. They'll ready at the start of the next enemy turn.
   for (const c of enemy.creatures) {
     if (c.isAlive && !c.exhausted) {
       const dmg = c.attack;
-      const [blocked, taken] = player.takeDamageWithDefense(dmg);
-      addLog(`${c.name} attacks for ${taken}!`, Colors.RED);
+      addLog(`${c.name} attacks`, Colors.RED);
+      addLog(`  ${dmg} damage incoming`, Colors.RED);
+      enemyDamageAccumulator += dmg;
       c.exhaust();
     }
+  }
+
+  // If any damage was accumulated, run the player damage flow once with the total.
+  if (enemyDamageAccumulator > 0) {
+    awaitingEnemyDamage = true;
+    const total = enemyDamageAccumulator;
+    enemyDamageAccumulator = 0;
+    startIncomingDamage(total, 'total damage to you');
+    if (state === GameState.DEFENDING || state === GameState.DAMAGE_SOURCE) {
+      // Player needs to resolve — completePlayerTurnTransition() runs after.
+      return;
+    }
+    // Damage was fully auto-mitigated → continue immediately
+    awaitingEnemyDamage = false;
+  }
+
+  completePlayerTurnTransition();
+}
+
+function completePlayerTurnTransition() {
+  awaitingEnemyDamage = false;
+
+  // Enemy draws (refill its hand) for next turn
+  const drawCount = enemy._drawPerTurn || enemy._handSize || 2;
+  const drawn = enemy.deck.endTurn(drawCount, enemy._handSize || 10);
+  if (drawn.length > 0) {
+    addLog(`${enemy.name} draws ${drawn.length} card${drawn.length > 1 ? 's' : ''}`, Colors.GRAY);
   }
 
   addLog('--- Your Turn ---', Colors.GREEN);
@@ -3391,6 +5619,8 @@ function finishEnemyTurn() {
   player.clearBlock();
   player.readyPowers();
   player.readyCreatures();
+  // Ready exhausted stay-in-hand cards
+  for (const c of player.deck.hand) c.exhausted = false;
   attacksThisTurn = 0;
 
   // Process combat buffs at start of player turn
@@ -3432,7 +5662,8 @@ function checkCombatEnd() {
 
 function countAndRemoveDeadCreatures() {
   const deadBefore = enemy.creatures.filter(c => !c.isAlive).length;
-  countAndRemoveDeadCreatures();
+  enemy.removeDeadCreatures();
+  player.removeDeadCreatures();
   if (deadBefore > 0 && killTarget > 0) {
     killCount += deadBefore;
     addLog(`  Kill count: ${killCount}/${killTarget}`, Colors.GOLD);
@@ -3609,7 +5840,8 @@ function handleModalSelectClick(x, y) {
       const handIndex = player.deck.hand.indexOf(modalCard);
       if (handIndex === -1) { state = GameState.COMBAT; return; }
       player.deck.playCard(modalCard);
-      addLog(`Played: ${modalCard.name} (${r.mode.description})`, Colors.GREEN);
+      addLog(`You play ${modalCard.name}`, Colors.GREEN, modalCard);
+      addLog(`  Mode: ${r.mode.description}`);
 
       // Check if mode needs a target
       const needsT = r.mode.effects.some(e => e.target === TargetType.SINGLE_ENEMY);
@@ -3850,26 +6082,71 @@ function drawShop() {
 // INVENTORY
 // ============================================================
 
-function handleInventoryClick(x, y) {
-  const backBtn = { x: SCREEN_WIDTH - 180, y: SCREEN_HEIGHT - 70, w: 150, h: 50 };
-  if (hitTest(x, y, backBtn)) {
-    if (restMode) {
-      restMode = false;
-      if (currentEncounter && !currentEncounter.isComplete) {
-        currentEncounter.advancePhase();
-        advanceEncounterPhase();
-      } else {
-        state = GameState.MAP;
-      }
+// === Inventory layout (3 sections: Deck | Backpack | Character) ===
+const INV_TOP_Y = 95;
+const INV_BOTTOM_Y = SCREEN_HEIGHT - 10;
+const INV_CHAR_W = 280;
+
+function getInvSections() {
+  const charX = SCREEN_WIDTH - INV_CHAR_W;
+  const remaining = SCREEN_WIDTH - INV_CHAR_W;
+  const deckW = Math.floor(remaining / 2);
+  const bpW = remaining - deckW;
+  return {
+    deck: { x: 0, y: INV_TOP_Y, w: deckW, h: INV_BOTTOM_Y - INV_TOP_Y },
+    backpack: { x: deckW, y: INV_TOP_Y, w: bpW, h: INV_BOTTOM_Y - INV_TOP_Y },
+    character: { x: charX, y: INV_TOP_Y, w: INV_CHAR_W, h: INV_BOTTOM_Y - INV_TOP_Y },
+  };
+}
+
+function getDeckCardRects() {
+  const s = getInvSections();
+  const cardW = 96, cardH = 134, gap = 10, cols = 4;
+  const startX = s.deck.x + 20;
+  const startY = s.deck.y + 50 - inventoryScrollY;
+  return player.deck.masterDeck.map((_, i) => ({
+    x: startX + (i % cols) * (cardW + gap),
+    y: startY + Math.floor(i / cols) * (cardH + 12),
+    w: cardW, h: cardH, index: i,
+  }));
+}
+
+function getBackpackCardRects() {
+  const s = getInvSections();
+  const cardW = 96, cardH = 134, gap = 10, cols = 4;
+  const startX = s.backpack.x + 20;
+  const startY = s.backpack.y + 50 - inventoryScrollY;
+  return backpack.map((_, i) => ({
+    x: startX + (i % cols) * (cardW + gap),
+    y: startY + Math.floor(i / cols) * (cardH + 12),
+    w: cardW, h: cardH, index: i,
+  }));
+}
+
+function exitInventory() {
+  if (restMode) {
+    restMode = false;
+    if (currentEncounter && !currentEncounter.isComplete) {
+      currentEncounter.advancePhase();
+      advanceEncounterPhase();
     } else {
       state = GameState.MAP;
     }
-    return;
+  } else {
+    state = previousState || GameState.MAP;
   }
+}
+
+function handleInventoryClick(x, y) {
+  // Equip/unequip only allowed in rest mode
+  if (!restMode) return;
+
+  const sections = getInvSections();
 
   // Click backpack cards to equip (add to deck)
   const bpRects = getBackpackCardRects();
   for (const r of bpRects) {
+    if (r.y + r.h < sections.backpack.y || r.y > sections.backpack.y + sections.backpack.h - 60) continue;
     if (hitTest(x, y, r)) {
       const card = backpack[r.index];
       backpack.splice(r.index, 1);
@@ -3882,9 +6159,10 @@ function handleInventoryClick(x, y) {
   // Click deck cards to unequip (move to backpack)
   const deckRects = getDeckCardRects();
   for (const r of deckRects) {
+    if (r.y + r.h < sections.deck.y || r.y > sections.deck.y + sections.deck.h - 60) continue;
     if (hitTest(x, y, r)) {
       const card = player.deck.masterDeck[r.index];
-      if (player.deck.masterDeck.length > 5) { // don't allow removing all cards
+      if (player.deck.masterDeck.length > 5) {
         player.deck.masterDeck.splice(r.index, 1);
         backpack.push(card);
         addLog(`Unequipped: ${card.name}`, Colors.GRAY);
@@ -3894,110 +6172,284 @@ function handleInventoryClick(x, y) {
   }
 }
 
-function getBackpackCardRects() {
-  const cardW = 90, cardH = 126, gap = 8, cols = 6;
-  const startX = SCREEN_WIDTH / 2 + 30;
-  const startY = 130 - inventoryScrollY;
-  return backpack.map((_, i) => ({
-    x: startX + (i % cols) * (cardW + gap),
-    y: startY + Math.floor(i / cols) * (cardH + 20),
-    w: cardW, h: cardH, index: i,
-  }));
-}
-
-function getDeckCardRects() {
-  const cardW = 90, cardH = 126, gap = 8, cols = 6;
-  const startX = 30;
-  const startY = 130 - inventoryScrollY;
-  return player.deck.masterDeck.map((_, i) => ({
-    x: startX + (i % cols) * (cardW + gap),
-    y: startY + Math.floor(i / cols) * (cardH + 20),
-    w: cardW, h: cardH, index: i,
-  }));
-}
-
 function drawInventory() {
-  ctx.fillStyle = '#1a1a2e';
-  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  // Background: backpack image scaled to cover the screen
+  const bg = images.backpack_bg;
+  if (bg) {
+    const imgAspect = bg.width / bg.height;
+    const screenAspect = SCREEN_WIDTH / SCREEN_HEIGHT;
+    let sw = bg.width, sh = bg.height, sx = 0, sy = 0;
+    if (imgAspect > screenAspect) {
+      sw = bg.height * screenAspect;
+      sx = (bg.width - sw) / 2;
+    } else {
+      sh = bg.width / screenAspect;
+      sy = (bg.height - sh) / 2;
+    }
+    ctx.drawImage(bg, sx, sy, sw, sh, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    // Darken for readability (matches py game)
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  } else {
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  }
 
+  // Outer gold border
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Title (top center)
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
   ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 32px serif';
+  ctx.font = 'bold 38px Georgia, serif';
   ctx.textAlign = 'center';
   ctx.fillText(restMode ? 'Rest — Rebalance Your Deck' : 'Inventory', SCREEN_WIDTH / 2, 50);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 
-  ctx.fillStyle = Colors.WHITE;
-  ctx.font = '16px sans-serif';
-  ctx.fillText(`Gold: ${gold}  |  Deck: ${player.deck.masterDeck.length} cards  |  Backpack: ${backpack.length} cards`, SCREEN_WIDTH / 2, 80);
+  // Stats line
+  ctx.fillStyle = '#ddd';
+  ctx.font = '14px sans-serif';
+  ctx.fillText(`Gold: ${gold}  |  Deck: ${player.deck.masterDeck.length} cards  |  Backpack: ${backpack.length} cards`, SCREEN_WIDTH / 2, 78);
 
-  // Divider
-  ctx.strokeStyle = Colors.GRAY;
-  ctx.lineWidth = 1;
+  const sections = getInvSections();
+
+  // Section borders
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(sections.deck.x, sections.deck.y, sections.deck.w, sections.deck.h);
+  ctx.strokeRect(sections.backpack.x, sections.backpack.y, sections.backpack.w, sections.backpack.h);
+  ctx.strokeRect(sections.character.x, sections.character.y, sections.character.w, sections.character.h);
+
+  // Section headers
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 18px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Equipped Cards (${player.deck.masterDeck.length})`, sections.deck.x + sections.deck.w / 2, sections.deck.y + 25);
+  ctx.fillText(`Cards in Backpack (${backpack.length})`, sections.backpack.x + sections.backpack.w / 2, sections.backpack.y + 25);
+  ctx.fillText('Character', sections.character.x + sections.character.w / 2, sections.character.y + 25);
+
+  if (restMode) {
+    ctx.fillStyle = '#bbb';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('click to unequip', sections.deck.x + sections.deck.w / 2, sections.deck.y + 42);
+    ctx.fillText('click to equip', sections.backpack.x + sections.backpack.w / 2, sections.backpack.y + 42);
+  }
+
+  // Track hovered card for the full-card cursor preview
+  hoveredCardPreview = null;
+  hoveredPowerPreview = null;
+
+  // --- Deck cards (with clipping for scroll) ---
+  const deckClipY = sections.deck.y + 50;
+  const deckClipH = sections.deck.h - 60;
+  ctx.save();
   ctx.beginPath();
-  ctx.moveTo(SCREEN_WIDTH / 2 + 10, 100);
-  ctx.lineTo(SCREEN_WIDTH / 2 + 10, SCREEN_HEIGHT - 90);
-  ctx.stroke();
-
-  // Deck label (left)
-  ctx.fillStyle = Colors.GREEN;
-  ctx.font = 'bold 16px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText(`Deck (${player.deck.masterDeck.length}) — click to unequip`, 30, 115);
-
-  // Backpack label (right)
-  ctx.fillStyle = Colors.ALLY_BLUE;
-  ctx.textAlign = 'left';
-  ctx.fillText(`Backpack (${backpack.length}) — click to equip`, SCREEN_WIDTH / 2 + 30, 115);
-
-  // Draw deck cards
+  ctx.rect(sections.deck.x + 4, deckClipY, sections.deck.w - 8, deckClipH);
+  ctx.clip();
   const deckRects = getDeckCardRects();
   for (let i = 0; i < player.deck.masterDeck.length; i++) {
     const r = deckRects[i];
-    if (r.y > SCREEN_HEIGHT - 90) continue;
+    if (r.y + r.h < deckClipY || r.y > deckClipY + deckClipH) continue;
     const card = player.deck.masterDeck[i];
     const hov = hitTest(mouseX, mouseY, r);
     drawCard(card, r.x, r.y, r.w, r.h, false, hov);
+    if (hov && r.y >= deckClipY && r.y + r.h <= deckClipY + deckClipH) {
+      hoveredCardPreview = card;
+    }
   }
+  ctx.restore();
 
-  // Draw backpack cards
+  // --- Backpack cards (with clipping) ---
+  const bpClipY = sections.backpack.y + 50;
+  const bpClipH = sections.backpack.h - 60;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sections.backpack.x + 4, bpClipY, sections.backpack.w - 8, bpClipH);
+  ctx.clip();
   const bpRects = getBackpackCardRects();
   for (let i = 0; i < backpack.length; i++) {
     const r = bpRects[i];
-    if (r.y > SCREEN_HEIGHT - 90) continue;
+    if (r.y + r.h < bpClipY || r.y > bpClipY + bpClipH) continue;
     const card = backpack[i];
     const hov = hitTest(mouseX, mouseY, r);
     drawCard(card, r.x, r.y, r.w, r.h, false, hov);
-  }
-
-  // Back button
-  const backBtn = { x: SCREEN_WIDTH - 180, y: SCREEN_HEIGHT - 70, w: 150, h: 50 };
-  const backHov = hitTest(mouseX, mouseY, backBtn);
-  ctx.fillStyle = backHov ? '#4a3a6e' : '#2a1a4e';
-  ctx.fillRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h);
-  ctx.strokeStyle = backHov ? Colors.GOLD : Colors.GRAY;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h);
-  ctx.fillStyle = Colors.WHITE;
-  ctx.font = 'bold 18px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(restMode ? 'Done' : 'Back', backBtn.x + backBtn.w / 2, backBtn.y + backBtn.h / 2);
-  ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = 'left';
-
-  // Inventory tooltip
-  const allInvRects = [...getDeckCardRects().map((r, i) => ({ ...r, card: player.deck.masterDeck[i] })),
-    ...getBackpackCardRects().map((r, i) => ({ ...r, card: backpack[i] }))];
-  for (const r of allInvRects) {
-    if (r.y > 100 && r.y + r.h < SCREEN_HEIGHT - 80 && hitTest(mouseX, mouseY, r) && r.card) {
-      drawTooltipBox(r.card, r.x + r.w + 10, r.y);
-      break;
+    if (hov && r.y >= bpClipY && r.y + r.h <= bpClipY + bpClipH) {
+      hoveredCardPreview = card;
     }
   }
+  ctx.restore();
+
+  // --- Character section: portrait + class info ---
+  drawInventoryCharacter(sections.character);
+
+  if (restMode) {
+    // Rest mode: keep the Done button at the bottom of the character section
+    const doneBtnW = sections.character.w - 40;
+    const doneBtnH = 56;
+    const doneBtnX = sections.character.x + 20;
+    const doneBtnY = sections.character.y + sections.character.h - doneBtnH - 16;
+    drawStyledButton(doneBtnX, doneBtnY, doneBtnW, doneBtnH, 'Done', exitInventory, 'large', 22);
+  } else {
+    // Normal mode: close hint at the bottom of the character section
+    ctx.fillStyle = Colors.GOLD;
+    ctx.font = '14px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Press I or ESC to Close', sections.character.x + sections.character.w / 2, sections.character.y + sections.character.h - 18);
+    ctx.textAlign = 'left';
+  }
+
+  // Full card hover preview (follows cursor, same as combat)
+  drawHoverPreview();
+}
+
+function drawInventoryCharacter(rect) {
+  // Class portrait
+  const portraitW = rect.w - 40;
+  const portraitH = 280;
+  const portraitX = rect.x + 20;
+  const portraitY = rect.y + 60;
+  const portraitArtId = `${selectedClass.toLowerCase()}_class`;
+  const portrait = getCardArt(portraitArtId);
+
+  if (portrait) {
+    const imgAspect = portrait.width / portrait.height;
+    const cardAspect = portraitW / portraitH;
+    let sx = 0, sy = 0, sw = portrait.width, sh = portrait.height;
+    if (imgAspect > cardAspect) { sw = portrait.height * cardAspect; sx = (portrait.width - sw) / 2; }
+    else { sh = portrait.width / cardAspect; sy = (portrait.height - sh) / 2; }
+    ctx.drawImage(portrait, sx, sy, sw, sh, portraitX, portraitY, portraitW, portraitH);
+    ctx.strokeStyle = Colors.GOLD;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(portraitX, portraitY, portraitW, portraitH);
+  }
+
+  // Character info below portrait
+  const infoY = portraitY + portraitH + 16;
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 22px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(selectedClass, rect.x + rect.w / 2, infoY);
+
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = '14px sans-serif';
+  ctx.fillText(`Level ${player.level}`, rect.x + rect.w / 2, infoY + 22);
+
+  // HP info
+  const hp = (player.deck.drawPile?.length || 0) + (player.deck.hand?.length || 0) +
+             (player.deck.rechargePile?.length || 0) + player.deck.masterDeck.length;
+  const totalHp = player.deck.masterDeck.length + (player.deck.damagePile?.length || 0);
+  ctx.fillStyle = '#aef';
+  ctx.fillText(`HP: ${player.deck.masterDeck.length} / ${totalHp}`, rect.x + rect.w / 2, infoY + 42);
+
+  // Perks
+  if (player.perks && player.perks.length > 0) {
+    ctx.fillStyle = Colors.GOLD;
+    ctx.font = 'bold 14px Georgia, serif';
+    ctx.fillText('Perks', rect.x + rect.w / 2, infoY + 72);
+    ctx.fillStyle = '#ddd';
+    ctx.font = '12px sans-serif';
+    let py = infoY + 92;
+    for (const perk of player.perks.slice(0, 5)) {
+      ctx.fillText(`• ${perk.name}`, rect.x + rect.w / 2, py);
+      py += 16;
+    }
+  }
+  ctx.textAlign = 'left';
 }
 
 // ============================================================
 // SAVE / LOAD
 // ============================================================
+
+// === Layout constants for the save/load menu ===
+const SL_BOX_W = 760;
+const SL_BOX_H = 800;
+const SL_BOX_X = (SCREEN_WIDTH - SL_BOX_W) / 2;
+const SL_BOX_Y = (SCREEN_HEIGHT - SL_BOX_H) / 2;
+// Slot row dimensions (tighter for fitting more)
+const SL_SLOT_H = 44;
+const SL_SLOT_GAP = 6;
+const SL_LIST_VISIBLE_ROWS = 10;
+
+function refreshLoadEntries() {
+  loadEntries = [];
+  if (loadTab === 'manual') {
+    for (let i = 1; i <= MANUAL_SLOT_COUNT; i++) {
+      const slot = `manual_${i}`;
+      loadEntries.push({ slot, info: getSaveInfo(slot), hasData: hasSave(slot), isAuto: false, displayNum: i });
+    }
+  } else {
+    for (let i = 1; i <= AUTO_SLOT_COUNT; i++) {
+      const slot = `auto_${i}`;
+      loadEntries.push({ slot, info: getSaveInfo(slot), hasData: hasSave(slot), isAuto: true, displayNum: i });
+    }
+  }
+}
+
+function getSaveSlotRects() {
+  // Used for save mode (manual slots only)
+  const slotW = SL_BOX_W - 60;
+  const startX = SL_BOX_X + 30;
+  const startY = SL_BOX_Y + 110 - loadScrollY;
+  const slots = [];
+  for (let i = 1; i <= MANUAL_SLOT_COUNT; i++) {
+    const slot = `manual_${i}`;
+    slots.push({
+      x: startX, y: startY + (i - 1) * (SL_SLOT_H + SL_SLOT_GAP), w: slotW, h: SL_SLOT_H,
+      slot, hasData: hasSave(slot), info: getSaveInfo(slot), displayNum: i,
+    });
+  }
+  return slots;
+}
+
+function getLoadSlotRects() {
+  const slotW = SL_BOX_W - 60;
+  const startX = SL_BOX_X + 30;
+  const startY = SL_BOX_Y + 165 - loadScrollY;
+  return loadEntries.map((e, i) => ({
+    x: startX, y: startY + i * (SL_SLOT_H + SL_SLOT_GAP), w: slotW, h: SL_SLOT_H, ...e,
+  }));
+}
+
+function getLoadListBounds(forSave) {
+  // Visible area for the slot list (used for clipping and scroll)
+  const x = SL_BOX_X + 25;
+  const y = forSave ? SL_BOX_Y + 105 : SL_BOX_Y + 160;
+  const w = SL_BOX_W - 50;
+  const h = SL_SLOT_H * SL_LIST_VISIBLE_ROWS + SL_SLOT_GAP * (SL_LIST_VISIBLE_ROWS - 1) + 10;
+  return { x, y, w, h };
+}
+
+function getLoadMaxScroll(rowCount) {
+  const visibleH = SL_SLOT_H * SL_LIST_VISIBLE_ROWS + SL_SLOT_GAP * (SL_LIST_VISIBLE_ROWS - 1);
+  const totalH = rowCount * (SL_SLOT_H + SL_SLOT_GAP) - SL_SLOT_GAP;
+  return Math.max(0, totalH - visibleH);
+}
+
+function getLoadTabRects() {
+  const tabW = 220, tabH = 40;
+  const tabY = SL_BOX_Y + 100;
+  return {
+    manual: { x: SL_BOX_X + 80, y: tabY, w: tabW, h: tabH },
+    auto: { x: SL_BOX_X + SL_BOX_W - 80 - tabW, y: tabY, w: tabW, h: tabH },
+  };
+}
+
+function getLoadActionBtnRects() {
+  const btnW = 140, btnH = 50;
+  const btnY = SL_BOX_Y + SL_BOX_H - btnH - 20;
+  return {
+    load: { x: SL_BOX_X + 60, y: btnY, w: btnW, h: btnH },
+    delete: { x: SCREEN_WIDTH / 2 - btnW / 2, y: btnY, w: btnW, h: btnH },
+    cancel: { x: SL_BOX_X + SL_BOX_W - 60 - btnW, y: btnY, w: btnW, h: btnH },
+  };
+}
 
 function handleSaveClick(x, y) {
   const rects = getSaveSlotRects();
@@ -4006,98 +6458,352 @@ function handleSaveClick(x, y) {
       const success = saveToSlot({
         selectedClass, gold, player, currentMap, visitedNodes, backpack,
       }, r.slot);
-      if (success) addLog(`Game saved to slot ${r.slot}!`, Colors.GREEN);
-      state = GameState.MAP;
+      if (success) addLog(`Game saved to slot ${r.displayNum}!`, Colors.GREEN);
+      state = saveLoadReturnState || GameState.MAP;
       return;
     }
   }
-  // Back button
-  const backBtn = { x: SCREEN_WIDTH / 2 - 75, y: SCREEN_HEIGHT - 80, w: 150, h: 50 };
-  if (hitTest(x, y, backBtn)) { state = GameState.MAP; }
+  // Cancel button
+  const cancelBtn = getLoadActionBtnRects().cancel;
+  if (hitTest(x, y, cancelBtn)) {
+    state = saveLoadReturnState || GameState.MAP;
+  }
 }
 
 function handleLoadClick(x, y) {
-  const rects = getSaveSlotRects();
-  for (const r of rects) {
-    if (hitTest(x, y, r) && r.hasData) {
-      const data = loadFromSlot(r.slot);
-      if (data) {
-        restoreFromSave(data);
-        state = GameState.MAP;
-      }
+  // Confirmation overlay for delete
+  if (loadConfirmDelete) {
+    const cw = 420, ch = 180;
+    const cx = (SCREEN_WIDTH - cw) / 2, cy = (SCREEN_HEIGHT - ch) / 2;
+    const yesBtn = { x: cx + 40, y: cy + ch - 60, w: 140, h: 44 };
+    const noBtn = { x: cx + cw - 40 - 140, y: cy + ch - 60, w: 140, h: 44 };
+    if (hitTest(x, y, yesBtn) && loadSelectedIndex >= 0) {
+      deleteSave(loadEntries[loadSelectedIndex].slot);
+      loadConfirmDelete = false;
+      loadSelectedIndex = -1;
+      refreshLoadEntries();
+    } else if (hitTest(x, y, noBtn)) {
+      loadConfirmDelete = false;
+    }
+    return;
+  }
+
+  // Tabs
+  const tabs = getLoadTabRects();
+  if (hitTest(x, y, tabs.manual)) {
+    if (loadTab !== 'manual') { loadTab = 'manual'; loadSelectedIndex = -1; loadScrollY = 0; refreshLoadEntries(); }
+    return;
+  }
+  if (hitTest(x, y, tabs.auto)) {
+    if (loadTab !== 'auto') { loadTab = 'auto'; loadSelectedIndex = -1; loadScrollY = 0; refreshLoadEntries(); }
+    return;
+  }
+
+  // Slot selection
+  const rects = getLoadSlotRects();
+  for (let i = 0; i < rects.length; i++) {
+    if (hitTest(x, y, rects[i]) && rects[i].hasData) {
+      loadSelectedIndex = i;
       return;
     }
   }
-  const backBtn = { x: SCREEN_WIDTH / 2 - 75, y: SCREEN_HEIGHT - 80, w: 150, h: 50 };
-  if (hitTest(x, y, backBtn)) {
-    state = player ? GameState.MAP : GameState.MENU;
+
+  // Action buttons
+  const btns = getLoadActionBtnRects();
+  const hasSelection = loadSelectedIndex >= 0 && loadEntries[loadSelectedIndex] && loadEntries[loadSelectedIndex].hasData;
+
+  if (hitTest(x, y, btns.load) && hasSelection) {
+    const data = loadFromSlot(loadEntries[loadSelectedIndex].slot);
+    if (data) {
+      restoreFromSave(data);
+      state = GameState.MAP;
+      previousState = null;
+      saveLoadReturnState = null;
+      loadSelectedIndex = -1;
+    }
+    return;
+  }
+  if (hitTest(x, y, btns.delete) && hasSelection) {
+    loadConfirmDelete = true;
+    return;
+  }
+  if (hitTest(x, y, btns.cancel)) {
+    state = saveLoadReturnState || (player ? GameState.MAP : GameState.MENU);
+    loadSelectedIndex = -1;
   }
 }
 
-function getSaveSlotRects() {
-  const slots = ['1', '2', '3'];
-  const btnW = 400, btnH = 60, gap = 20;
-  const startY = 200;
-  const startX = (SCREEN_WIDTH - btnW) / 2;
-  return slots.map((slot, i) => ({
-    x: startX, y: startY + i * (btnH + gap), w: btnW, h: btnH,
-    slot, hasData: hasSave(slot), info: getSaveInfo(slot),
-  }));
+// Draw the underlying state (game) so it shows through
+function drawSaveLoadBackground() {
+  const ps = saveLoadReturnState;
+  if (ps === GameState.MAP) {
+    drawMap();
+  } else if (ps === GameState.INGAME_MENU) {
+    const ipState = previousState;
+    if (ipState === GameState.COMBAT || ipState === GameState.TARGETING || ipState === GameState.MODAL_SELECT) {
+      drawCombat();
+    } else if (ipState === GameState.MAP) {
+      drawMap();
+    }
+  } else if (player && currentMap) {
+    drawMap();
+  } else if (images.menu_bg) {
+    ctx.drawImage(images.menu_bg, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  } else {
+    ctx.fillStyle = '#2a2a30';
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  }
+
+  // Block all background interactions: clear hover/click hit areas
+  cardBadgeHitAreas.length = 0;
+  iconHitAreas.length = 0;
+  menuButtons.length = 0;
+
+  // Dim overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+function drawSaveLoadPanel(title) {
+  // Grey panel with gold border (matches py game)
+  ctx.fillStyle = 'rgba(45, 45, 55, 0.95)';
+  ctx.fillRect(SL_BOX_X, SL_BOX_Y, SL_BOX_W, SL_BOX_H);
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(SL_BOX_X, SL_BOX_Y, SL_BOX_W, SL_BOX_H);
+
+  // Title
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 38px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(title, SCREEN_WIDTH / 2, SL_BOX_Y + 55);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+}
+
+function drawSlotEntry(rect, info, displayNum, isAuto, selected, canClick) {
+  const hov = hitTest(mouseX, mouseY, rect);
+  // Background
+  if (selected) {
+    ctx.fillStyle = 'rgba(60, 50, 20, 0.9)';
+  } else {
+    ctx.fillStyle = canClick ? 'rgba(40, 40, 50, 0.85)' : 'rgba(30, 30, 35, 0.6)';
+  }
+  ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  ctx.strokeStyle = selected ? Colors.GOLD : (hov && canClick ? '#bb9' : '#555');
+  ctx.lineWidth = selected ? 2 : 1;
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+
+  ctx.textAlign = 'left';
+  if (info) {
+    const badge = isAuto ? '[Auto] ' : '';
+    // Single line: "[Auto] Slot 1   Paladin Lv1 • 12 cards • 0 gold"
+    ctx.fillStyle = Colors.WHITE;
+    ctx.font = 'bold 14px Georgia, serif';
+    ctx.fillText(`${badge}Slot ${displayNum}`, rect.x + 14, rect.y + 18);
+    ctx.fillStyle = '#bbb';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(`${info.class} Lv${info.level} • ${info.deckSize} cards • ${info.gold} gold`, rect.x + 14, rect.y + 34);
+    // Date on the right
+    ctx.fillStyle = '#888';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(info.date, rect.x + rect.w - 14, rect.y + 28);
+  } else {
+    ctx.fillStyle = '#777';
+    ctx.font = 'italic 13px sans-serif';
+    ctx.fillText(`Slot ${displayNum}: -- Empty --`, rect.x + 14, rect.y + 26);
+  }
+  ctx.textAlign = 'left';
 }
 
 function drawSaveLoad(mode) {
-  ctx.fillStyle = '#1a0a2e';
-  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  drawSaveLoadBackground();
 
-  ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 36px serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(mode === 'save' ? 'Save Game' : 'Load Game', SCREEN_WIDTH / 2, 100);
-  ctx.fillStyle = Colors.GRAY;
-  ctx.font = '16px sans-serif';
-  ctx.fillText(mode === 'save' ? 'Choose a slot to save' : 'Choose a save to load', SCREEN_WIDTH / 2, 140);
+  if (mode === 'save') {
+    drawSaveLoadPanel('Save Game');
+    ctx.fillStyle = '#ccc';
+    ctx.font = '15px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Choose a slot to save', SCREEN_WIDTH / 2, SL_BOX_Y + 92);
 
-  const rects = getSaveSlotRects();
-  for (const r of rects) {
-    const hov = hitTest(mouseX, mouseY, r);
-    const canClick = mode === 'save' || r.hasData;
-    ctx.fillStyle = hov && canClick ? '#4a3a6e' : '#2a1a4e';
-    ctx.globalAlpha = canClick ? 1 : 0.5;
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = hov && canClick ? Colors.GOLD : Colors.GRAY;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    // Clip the list area
+    const listBounds = getLoadListBounds(true);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(listBounds.x, listBounds.y, listBounds.w, listBounds.h);
+    ctx.clip();
 
-    ctx.textAlign = 'left';
-    ctx.fillStyle = Colors.WHITE;
-    ctx.font = 'bold 18px sans-serif';
-    ctx.fillText(`Slot ${r.slot}`, r.x + 15, r.y + 25);
-
-    if (r.info) {
-      ctx.fillStyle = Colors.GRAY;
-      ctx.font = '14px sans-serif';
-      ctx.fillText(`${r.info.class} | ${r.info.deckSize} cards | ${r.info.gold} gold | ${r.info.date}`, r.x + 15, r.y + 45);
-    } else {
-      ctx.fillStyle = '#666';
-      ctx.font = '14px sans-serif';
-      ctx.fillText('Empty', r.x + 15, r.y + 45);
+    const rects = getSaveSlotRects();
+    for (const r of rects) {
+      // Skip rows entirely off-screen
+      if (r.y + r.h < listBounds.y || r.y > listBounds.y + listBounds.h) continue;
+      drawSlotEntry(r, r.info, r.displayNum, false, false, true);
     }
+    ctx.restore();
+
+    // Scrollbar
+    drawSaveLoadScrollbar(listBounds, MANUAL_SLOT_COUNT);
+
+    // Cancel button
+    const cancelBtn = getLoadActionBtnRects().cancel;
+    drawStyledButton(cancelBtn.x, cancelBtn.y, cancelBtn.w, cancelBtn.h, 'Cancel', null, 'large', 18);
+    menuButtons.pop();
+  } else {
+    drawSaveLoadPanel('Load Game');
+
+    // Tabs
+    const tabs = getLoadTabRects();
+    drawTab(tabs.manual, 'Manual Saves', loadTab === 'manual');
+    drawTab(tabs.auto, 'Auto Saves', loadTab === 'auto');
+
+    // Refresh entries if needed
+    if (loadEntries.length === 0) refreshLoadEntries();
+
+    // Clip the list area
+    const listBounds = getLoadListBounds(false);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(listBounds.x, listBounds.y, listBounds.w, listBounds.h);
+    ctx.clip();
+
+    // Slot list
+    const rects = getLoadSlotRects();
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (r.y + r.h < listBounds.y || r.y > listBounds.y + listBounds.h) continue;
+      drawSlotEntry(r, r.info, r.displayNum, r.isAuto, i === loadSelectedIndex, r.hasData);
+    }
+    ctx.restore();
+
+    // Scrollbar
+    drawSaveLoadScrollbar(listBounds, loadEntries.length);
+
+    // Action buttons (Load, Delete, Cancel)
+    const btns = getLoadActionBtnRects();
+    const hasSelection = loadSelectedIndex >= 0 && loadEntries[loadSelectedIndex] && loadEntries[loadSelectedIndex].hasData;
+
+    // Load button
+    if (hasSelection) {
+      drawStyledButton(btns.load.x, btns.load.y, btns.load.w, btns.load.h, 'Load', null, 'large', 18);
+    } else {
+      ctx.globalAlpha = 0.4;
+      drawStyledButton(btns.load.x, btns.load.y, btns.load.w, btns.load.h, 'Load', null, 'large', 18);
+      ctx.globalAlpha = 1;
+    }
+    menuButtons.pop();
+
+    // Delete button
+    if (hasSelection) {
+      drawStyledButton(btns.delete.x, btns.delete.y, btns.delete.w, btns.delete.h, 'Delete', null, 'large', 18);
+    } else {
+      ctx.globalAlpha = 0.4;
+      drawStyledButton(btns.delete.x, btns.delete.y, btns.delete.w, btns.delete.h, 'Delete', null, 'large', 18);
+      ctx.globalAlpha = 1;
+    }
+    menuButtons.pop();
+
+    // Cancel button
+    drawStyledButton(btns.cancel.x, btns.cancel.y, btns.cancel.w, btns.cancel.h, 'Cancel', null, 'large', 18);
+    menuButtons.pop();
+
+    // Delete confirmation overlay
+    if (loadConfirmDelete) drawDeleteConfirm();
   }
 
-  // Back button
-  const backBtn = { x: SCREEN_WIDTH / 2 - 75, y: SCREEN_HEIGHT - 80, w: 150, h: 50 };
-  const backHov = hitTest(mouseX, mouseY, backBtn);
-  ctx.fillStyle = backHov ? '#4a3a6e' : '#2a1a4e';
-  ctx.fillRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h);
-  ctx.strokeStyle = backHov ? Colors.GOLD : Colors.GRAY;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h);
-  ctx.fillStyle = Colors.WHITE;
-  ctx.font = 'bold 18px sans-serif';
+  ctx.textAlign = 'left';
+}
+
+function drawSaveLoadScrollbar(bounds, rowCount) {
+  const maxScroll = getLoadMaxScroll(rowCount);
+  // Clamp current scroll
+  if (loadScrollY > maxScroll) loadScrollY = maxScroll;
+  if (loadScrollY < 0) loadScrollY = 0;
+  if (maxScroll <= 0) return;
+
+  const sbX = bounds.x + bounds.w - 6;
+  const sbY = bounds.y;
+  const sbW = 5;
+  const sbH = bounds.h;
+
+  // Track
+  ctx.fillStyle = 'rgba(80, 80, 90, 0.6)';
+  ctx.fillRect(sbX, sbY, sbW, sbH);
+
+  // Thumb
+  const visibleH = sbH;
+  const totalH = visibleH + maxScroll;
+  const thumbH = Math.max(20, sbH * (visibleH / totalH));
+  const thumbY = sbY + (sbH - thumbH) * (loadScrollY / maxScroll);
+  ctx.fillStyle = Colors.GOLD;
+  ctx.fillRect(sbX, thumbY, sbW, thumbH);
+}
+
+function drawTab(rect, label, active) {
+  const hov = hitTest(mouseX, mouseY, rect);
+  ctx.fillStyle = active ? 'rgba(80, 70, 30, 0.95)' : (hov ? 'rgba(60, 60, 70, 0.85)' : 'rgba(40, 40, 50, 0.85)');
+  ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  ctx.strokeStyle = active ? Colors.GOLD : '#666';
+  ctx.lineWidth = active ? 2 : 1;
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+
+  ctx.fillStyle = active ? Colors.GOLD : '#aaa';
+  ctx.font = `bold ${active ? 18 : 16}px Georgia, serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Back', backBtn.x + backBtn.w / 2, backBtn.y + backBtn.h / 2);
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+}
+
+function drawDeleteConfirm() {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  const cw = 420, ch = 180;
+  const cx = (SCREEN_WIDTH - cw) / 2, cy = (SCREEN_HEIGHT - ch) / 2;
+  ctx.fillStyle = 'rgba(45, 45, 55, 0.98)';
+  ctx.fillRect(cx, cy, cw, ch);
+  ctx.strokeStyle = Colors.RED;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(cx, cy, cw, ch);
+
+  ctx.fillStyle = Colors.RED;
+  ctx.font = 'bold 22px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Delete this save?', SCREEN_WIDTH / 2, cy + 50);
+  ctx.fillStyle = '#bbb';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('This cannot be undone.', SCREEN_WIDTH / 2, cy + 75);
+
+  // Yes / No buttons
+  const yesBtn = { x: cx + 40, y: cy + ch - 60, w: 140, h: 44 };
+  const noBtn = { x: cx + cw - 40 - 140, y: cy + ch - 60, w: 140, h: 44 };
+
+  const yesHov = hitTest(mouseX, mouseY, yesBtn);
+  ctx.fillStyle = yesHov ? '#a44' : '#722';
+  ctx.fillRect(yesBtn.x, yesBtn.y, yesBtn.w, yesBtn.h);
+  ctx.strokeStyle = yesHov ? Colors.GOLD : '#999';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(yesBtn.x, yesBtn.y, yesBtn.w, yesBtn.h);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = 'bold 18px sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Delete', yesBtn.x + yesBtn.w / 2, yesBtn.y + yesBtn.h / 2);
+
+  const noHov = hitTest(mouseX, mouseY, noBtn);
+  ctx.fillStyle = noHov ? '#555' : '#333';
+  ctx.fillRect(noBtn.x, noBtn.y, noBtn.w, noBtn.h);
+  ctx.strokeStyle = noHov ? Colors.GOLD : '#999';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(noBtn.x, noBtn.y, noBtn.w, noBtn.h);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.fillText('Cancel', noBtn.x + noBtn.w / 2, noBtn.y + noBtn.h / 2);
+
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
 }
@@ -4193,6 +6899,8 @@ function draw() {
 
   // Clear per-frame button list
   menuButtons.length = 0;
+  cardBadgeHitAreas.length = 0;
+  iconHitAreas.length = 0;
 
   switch (state) {
     case GameState.MENU:
@@ -4219,8 +6927,15 @@ function draw() {
     case GameState.COMBAT:
     case GameState.TARGETING:
     case GameState.MODAL_SELECT:
+    case GameState.DEFENDING:
+    case GameState.DAMAGE_SOURCE:
+    case GameState.POWER_TARGETING:
+    case GameState.POWER_CHOICE:
       drawCombat();
       if (state === GameState.MODAL_SELECT) drawModalOverlay();
+      if (state === GameState.DEFENDING) drawDefendingOverlay();
+      if (state === GameState.DAMAGE_SOURCE) drawDamageSourceOverlay();
+      if (state === GameState.POWER_CHOICE) drawPowerChoiceOverlay();
       break;
     case GameState.PERK_SELECT:
       drawPerkSelect();
@@ -4273,117 +6988,172 @@ function draw() {
 // HELP SCREEN
 // ============================================================
 
+// Each item: { text, color }. If color omitted, default white is used.
+const HELP_WHITE = '#ffffff';
 const HELP_CONTENT = [
   { title: 'Life & Cards', items: [
-    'Your HP = cards in your deck (draw pile + hand + recharge pile)',
-    'Damage removes cards from your draw pile permanently',
-    'Healing moves cards from damage pile back to draw pile',
-    'If your draw pile + hand + recharge pile = 0, you die',
+    { text: 'Your HP equals your deck size (draw pile + hand + recharge pile).' },
+    { text: 'Damage removes cards from your draw pile (sent to damage pile, not reshuffled).' },
+    { text: 'Healing moves cards from damage pile back to draw pile.' },
+    { text: 'When draw pile, hand, and recharge pile are all empty, you die.' },
   ]},
   { title: 'Card Costs', items: [
-    'R (Recharge) — card goes to bottom of draw pile',
-    'D (Discard) — card goes to discard pile (lost as damage)',
-    'X (Exhaust) — card removed for this combat only',
-    'B (Banish) — card permanently removed from your deck',
-    'F (Free) — card goes to discard pile, no extra cost',
+    { text: 'Recharge: card goes to the bottom of the draw pile next turn.' },
+    { text: 'Discard: card goes to the discard pile (lost as damage).' },
+    { text: 'Banish: card is permanently removed from your deck.' },
+    { text: 'Some cards Exhaust for a turn (Zzz overlay) and can be used next turn.' },
   ]},
   { title: 'Combat Keywords', items: [
-    'Armor — absorbs damage each hit (permanent)',
-    'Shield — absorbs damage before armor (clears end of turn)',
-    'Heroism — bonus damage on next attack (consumed)',
-    'Rage — permanent bonus damage to all attacks',
-    'Block — absorbs damage after shield/armor (from defense cards)',
+    { text: 'Armor: permanent damage reduction. Reduces all incoming damage.', color: '#aaaaaa' },
+    { text: 'Shield: absorbs damage before HP. Persists between turns.', color: '#6496ff' },
+    { text: 'Heroism: bonus damage added to your next attack, then consumed.', color: '#ffd700' },
+    { text: 'Rage: permanent bonus damage to all your attacks for this combat.', color: '#dc4040' },
+    { text: 'Block: absorbs damage from defense cards. Clears at end of turn.', color: '#ffffff' },
   ]},
   { title: 'Status Effects', items: [
-    'Fire — deals stacks as damage per turn, decays by 1',
-    'Ice — reduces damage dealt by stacks, decays by 1',
-    'Poison — deals 1 damage per turn, decays by 1',
-    'Shock — reduces damage dealt AND increases damage taken, decays by 1',
+    { text: 'Fire: deals damage equal to stacks at start of turn, decays by 1.', color: '#dc8c28' },
+    { text: 'Ice: reduces damage dealt by stacks, decays by 1 per turn.', color: '#78c8ff' },
+    { text: 'Poison: deals 1 unpreventable damage per turn, decays by 1.', color: '#3cc83c' },
+    { text: 'Shock: -1 damage dealt and +1 damage taken per stack, decays by 1.', color: '#ffe650' },
   ]},
-  { title: 'Allies', items: [
-    'Summoned creatures attack at end of your turn',
-    'Allies ready at start of your turn',
-    'Companions (Thorb) persist between combats',
+  { title: 'Allies & Summons', items: [
+    { text: 'Summoned creatures attack at the end of your turn.' },
+    { text: 'Allies ready at the start of your turn.' },
+    { text: 'Companions (like Thorb) persist between combats.' },
+    { text: 'Losing a summon does not cost you HP.' },
   ]},
   { title: 'Controls', items: [
-    'Click cards to play them, click enemies to target',
-    'ESC — cancel targeting / open menu',
-    'H — toggle help screen',
-    'S — save game (on map)',
-    'L — load game (on map)',
-    'I — inventory (on map)',
-    'Mouse wheel — scroll in shop/inventory/help',
+    { text: 'Click cards to play them, click enemies to target.' },
+    { text: 'ESC: cancel targeting / open menu.' },
+    { text: 'H: toggle help screen.' },
+    { text: 'S: save game (on map).' },
+    { text: 'L: load game (on map).' },
+    { text: 'I: open or close inventory.' },
+    { text: '` (backtick): toggle debug mode.' },
+    { text: 'Mouse wheel: scroll in shop / inventory / help.' },
   ]},
 ];
 
 function handleHelpClick(x, y) {
-  const closeBtn = { x: SCREEN_WIDTH / 2 + 300, y: SCREEN_HEIGHT - 70, w: 120, h: 40 };
-  if (hitTest(x, y, closeBtn)) {
+  // Close button positioned at bottom-right of the help panel
+  const pw = 900, ph = 620;
+  const px = (SCREEN_WIDTH - pw) / 2;
+  const py = (SCREEN_HEIGHT - ph) / 2;
+  const btnW = 160, btnH = 40;
+  const btnX = px + pw - btnW - 16;
+  const btnY = py + ph - btnH - 12;
+  if (hitTest(x, y, { x: btnX, y: btnY, w: btnW, h: btnH })) {
     state = previousState || GameState.MAP;
   }
 }
 
 function drawHelpScreen() {
-  // Dim background
-  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  // Draw the previous game state underneath so the game shows through
+  const ps = previousState;
+  if (ps === GameState.COMBAT || ps === GameState.TARGETING || ps === GameState.MODAL_SELECT) {
+    drawCombat();
+  } else if (ps === GameState.MAP) {
+    drawMap();
+  } else if (ps === GameState.ENCOUNTER_TEXT) {
+    drawEncounterText();
+  } else if (ps === GameState.ENCOUNTER_CHOICE) {
+    drawEncounterChoice();
+  }
+
+  // Block all background interactions
+  cardBadgeHitAreas.length = 0;
+  iconHitAreas.length = 0;
+  menuButtons.length = 0;
+
+  // Dim overlay (matches py game ~78%)
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
   ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-  // Panel
-  const px = 190, py = 30, pw = 900, ph = 880;
-  ctx.fillStyle = 'rgba(20,10,40,0.95)';
+  // Panel — dark brown to match py game (40, 35, 30) with warm gold border (180, 160, 120)
+  const pw = 900, ph = 620;
+  const px = (SCREEN_WIDTH - pw) / 2;
+  const py = (SCREEN_HEIGHT - ph) / 2;
+  ctx.fillStyle = 'rgba(40, 35, 30, 0.97)';
   ctx.fillRect(px, py, pw, ph);
-  ctx.strokeStyle = Colors.GOLD;
+  ctx.strokeStyle = '#b4a078'; // warm gold (180, 160, 120)
   ctx.lineWidth = 2;
   ctx.strokeRect(px, py, pw, ph);
 
   // Title
-  ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 28px serif';
+  ctx.fillStyle = '#dcc896'; // warmer gold (220, 200, 150)
+  ctx.font = 'bold 28px Georgia, serif';
   ctx.textAlign = 'center';
-  ctx.fillText('Game Reference', SCREEN_WIDTH / 2, py + 40);
+  ctx.fillText('Game Reference', Math.round(SCREEN_WIDTH / 2), Math.round(py + 40));
 
-  // Content
+  // Content area
+  const contentTop = py + 60;
+  const contentBottom = py + ph - 60;
+  const contentH = contentBottom - contentTop;
+  const innerW = pw - 60;
+
+  // Clip
   ctx.save();
   ctx.beginPath();
-  ctx.rect(px + 10, py + 60, pw - 20, ph - 120);
+  ctx.rect(px + 10, contentTop, pw - 20, contentH);
   ctx.clip();
 
-  let y = py + 80 - helpScrollY;
+  let y = contentTop + 16 - helpScrollY;
   ctx.textAlign = 'left';
+  const sectionGap = 14;
+  const lineGap = 3;
+  const fontSize = 16;
   for (const section of HELP_CONTENT) {
-    ctx.fillStyle = Colors.GOLD;
-    ctx.font = 'bold 18px sans-serif';
-    ctx.fillText(section.title, px + 30, y);
-    y += 28;
-    ctx.font = '14px sans-serif';
+    // Section header in warm gold, sits adjacent to its description block
+    ctx.fillStyle = '#dcc896';
+    ctx.font = 'bold 19px Georgia, serif';
+    ctx.fillText(`-- ${section.title} --`, Math.round(px + 30), Math.round(y + 14));
+    y += 24;
+    // Items rendered with inline icons in the item's color
     for (const item of section.items) {
-      ctx.fillStyle = '#ddd';
-      if (item.includes('Fire')) ctx.fillStyle = Colors.RED;
-      else if (item.includes('Ice')) ctx.fillStyle = Colors.ICE_BLUE;
-      else if (item.includes('Poison')) ctx.fillStyle = Colors.GREEN;
-      else if (item.includes('Shock')) ctx.fillStyle = Colors.SHOCK_YELLOW;
-      else if (item.includes('Shield')) ctx.fillStyle = Colors.ALLY_BLUE;
-      else if (item.includes('Heroism')) ctx.fillStyle = Colors.GOLD;
-      ctx.fillText(`  ${item}`, px + 30, y);
-      y += 22;
+      const itemColor = item.color || HELP_WHITE;
+      const usedH = drawIconTextLeft(item.text, px + 50, y, innerW - 40, fontSize, itemColor);
+      y += usedH + lineGap;
     }
-    y += 12;
+    y += sectionGap;
   }
+  // Calculate max scroll
+  const totalH = (y + helpScrollY) - (contentTop + 16);
+  const maxScroll = Math.max(0, totalH - contentH);
+  if (helpScrollY > maxScroll) helpScrollY = maxScroll;
+
   ctx.restore();
 
-  // Close button
-  const closeBtn = { x: SCREEN_WIDTH / 2 + 300, y: SCREEN_HEIGHT - 70, w: 120, h: 40 };
-  const hov = hitTest(mouseX, mouseY, closeBtn);
-  ctx.fillStyle = hov ? '#4a3a6e' : '#2a1a4e';
-  ctx.fillRect(closeBtn.x, closeBtn.y, closeBtn.w, closeBtn.h);
-  ctx.strokeStyle = hov ? Colors.GOLD : Colors.GRAY;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(closeBtn.x, closeBtn.y, closeBtn.w, closeBtn.h);
+  // Scrollbar if content overflows
+  if (maxScroll > 0) {
+    const sbW = 12;
+    const sbX = px + pw - sbW - 6;
+    ctx.fillStyle = 'rgba(30, 28, 25, 0.9)';
+    ctx.fillRect(sbX, contentTop, sbW, contentH);
+    const thumbRatio = contentH / totalH;
+    const thumbH = Math.max(20, contentH * thumbRatio);
+    const thumbY = contentTop + (helpScrollY / maxScroll) * (contentH - thumbH);
+    ctx.fillStyle = '#8c8068';
+    ctx.fillRect(sbX, thumbY, sbW, thumbH);
+    ctx.strokeStyle = '#b4a078';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sbX, thumbY, sbW, thumbH);
+  }
+
+  // Close button (bottom-right of panel)
+  const btnW = 160, btnH = 40;
+  const btnX = px + pw - btnW - 16;
+  const btnY = py + ph - btnH - 12;
+  const hov = hitTest(mouseX, mouseY, { x: btnX, y: btnY, w: btnW, h: btnH });
+  ctx.fillStyle = hov ? '#504638' : '#3c3228';
+  ctx.fillRect(btnX, btnY, btnW, btnH);
+  ctx.strokeStyle = '#b4a078';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(btnX, btnY, btnW, btnH);
   ctx.fillStyle = Colors.WHITE;
-  ctx.font = 'bold 16px sans-serif';
+  ctx.font = 'bold 16px Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Close (H)', closeBtn.x + closeBtn.w / 2, closeBtn.y + closeBtn.h / 2);
+  ctx.fillText('Close (H)', btnX + btnW / 2, btnY + btnH / 2);
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
 }
@@ -4393,12 +7163,11 @@ function drawHelpScreen() {
 // ============================================================
 
 function getIngameMenuBtnRects() {
-  const btnW = 250, btnH = 50, gap = 15;
+  const btnW = 280, btnH = 56, gap = 16;
   const items = [
     { label: 'Resume', action: 'resume' },
     { label: 'Save Game', action: 'save', enabled: previousState === GameState.MAP },
     { label: 'Load Game', action: 'load' },
-    { label: 'Help', action: 'help' },
     { label: 'Main Menu', action: 'quit' },
   ];
   const totalH = items.length * (btnH + gap) - gap;
@@ -4415,8 +7184,13 @@ function handleIngameMenuClick(x, y) {
     if (btn.action === 'resume') {
       state = previousState || GameState.MAP;
     } else if (btn.action === 'save' && btn.enabled) {
+      saveLoadReturnState = GameState.INGAME_MENU;
       state = GameState.SAVE_GAME;
     } else if (btn.action === 'load') {
+      saveLoadReturnState = GameState.INGAME_MENU;
+      loadTab = 'manual';
+      loadSelectedIndex = -1;
+      refreshLoadEntries();
       state = GameState.LOAD_GAME;
     } else if (btn.action === 'help') {
       helpScrollY = 0;
@@ -4432,45 +7206,63 @@ function handleIngameMenuClick(x, y) {
 }
 
 function drawIngameMenu() {
-  // Dim background
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  // Draw the previous game state underneath so the game shows through
+  const ps = previousState;
+  if (ps === GameState.COMBAT || ps === GameState.TARGETING || ps === GameState.MODAL_SELECT) {
+    drawCombat();
+  } else if (ps === GameState.MAP) {
+    drawMap();
+  } else if (ps === GameState.ENCOUNTER_TEXT) {
+    drawEncounterText();
+  } else if (ps === GameState.ENCOUNTER_CHOICE) {
+    drawEncounterChoice();
+  }
+
+  // Block all background interactions: clear hover/click hit areas registered by the underlying game
+  cardBadgeHitAreas.length = 0;
+  iconHitAreas.length = 0;
+  menuButtons.length = 0;
+
+  // Full semi-transparent black overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-  // Menu box
-  const boxW = 375, boxH = 400;
+  // Menu box (grey with gold border, matches load screen)
+  const boxW = 440, boxH = 420;
   const boxX = (SCREEN_WIDTH - boxW) / 2, boxY = (SCREEN_HEIGHT - boxH) / 2;
-  ctx.fillStyle = 'rgba(20,10,40,0.95)';
+  ctx.fillStyle = 'rgba(45, 45, 55, 0.95)';
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.strokeStyle = Colors.GOLD;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 3;
   ctx.strokeRect(boxX, boxY, boxW, boxH);
 
-  // Title
+  // Title in gold with shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
   ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 32px serif';
+  ctx.font = 'bold 38px Georgia, serif';
   ctx.textAlign = 'center';
-  ctx.fillText('PAUSED', SCREEN_WIDTH / 2, boxY + 45);
+  ctx.fillText('PAUSED', SCREEN_WIDTH / 2, boxY + 55);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 
-  // Buttons
+  // Buttons using the wooden plank styled button (sprite from End Turn button)
   for (const btn of getIngameMenuBtnRects()) {
-    const hov = hitTest(mouseX, mouseY, btn);
     const enabled = btn.enabled !== false;
-    ctx.fillStyle = !enabled ? '#1a1a2e' : (hov ? '#4a3a6e' : '#2a1a4e');
-    ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
-    ctx.strokeStyle = !enabled ? '#333' : (hov ? Colors.GOLD : Colors.GRAY);
-    ctx.lineWidth = 2;
-    ctx.strokeRect(btn.x, btn.y, btn.w, btn.h);
-    ctx.fillStyle = !enabled ? '#555' : (hov ? Colors.GOLD : Colors.WHITE);
-    ctx.font = 'bold 20px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2);
+    if (!enabled) ctx.globalAlpha = 0.45;
+    drawStyledButton(btn.x, btn.y, btn.w, btn.h, btn.label, null, 'large', 22);
     if (!enabled) {
-      ctx.fillStyle = '#555';
+      ctx.globalAlpha = 1;
+      // Show "(map only)" hint below
+      ctx.fillStyle = '#aaa';
       ctx.font = '12px sans-serif';
-      ctx.fillText('(map only)', btn.x + btn.w / 2, btn.y + btn.h / 2 + 20);
+      ctx.textAlign = 'center';
+      ctx.fillText('(map only)', btn.x + btn.w / 2, btn.y + btn.h + 12);
     }
-    ctx.textBaseline = 'alphabetic';
+    // Click is handled by handleIngameMenuClick using getIngameMenuBtnRects directly
+    menuButtons.pop();
   }
   ctx.textAlign = 'left';
 }
@@ -4559,23 +7351,31 @@ function drawTitleCard() {
   ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
   const alpha = titleCardAlpha / 255;
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 48px serif';
+
+  // Calculate vertical centering based on what's shown
+  const cy = Math.round(SCREEN_HEIGHT / 2);
+  const titleY = titleCardSubtitle ? cy - 30 : cy;
+  const subY = cy + 36;
+
+  // Title — bigger, crisper using rgba directly (avoids globalAlpha blur)
+  const goldRgba = `rgba(255, 215, 0, ${alpha})`;
+  ctx.fillStyle = goldRgba;
+  ctx.font = 'bold 64px Georgia, serif';
   ctx.textAlign = 'center';
-  ctx.fillText(titleCardText, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 20);
+  ctx.textBaseline = 'middle';
+  ctx.fillText(titleCardText, Math.round(SCREEN_WIDTH / 2), titleY);
 
   if (titleCardSubtitle) {
-    ctx.fillStyle = Colors.WHITE;
-    ctx.font = '24px serif';
-    ctx.fillText(titleCardSubtitle, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 30);
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.font = '28px Georgia, serif';
+    ctx.fillText(titleCardSubtitle, Math.round(SCREEN_WIDTH / 2), subY);
   }
 
-  ctx.fillStyle = Colors.GRAY;
+  ctx.fillStyle = `rgba(160, 160, 160, ${alpha * 0.8})`;
   ctx.font = '14px sans-serif';
-  ctx.fillText('Click to continue', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 80);
+  ctx.fillText('Click to continue', Math.round(SCREEN_WIDTH / 2), SCREEN_HEIGHT - 80);
 
-  ctx.globalAlpha = 1;
+  ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
 }
 
@@ -4676,6 +7476,12 @@ function gameLoop(timestamp) {
     updateEnemyTurn(dt);
   }
 
+  // Update combat intro timer
+  if (combatIntroTimer > 0) combatIntroTimer = Math.max(0, combatIntroTimer - dt);
+
+  // Update toast timer
+  if (toastTimer > 0 && !toastSticky) toastTimer = Math.max(0, toastTimer - dt);
+
   // Update fade
   updateFade(dt);
 
@@ -4686,6 +7492,19 @@ function gameLoop(timestamp) {
   updateDamageNumbers(dt);
 
   draw();
+
+  // Draw toast message (transient on-screen yellow message)
+  if (toastTimer > 0 && toastMessage) drawToast();
+
+  // Draw card badge / icon tooltip (above cards, below fade)
+  // Skip when a blocking menu is open — tooltips should not bleed through menus
+  // Help screen DOES allow icon tooltips for keyword reference
+  const menuOpen = state === GameState.INGAME_MENU || state === GameState.SAVE_GAME ||
+                   state === GameState.LOAD_GAME;
+  if (!menuOpen) {
+    drawBadgeTooltip();
+    drawIconTooltip();
+  }
 
   // Draw fade overlay on top of everything
   if (fadeAlpha > 0) {
