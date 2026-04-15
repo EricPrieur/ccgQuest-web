@@ -64,6 +64,7 @@ export const CARD_ART_MAP = {
 
   // === Warrior ===
   greater_cleave: 'GreaterCleave.jpg',
+  charge: 'ChargeWarriorAbility.png',
   reckless_strike: 'RecklessStrike.jpg',
   shield_bash: 'ShieldBash.jpg',
   thunderclap: 'Thunderclap.jpg',
@@ -259,6 +260,7 @@ export const CARD_ART_MAP = {
 
   // === Monster portraits ===
   giant_rat: 'GiantRatMonster.jpg',
+  bone_pile: 'BonePile.jpg',
   bone_pile_monster: 'BonePile.jpg',
   slime_monster: 'Slime.jpg',
   kobold_warden: 'KoboldWarden.jpg',
@@ -282,9 +284,21 @@ export const CARD_ART_MAP = {
   wolf: 'WolfInSnow.jpg',
 
   // === Creature summons ===
+  rat: 'SummonRat.jpg',
+  // tamed_rat conflicts with the player's Tamed Rat ability card (ability) — keep
+  // ability art at the top of the file (line 36); the lookup uses tamed_rat for both.
   restless_bone: 'RestlessBoneSummon.jpg',
+  slime: 'SlimeSummon.jpg',
+  pet_slime: 'SlimeSummon.jpg',
+  kobold_guard: 'KoboldGuard.jpg',
+  thorb: 'ThorbAlly.jpg',
+  small_spider: 'PetSpider.jpg',
+  spider: 'PetSpider.jpg',
+  deathjump_spider: 'DeathjumpSpider.jpg',
+  bone_amalgam: 'BoneAmalgam.jpg',
   goblin_sapper: 'GoblinSapper.jpg',
   elf_warrior: 'ElfWarrior.jpg',
+  raena: 'RaenaAlly.jpg',
   piranhas: 'PiranhasSwarm.jpg',
   durin_stoneheart: 'DurinStoneheart.jpg',
   balgrim_ironvein: 'BalgrimIronvein.jpg',
@@ -314,28 +328,6 @@ export const POWER_ART_MAP = {
   obsidian_body: 'ObsidianSlime.jpg',
   lava_floor: 'MagmaFloor.jpg',
   vanish: 'Vanish.jpg',
-
-  // === Creature/Summon art (looked up by snake-cased creature name) ===
-  rat: 'SummonRat.jpg',
-  tamed_rat: 'TamedRatAbility.jpg',
-  dire_rat: 'DireRat.jpg',
-  giant_rat: 'GiantRatMonster.jpg',
-  restless_bone: 'RestlessBoneSummon.jpg',
-  slime: 'SlimeSummon.jpg',
-  pet_slime: 'SlimeSummon.jpg',
-  obsidian_slime: 'ObsidianSlime.jpg',
-  kobold_guard: 'KoboldGuard.jpg',
-  kobold_slinger: 'KoboldSlinger.jpg',
-  kobold_dragonshield: 'KoboldDragonShield.jpg',
-  thorb: 'ThorbAlly.jpg',
-  small_spider: 'PetSpider.jpg',
-  spider: 'PetSpider.jpg',
-  deathjump_spider: 'DeathjumpSpider.jpg',
-  elf_warrior: 'ElfWarrior.jpg',
-  raena: 'RaenaAlly.jpg',
-  bone_amalgam: 'BoneAmalgam.jpg',
-  wolf: 'WolfInSnow.jpg',
-  goblin_sapper: 'GoblinSapper.jpg',
 };
 
 // Lazy-loading image cache

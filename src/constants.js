@@ -68,7 +68,6 @@ export const CardType = Object.freeze({
 export const CostType = Object.freeze({
   FREE: 'FREE',
   RECHARGE: 'RECHARGE',
-  EXHAUST: 'EXHAUST',
   DISCARD: 'DISCARD',
   BANISH: 'BANISH',
 });

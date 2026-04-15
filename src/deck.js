@@ -1,21 +1,32 @@
 /**
- * Deck management - HP = draw_pile + hand + recharge_pile.
- * discard_pile = damage taken (NEVER reshuffled back).
+ * Deck management — HP = draw_pile + hand + recharge_pile.
+ *
+ * Persistent between combats:
+ *   hand         — cards the player is holding (survives combat)
+ *   discardPile  — damage taken, in exact order (top = most recent)
+ *
+ * Rebuilt each combat:
+ *   drawPile     — masterDeck minus hand minus discard, freshly shuffled
+ *
+ * Transient (cleared at end of combat):
+ *   rechargePile, damagePile, playPile
  */
 export class Deck {
   constructor() {
     this.masterDeck = [];
     this.drawPile = [];
     this.hand = [];
-    this.discardPile = [];
-    this.exhaustPile = [];
+    this.discardPile = [];  // persists between combats — represents damage
     this.damagePile = [];
     this.rechargePile = [];
     this.playPile = [];
   }
 
-  addCard(card) {
+  addCard(card, toHand = false) {
     this.masterDeck.push(card);
+    if (toHand) {
+      this.hand.push(card.copy ? card.copy() : card);
+    }
   }
 
   removeCard(card) {
@@ -34,16 +45,37 @@ export class Deck {
     }
   }
 
+  // Build draw pile from masterDeck, excluding cards already in hand and
+  // removing N cards equal to discardPile length (persistent damage).
+  // Hand and discard pile are NOT touched — they persist.
   startCombat(classHandSize = 4, maxHandSize = 10) {
     this.drawPile = this.masterDeck.map(c => c.copy());
-    this.hand = [];
-    this.discardPile = [];
-    this.exhaustPile = [];
+
+    // Pull out cards that match the persistent hand (by ID, one per match)
+    const handIds = this.hand.map(c => c.id);
+    for (const id of handIds) {
+      const idx = this.drawPile.findIndex(c => c.id === id);
+      if (idx !== -1) this.drawPile.splice(idx, 1);
+    }
+
+    // Remove cards equal to discard pile count (persistent damage)
+    const dmgCount = this.discardPile.length;
+    if (dmgCount > 0 && dmgCount < this.drawPile.length) {
+      this.drawPile.splice(this.drawPile.length - dmgCount, dmgCount);
+    } else if (dmgCount >= this.drawPile.length) {
+      this.drawPile = [];
+    }
+
+    // Clear transient combat piles (hand + discard persist)
     this.damagePile = [];
     this.rechargePile = [];
     this.playPile = [];
+
     this.shuffleDrawPile();
-    return this.draw(classHandSize, maxHandSize);
+
+    // Draw up to hand size (hand may already have cards from persistence)
+    const toDraw = Math.max(0, classHandSize - this.hand.length);
+    return this.draw(toDraw, maxHandSize);
   }
 
   isInCombat() {
@@ -51,14 +83,48 @@ export class Deck {
       this.rechargePile.length > 0 || this.playPile.length > 0;
   }
 
-  endCombat() {
+  // Set up a draw pile for exploration (no hand drawn).
+  // Called so non-combat damage (iron door etc.) has a pile to pull from.
+  initializeForAdventure() {
+    if (this.drawPile.length > 0) return;
+    this.drawPile = this.masterDeck.map(c => c.copy());
+    for (const hc of this.hand) {
+      const idx = this.drawPile.findIndex(c => c.id === hc.id);
+      if (idx !== -1) this.drawPile.splice(idx, 1);
+    }
+    const dmgCount = this.discardPile.length;
+    if (dmgCount > 0 && dmgCount < this.drawPile.length) {
+      this.drawPile.splice(this.drawPile.length - dmgCount, dmgCount);
+    } else if (dmgCount >= this.drawPile.length) {
+      this.drawPile = [];
+    }
+    this.playPile = [];
+    this.shuffleDrawPile();
+  }
+
+  // End combat: draw back up to hand size, then clear transient piles.
+  // Hand and discard pile persist for the next combat.
+  endCombat(classHandSize = 4, maxHandSize = 10) {
+    const toDraw = Math.max(0, classHandSize - this.hand.length);
+    this.draw(toDraw, maxHandSize);
+
     this.drawPile = [];
-    this.hand = [];
-    this.discardPile = [];
-    this.exhaustPile = [];
     this.damagePile = [];
     this.rechargePile = [];
     this.playPile = [];
+  }
+
+  // Rebalance: merge hand + deck + discard back into one deck, heal all
+  // damage, shuffle, and draw a fresh hand. Used on rest and level-up.
+  rebalance(classHandSize = 4, maxHandSize = 10) {
+    this.hand = [];
+    this.discardPile = [];
+    this.drawPile = this.masterDeck.map(c => c.copy());
+    this.damagePile = [];
+    this.rechargePile = [];
+    this.playPile = [];
+    this.shuffleDrawPile();
+    return this.draw(classHandSize, maxHandSize);
   }
 
   draw(count = 1, maxHandSize = 10) {
@@ -77,19 +143,18 @@ export class Deck {
     const idx = this.hand.indexOf(card);
     if (idx === -1) return false;
     this.hand.splice(idx, 1);
-    // Card leaving hand resets any "stay-in-hand" exhaust flag
     card.exhausted = false;
+    this.placeByCost(card);
+    return true;
+  }
 
+  placeByCost(card) {
+    card.exhausted = false;
     switch (card.costType) {
       case 'RECHARGE':
-        // Goes into the recharge pile (held until end of turn, then flushed under the deck)
         this.addToRechargePile(card);
         break;
-      case 'EXHAUST':
-        this.exhaustPile.push(card);
-        break;
       case 'BANISH':
-        // removed from game entirely
         this.masterDeck = this.masterDeck.filter(c => c.id !== card.id || c.uid !== card.uid);
         break;
       case 'FREE':
@@ -98,19 +163,14 @@ export class Deck {
         this.discardPile.push(card);
         break;
     }
-    return true;
   }
 
-  // Add a card to the recharge pile.
-  // Convention: rechargePile[0] = top, rechargePile[N-1] = bottom.
-  // The first card recharged sits at the top; each subsequent card goes UNDER (further down).
   addToRechargePile(card) {
     card.exhausted = false;
     this.rechargePile.push(card);
   }
 
   banishCard(card) {
-    // Remove from all piles and master deck
     for (const pile of [this.hand, this.drawPile, this.discardPile, this.rechargePile, this.playPile]) {
       const idx = pile.indexOf(card);
       if (idx !== -1) pile.splice(idx, 1);
@@ -173,24 +233,19 @@ export class Deck {
   }
 
   damageFromDrawPile() {
-    // Take from top of draw pile first, then from top of recharge pile.
-    // Returns null if both are empty.
     if (this.drawPile.length > 0) {
       const card = this.drawPile.pop();
-      this.damagePile.push(card);
+      this.discardPile.push(card);
       return card;
     }
     if (this.rechargePile.length > 0) {
-      // Top of recharge pile = end of array (since we push to end as "bottom" — wait,
-      // recharge pile convention: index 0 = top. So top is shift().
       const card = this.rechargePile.shift();
-      this.damagePile.push(card);
+      this.discardPile.push(card);
       return card;
     }
     return null;
   }
 
-  // Total cards available for "deck" damage (drawPile + rechargePile)
   deckDamageAvailable() {
     return this.drawPile.length + this.rechargePile.length;
   }
@@ -204,11 +259,6 @@ export class Deck {
   }
 
   flushRechargePile() {
-    // The recharge pile is moved UNDER the draw pile.
-    // Within the recharge pile: index 0 = top, index N-1 = bottom.
-    // Cards deeper in the recharge pile (higher index) end up deeper in the deck.
-    // Draw pile convention: index 0 = bottom (deepest), pop() draws from the top.
-    // Pushing the recharge pile cards in reverse so the deepest one ends at the very bottom.
     const count = this.rechargePile.length;
     for (const card of this.rechargePile) {
       this.drawPile.unshift(card);
@@ -219,6 +269,8 @@ export class Deck {
 
   endTurn(classHandSize = 4, maxHandSize = 10) {
     this.flushRechargePile();
-    return this.draw(classHandSize, maxHandSize);
+    if (this.hand.length >= classHandSize) return [];
+    const toDraw = classHandSize - this.hand.length;
+    return this.draw(toDraw, maxHandSize);
   }
 }

@@ -11,10 +11,11 @@ import {
   getAbilityChoices,
   createBite, createToughHide, createSkreeeeeeeek,
   createBigBone, createLooseBone,
-  createSlimeAppendage,
+  createSlimeAppendage, createPartiallyDigestedBone, createCorrodedArmor, createPetSlimeCard, createSlimeJar,
   createGuards, createMotivationalWhip, createHideInCorner,
   createDireRatBite, createDireRatScreech,
-  createSharpRock, createBoneWand, createBoneClub, createTorch,
+  createSharpRock, createBoneWand, createBoneClub, createBoneMace, createTorch,
+  createBadRations, createSturdyBoots,
   createChickenLeg, createWardensWhip,
   createWoodenSword, createLeatherArmor, createScraps,
   createWoodenAxe, createWoodenGreatsword, createRockMace,
@@ -23,8 +24,8 @@ import {
   createHeroicStrike, createHolyLight, createShieldOfFaith, createFlashHeal,
   createFireBurst, createIceBolt, createMagicMissiles, createArcaneShield,
   createVialOfPoison, createSneakAttack, createPetSpider, createCarefulStrike,
-  createGreaterCleave, createRecklessStrike, createShieldBash,
-  createMultiShot, createGoodberries, createTamedRat,
+  createGreaterCleave, createCharge, createRecklessStrike, createShieldBash,
+  createMultiShot, createGoodberries, createGoodberry, createTamedRat,
   createWrath, createRegrowth, createFeralSwipe,
   createSpearThrow, createIcyBreath, createShieldBashEnemy,
   createWhiteClaw, createGreatclub, createQuarterstaff, createAle,
@@ -50,7 +51,7 @@ import {
 } from './cards.js';
 import { createPrisonCellMap, createMountainPathMap, createPlainsMap, createCaveMap, createRuinsBasinMap, createNorthQualibafMap, createFilibafForestMap, createTharnagMap, createVolcanoMap, createObsidianWastesMap, createTharnagInteriorMap, createEntryCorridorMap, createGateAreaMap, createHallOfAncestorsMap, createMonumentAlleyMap, createTombOfAncestorMap, createGrandStairsMap, createDwarvenThroneRoomMap, createMapRoomMap, createDeeperTunnelsMap, createArtisanDistrictMap } from './map.js';
 import { ENCOUNTER_REGISTRY, EncounterPhase } from './encounter.js';
-import { getCardArt, getPowerArt } from './card-art.js';
+import { getCardArt, POWER_ART_MAP } from './card-art.js';
 import { Power, getClassPower, createChunkyBite, createDireFury, createSplit, createArmorPower } from './power.js';
 import { saveToSlot, saveToAutoSlot, loadFromSlot, hasSave, hasAnySave, getSaveInfo, deleteSave, MANUAL_SLOT_COUNT, AUTO_SLOT_COUNT } from './save.js';
 
@@ -92,10 +93,12 @@ let selectedClass = '';
 let isPlayerTurn = true;
 let selectedCardIndex = -1;
 let combatLog = [];
+let combatLogScrollY = 0; // 0 = pinned to bottom (newest), positive = scrolled up
 let enemyActionTimer = 0;
 let enemyActions = [];
 let enemyActionIndex = 0;
 let abilityChoices = [];
+let shrineAbilityMode = false; // True when the ability-select screen is triggered by the Lost Shrine
 
 // Map / Encounter state
 let currentMap = null;
@@ -111,6 +114,46 @@ let shopCards = []; // { card, price, creator }[]
 let shopName = '';
 let shopScrollY = 0;
 let inventoryScrollY = 0;
+// Inventory filter tabs (type-based, matching Python game)
+const INV_FILTER_TYPES = ['All', 'Abilities', 'Allies', 'Armor', 'Items', 'Relics', 'Weapons'];
+let invDeckFilters = new Set(INV_FILTER_TYPES);
+let invBpFilters = new Set(INV_FILTER_TYPES);
+let invBpEquipFilter = false;
+
+// Class equip rules (only enforced during deck rebalancing, not gameplay loot)
+const ARMOR_SUBTYPES = new Set(['heavy_armor', 'light_armor', 'clothing']);
+const WEAPON_SUBTYPES = new Set(['martial', 'simple', 'martial_2h', 'ranged', 'ranged_2h', 'wand', 'staff']);
+const CLASS_ARMOR = {
+  Paladin: new Set(['clothing', 'light_armor', 'heavy_armor']),
+  Ranger:  new Set(['clothing', 'light_armor']),
+  Wizard:  new Set(['clothing']),
+  Rogue:   new Set(['clothing', 'light_armor']),
+  Warrior: new Set(['clothing', 'light_armor', 'heavy_armor']),
+  Druid:   new Set(['clothing', 'light_armor']),
+};
+const CLASS_WEAPONS = {
+  Paladin: new Set(['martial', 'simple', 'martial_2h']),
+  Ranger:  new Set(['martial', 'simple', 'ranged', 'ranged_2h', 'martial_2h']),
+  Wizard:  new Set(['simple', 'staff', 'wand']),
+  Rogue:   new Set(['martial', 'simple', 'ranged']),
+  Warrior: new Set(['martial', 'martial_2h', 'simple']),
+  Druid:   new Set(['simple', 'staff', 'wand']),
+};
+const CLASS_ITEMS = {
+  Paladin: new Set(['item', 'potion', 'relic']),
+  Ranger:  new Set(['item', 'potion', 'relic']),
+  Wizard:  new Set(['item', 'potion', 'relic', 'scroll']),
+  Rogue:   new Set(['item', 'potion', 'relic', 'scroll']),
+  Warrior: new Set(['item', 'potion', 'relic']),
+  Druid:   new Set(['item', 'potion', 'relic']),
+};
+function canClassEquip(card) {
+  const sub = (card.subtype || '').toLowerCase();
+  if (ARMOR_SUBTYPES.has(sub)) return (CLASS_ARMOR[selectedClass] || new Set()).has(sub);
+  if (WEAPON_SUBTYPES.has(sub)) return (CLASS_WEAPONS[selectedClass] || new Set()).has(sub);
+  if (['scroll', 'potion', 'relic', 'item'].includes(sub)) return (CLASS_ITEMS[selectedClass] || new Set()).has(sub);
+  return true; // abilities, allies, etc. are always equippable
+}
 
 // Level-up / Perk state
 let pendingLevelUp = false;
@@ -164,7 +207,21 @@ let characterSplashIsPlayer = false;
 
 // Hover preview state (cards/powers in combat)
 let hoveredCardPreview = null; // a Card to render large
+// Shift-to-freeze preview: while Shift is held, whichever preview is currently
+// shown (card, power, or creature) stays pinned on screen so the player can
+// mouse over its keyword icons (Scry, Heal, etc.) to read the tooltips without
+// the preview changing — and a different card/power/creature hover cannot
+// swap it out mid-inspection. Released Shift resumes normal hovering.
+let shiftFreezeCard = null;
+let shiftFreezePower = null;
+let shiftFreezeCreature = null;
+let shiftFreezeMouseX = 0;
+let shiftFreezeMouseY = 0;
+function isShiftFrozen() {
+  return !!(shiftFreezeCard || shiftFreezePower || shiftFreezeCreature);
+}
 let hoveredPowerPreview = null; // a Power to render large
+let hoveredCreaturePreview = null; // a Creature to render large
 
 // Hit areas for log entries that have a card attached (for hover preview)
 let logCardHitAreas = []; // { x, y, w, h, card }
@@ -198,6 +255,9 @@ let enemyTurnNumber = 0;
 let modalCard = null; // Card being played in modal mode
 let modalTarget = null; // Target for modal card (enemy or creature)
 
+// Scry state
+let scryCards = []; // cards revealed for scry_pick
+
 // Power recharge state
 let powerRechargeMode = false;
 let powerRechargeCardsNeeded = 0;
@@ -209,6 +269,21 @@ let cardRechargeMode = false;
 let cardRechargeNeeded = 0;
 let cardRechargedCards = []; // cards already paid as recharge cost
 let pendingRechargeNames = []; // names to log after the card resolves
+
+// Ally manual-attack state
+let selectedAlly = null;
+
+// Multi-target attack state (Wooden Axe etc.)
+let multiTargets = [];
+let multiMaxTargets = 0;
+let multiCardIndex = -1;
+
+// Barrage state (Magic Missiles: each shot resolves on click, card stays in hand)
+let barrageMode = false;          // true = in barrage flow
+let barrageShotsLeft = 0;         // remaining shots (0 = pre-pay phase)
+let barrageShotsFired = 0;        // how many shots already fired (for cancel check)
+let barrageCardIndex = -1;        // index of MM in hand (stays there until done)
+let barrageRechargedCard = null;  // card recharged as cost (for refund if cancelled)
 
 // Card registry: card_id -> creator function (for loot rewards + save/load)
 const CARD_REGISTRY = {
@@ -226,14 +301,17 @@ const CARD_REGISTRY = {
   magic_missiles: createMagicMissiles, arcane_shield: createArcaneShield,
   vial_of_poison: createVialOfPoison, sneak_attack: createSneakAttack,
   pet_spider: createPetSpider, careful_strike: createCarefulStrike,
-  greater_cleave: createGreaterCleave, reckless_strike: createRecklessStrike,
+  greater_cleave: createGreaterCleave, charge: createCharge, reckless_strike: createRecklessStrike,
   shield_bash: createShieldBash, multi_shot: createMultiShot,
   goodberries: createGoodberries, tamed_rat: createTamedRat,
   wrath: createWrath, regrowth: createRegrowth, feral_swipe: createFeralSwipe,
   // Loot / Story
   sharp_rock: createSharpRock, bone_wand: createBoneWand,
-  bone_club: createBoneClub, torch: createTorch,
+  bone_club: createBoneClub, bone_mace: createBoneMace, torch: createTorch,
+  bad_rations: createBadRations, sturdy_boots: createSturdyBoots,
   chicken_leg: createChickenLeg, wardens_whip: createWardensWhip,
+  partially_digested_bone: createPartiallyDigestedBone, corroded_armor: createCorrodedArmor,
+  pet_slime: createPetSlimeCard, slime_jar: createSlimeJar,
   white_claw: createWhiteClaw,
   // Shop cards
   travel_rations: createTravelRations, bandages: createBandages,
@@ -251,6 +329,33 @@ const CARD_REGISTRY = {
   white_wolf_cloak: createWhiteWolfCloak,
 };
 
+// Loot tables: special loot IDs that pick one card from a weighted pool
+const LOOT_TABLES = {
+  bone_pile_loot: [
+    { creator: createBoneClub, weight: 1.0 },
+    { creator: createBoneMace, weight: 1.0 },
+    { creator: createBoneWand, weight: 0.5 },
+  ],
+  slime_loot: [
+    { creator: createPartiallyDigestedBone, weight: 1.0 },
+    { creator: createCorrodedArmor, weight: 1.0 },
+    { creator: createPetSlimeCard, weight: 0.25 },
+    { creator: createSlimeJar, weight: 0.5 },
+  ],
+};
+
+function rollLootTable(id) {
+  const table = LOOT_TABLES[id];
+  if (!table) return null;
+  const totalWeight = table.reduce((s, e) => s + e.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const entry of table) {
+    roll -= entry.weight;
+    if (roll <= 0) return [entry.creator()];
+  }
+  return [table[table.length - 1].creator()];
+}
+
 // Hand sizes per class
 const CLASS_HAND_SIZE = {
   Paladin: 4, Ranger: 4, Wizard: 5, Rogue: 4, Warrior: 4, Druid: 4,
@@ -262,10 +367,20 @@ const images = {};
 let assetsLoaded = false;
 
 function loadImage(id, src) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => { images[id] = img; resolve(img); };
-    img.onerror = () => resolve(null); // don't block on missing images
+    img.onload = () => {
+      // Force eager decode so the browser doesn't defer bitmap decoding
+      // to the first drawImage call (which causes visual glitches on powers)
+      if (img.decode) {
+        img.decode().then(() => { images[id] = img; resolve(img); })
+                     .catch(() => { images[id] = img; resolve(img); });
+      } else {
+        images[id] = img;
+        resolve(img);
+      }
+    };
+    img.onerror = () => resolve(null);
     img.src = src;
   });
 }
@@ -322,30 +437,193 @@ async function loadAssets() {
     loadImage('icon_poison', `${BASE}assets/Icons/PoisonIcon.png`),
     loadImage('icon_shock', `${BASE}assets/Icons/LightningIcon.png`),
     loadImage('icon_rage', `${BASE}assets/Icons/RageIcon.png`),
+    // Card frame overlays (9-slice stretched per card)
+    loadImage('frame_common', `${BASE}assets/Icons/FrameCommon.png`),
+    // Common creature art (eager preload so summons render immediately)
+    loadImage('creature_rat', `${BASE}assets/Cards/SummonRat.jpg`),
+    loadImage('creature_tamed_rat', `${BASE}assets/Cards/TamedRatAbility.jpg`),
+    loadImage('creature_kobold_guard', `${BASE}assets/Cards/KoboldGuard.jpg`),
+    loadImage('creature_thorb', `${BASE}assets/Cards/ThorbAlly.jpg`),
+    loadImage('creature_slime', `${BASE}assets/Cards/SlimeSummon.jpg`),
+    loadImage('creature_restless_bone', `${BASE}assets/Cards/RestlessBoneSummon.jpg`),
+    loadImage('creature_spider', `${BASE}assets/Cards/PetSpider.jpg`),
+    loadImage('creature_wolf', `${BASE}assets/Cards/WolfInSnow.jpg`),
+    loadImage('creature_goblin_sapper', `${BASE}assets/Cards/GoblinSapper.jpg`),
+    // All power art (eager preload — eliminates lazy-load quality flicker on hover)
+    ...Object.entries(POWER_ART_MAP).map(([id, file]) =>
+      loadImage(`power_${id}`, `${BASE}assets/Cards/${file}`)
+    ),
   ]);
   assetsLoaded = true;
 }
 
 // === Input Handling ===
+// Drag-to-target state (alternative to click flow). Initiated on mousedown over a
+// targeted hand card or a ready ally, tracked through mousemove, finalized on mouseup
+// over a target.
+let dragSourceCardIndex = -1;   // hand card index when dragging a card
+let dragSourceAllyIndex = -1;   // player ally index when dragging an ally
+let dragStartX = 0, dragStartY = 0;
+let dragMoved = false;
+let suppressNextClick = false;
+const DRAG_THRESHOLD_PX = 14;
+
+function clearDragState() {
+  dragSourceCardIndex = -1;
+  dragSourceAllyIndex = -1;
+  dragStartX = 0;
+  dragStartY = 0;
+  dragMoved = false;
+}
+
+function canvasPosFromEvent(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = SCREEN_WIDTH / rect.width;
+  const scaleY = SCREEN_HEIGHT / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY,
+  };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  const { x, y } = canvasPosFromEvent(e);
+  // Only track drags during the player's normal turn in COMBAT state
+  if (state !== GameState.COMBAT || !isPlayerTurn || !player || !player.deck) return;
+  if (powerRechargeMode || cardRechargeMode) return;
+
+  // Check player allies first (they sit above the hand row)
+  const allyRects = getPlayerCreatureRects();
+  for (let i = 0; i < player.creatures.length; i++) {
+    if (!allyRects[i]) continue;
+    if (hitTest(x, y, allyRects[i])) {
+      const ally = player.creatures[i];
+      // Allow 0-attack allies that apply poison (Pet Spider) to still attack
+      if (!ally.isAlive || ally.exhausted) return;
+      if (ally.attack <= 0 && !ally.poisonAttack) return;
+      dragSourceAllyIndex = i;
+      dragStartX = x;
+      dragStartY = y;
+      dragMoved = false;
+      return;
+    }
+  }
+
+  // Then hand cards (visible-portion hit areas, topmost first)
+  const handRects = getHandCardRects(player.deck.hand);
+  for (let i = handRects.length - 1; i >= 0; i--) {
+    if (hitTest(x, y, getHandCardHoverRect(handRects, i))) {
+      const card = player.deck.hand[i];
+      if (card.exhausted) return;
+      if (card.cardType === CardType.DEFENSE) return;
+      if (card.isModal) return; // modal cards still go through click flow
+      // Defer entering targeting until the user actually drags
+      dragSourceCardIndex = i;
+      dragStartX = x;
+      dragStartY = y;
+      dragMoved = false;
+      return;
+    }
+  }
+});
+
 canvas.addEventListener('mousemove', (e) => {
   const rect = canvas.getBoundingClientRect();
   const scaleX = SCREEN_WIDTH / rect.width;
   const scaleY = SCREEN_HEIGHT / rect.height;
   mouseX = (e.clientX - rect.left) * scaleX;
   mouseY = (e.clientY - rect.top) * scaleY;
+  // If a drag started on a hand card OR an ally and the user moved past the threshold,
+  // promote it to a real targeting state.
+  if ((dragSourceCardIndex >= 0 || dragSourceAllyIndex >= 0) && !dragMoved) {
+    const dx = mouseX - dragStartX;
+    const dy = mouseY - dragStartY;
+    if (dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+      dragMoved = true;
+      if (dragSourceAllyIndex >= 0) {
+        const ally = player.creatures[dragSourceAllyIndex];
+        if (!ally || !ally.isAlive || ally.exhausted) { clearDragState(); return; }
+        selectedAlly = ally;
+        state = GameState.ALLY_TARGETING;
+        showStickyToast(`${ally.name}: release on an enemy to attack`);
+      } else {
+        const card = player.deck.hand[dragSourceCardIndex];
+        if (!card) { clearDragState(); return; }
+        // Enter targeting mode (single or multi) so the rest of the flow
+        // (arrow drawing, target highlight, click handlers) just works.
+        if (canPlayWithoutTarget(card)) {
+          // Self-targeted cards don't need a drag — treat as a click on release
+        } else if (cardIsMultiTarget(card)) {
+          const rechargeNeeded = getCardRechargeExtra(card);
+          if (rechargeNeeded > 0) { clearDragState(); return; }
+          selectedCardIndex = dragSourceCardIndex;
+          enterMultiTargeting(dragSourceCardIndex);
+        } else if (needsTarget(card)) {
+          const rechargeNeeded = getCardRechargeExtra(card);
+          if (rechargeNeeded > 0) { clearDragState(); return; }
+          selectedCardIndex = dragSourceCardIndex;
+          state = GameState.TARGETING;
+          showStickyToast('Release on an enemy to attack');
+        }
+      }
+    }
+  }
+});
+
+canvas.addEventListener('mouseup', (e) => {
+  const { x, y } = canvasPosFromEvent(e);
+  if ((dragSourceCardIndex >= 0 || dragSourceAllyIndex >= 0) && dragMoved) {
+    // Drag completed — try to fire on the target under the cursor
+    suppressNextClick = true;
+    if (state === GameState.TARGETING) {
+      handleTargetingClick(x, y);
+    } else if (state === GameState.MULTI_TARGETING) {
+      handleMultiTargetingClick(x, y);
+    } else if (state === GameState.ALLY_TARGETING) {
+      handleAllyTargetingClick(x, y);
+    }
+  }
+  clearDragState();
 });
 
 canvas.addEventListener('click', (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = SCREEN_WIDTH / rect.width;
-  const scaleY = SCREEN_HEIGHT / rect.height;
-  const x = (e.clientX - rect.left) * scaleX;
-  const y = (e.clientY - rect.top) * scaleY;
+  if (suppressNextClick) {
+    suppressNextClick = false;
+    return;
+  }
+  const { x, y } = canvasPosFromEvent(e);
   handleClick(x, y);
 });
 
 document.addEventListener('keydown', (e) => {
+  // Ctrl+C in combat: copy full combat log to clipboard
+  if (e.ctrlKey && e.key === 'c' && combatLog.length > 0) {
+    const text = combatLog.map(e => e.text).join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('Combat log copied to clipboard', 1500);
+    });
+    return;
+  }
+  // Shift: freeze whichever preview is currently showing (card, power, or
+  // creature) so the user can mouse over its keyword icons (Scry, Heal, …) to
+  // read tooltips, and other hovers can't swap the preview while shift is held.
+  if (e.key === 'Shift' && !isShiftFrozen() &&
+      (hoveredCardPreview || hoveredPowerPreview || hoveredCreaturePreview)) {
+    shiftFreezeCard = hoveredCardPreview;
+    shiftFreezePower = hoveredPowerPreview;
+    shiftFreezeCreature = hoveredCreaturePreview;
+    shiftFreezeMouseX = mouseX;
+    shiftFreezeMouseY = mouseY;
+  }
   handleKeyDown(e.key, e);
+});
+
+document.addEventListener('keyup', (e) => {
+  if (e.key === 'Shift') {
+    shiftFreezeCard = null;
+    shiftFreezePower = null;
+    shiftFreezeCreature = null;
+  }
 });
 
 canvas.addEventListener('wheel', (e) => {
@@ -353,6 +631,14 @@ canvas.addEventListener('wheel', (e) => {
   const scrollAmount = e.deltaY > 0 ? 40 : -40;
   if (state === GameState.SHOP) shopScrollY = Math.max(0, shopScrollY + scrollAmount);
   if (state === GameState.INVENTORY) inventoryScrollY = Math.max(0, inventoryScrollY + scrollAmount);
+  // Combat log scroll (only when mouse is over the log area)
+  const isCombat = state === GameState.COMBAT || state === GameState.TARGETING ||
+    state === GameState.DEFENDING || state === GameState.DAMAGE_SOURCE ||
+    state === GameState.POWER_TARGETING || state === GameState.ALLY_TARGETING ||
+    state === GameState.MULTI_TARGETING;
+  if (isCombat && mouseX >= COMBAT_LOG_AREA.x && mouseY < COMBAT_LOG_AREA.y + COMBAT_LOG_AREA.h) {
+    combatLogScrollY = Math.max(0, combatLogScrollY - scrollAmount); // scroll up = positive
+  }
   if (state === GameState.HELP_SCREEN) helpScrollY = Math.max(0, helpScrollY + scrollAmount);
   if (state === GameState.ENCOUNTER_TEXT) encounterTextScrollY = Math.max(0, encounterTextScrollY + scrollAmount);
   if (state === GameState.LOAD_GAME || state === GameState.SAVE_GAME) {
@@ -391,32 +677,46 @@ function addLog(text, color = Colors.WHITE, card = null) {
     }
   }
   combatLog.push({ text, color, card, arrow });
-  if (combatLog.length > 100) combatLog.shift();
-  // Auto-spawn damage numbers for damage messages in combat
-  if ((state === GameState.COMBAT || state === GameState.TARGETING) && text.includes('dmg to') || text.includes('damage to')) {
-    const match = text.match(/(\d+)\s+(?:dmg|damage|true dmg)/);
-    if (match) {
-      const isToPlayer = text.includes('to you');
-      const x = isToPlayer ? 120 : SCREEN_WIDTH / 2;
-      const y = isToPlayer ? SCREEN_HEIGHT - 160 : 80;
-      spawnDamageNumber(x, y, `-${match[1]}`, color);
-    }
-  }
+  if (combatLog.length > 200) combatLog.shift();
+  // Auto-pin to bottom when new entries arrive
+  combatLogScrollY = 0;
 }
 
-// Yellow on-screen temporary message
+// On-screen temporary message with style variants
 let toastMessage = '';
 let toastTimer = 0;
 let toastSticky = false;
+let toastStyle = ''; // '', 'damage', 'recharge', 'multi'
+let screenFlashTimer = 0;
 function showToast(text, durationMs = 2500) {
   toastMessage = text;
   toastTimer = durationMs;
   toastSticky = false;
+  toastStyle = '';
+}
+function showDamageToast(text, durationMs = 2500) {
+  toastMessage = text;
+  toastTimer = durationMs;
+  toastSticky = false;
+  toastStyle = 'damage';
+  screenFlashTimer = 300;
+}
+function showStyledToast(text, style = '', durationMs = null) {
+  toastMessage = text;
+  if (durationMs && durationMs > 0) {
+    toastTimer = durationMs;
+    toastSticky = false;
+  } else {
+    toastTimer = 1;
+    toastSticky = true;
+  }
+  toastStyle = style;
 }
 function showStickyToast(text) {
   toastMessage = text;
-  toastTimer = 1; // any positive value so drawToast renders
+  toastTimer = 1;
   toastSticky = true;
+  toastStyle = '';
 }
 function hideToast() {
   toastMessage = '';
@@ -474,8 +774,17 @@ function handleClick(x, y) {
     case GameState.POWER_CHOICE:
       handlePowerChoiceClick(x, y);
       break;
+    case GameState.ALLY_TARGETING:
+      handleAllyTargetingClick(x, y);
+      break;
+    case GameState.MULTI_TARGETING:
+      handleMultiTargetingClick(x, y);
+      break;
     case GameState.MODAL_SELECT:
       handleModalSelectClick(x, y);
+      break;
+    case GameState.SCRY_SELECT:
+      handleScrySelectClick(x, y);
       break;
     case GameState.PERK_SELECT:
       handlePerkSelectClick(x, y);
@@ -527,13 +836,13 @@ function handleKeyDown(key, event) {
     } else if (cardRechargeMode) {
       cancelCardRecharge();
     } else if (state === GameState.MODAL_SELECT) {
-      modalCard = null;
-      modalTarget = null;
-      state = GameState.COMBAT;
+      cancelModalSelect();
     } else if (state === GameState.TARGETING) {
-      // Refund any cards spent on recharge_extra cost
       if (cardRechargedCards.length > 0) {
         cancelCardRecharge();
+      }
+      if (barrageMode) {
+        cancelBarrage();
       }
       selectedCardIndex = -1;
       hideToast();
@@ -542,6 +851,10 @@ function handleKeyDown(key, event) {
       cancelPowerTargeting();
     } else if (state === GameState.POWER_CHOICE) {
       cancelPowerChoice();
+    } else if (state === GameState.ALLY_TARGETING) {
+      cancelAllyTargeting();
+    } else if (state === GameState.MULTI_TARGETING) {
+      cancelMultiTargeting();
     } else if (state === GameState.COMBAT && selectedCardIndex !== -1) {
       // Deselect a selected card first
       selectedCardIndex = -1;
@@ -616,6 +929,17 @@ function handleKeyDown(key, event) {
       state = GameState.HELP_SCREEN;
     }
   }
+  // Arrow-key map navigation: pick the accessible connected node whose path
+  // best matches the pressed direction (up/down/left/right), then move.
+  if (state === GameState.MAP &&
+      (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight')) {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    const dir = key === 'ArrowUp' ? 'up'
+      : key === 'ArrowDown' ? 'down'
+      : key === 'ArrowLeft' ? 'left' : 'right';
+    const target = pickMapNodeInDirection(dir);
+    if (target) moveToMapNode(target);
+  }
 }
 
 // ============================================================
@@ -630,6 +954,9 @@ function handleMenuClick(x, y) {
 }
 
 function startNewGame() {
+  player = null;
+  currentMap = null;
+  currentEncounter = null;
   state = GameState.CHARACTER_SELECT;
 }
 
@@ -835,7 +1162,6 @@ function startGameWithAbility(ability) {
   const cards = deckFns[selectedClass]();
   for (const c of cards) player.deck.addCard(c);
   player.deck.addCard(ability);
-
   // Add class power
   const power = getClassPower(selectedClass);
   player.addPower(power);
@@ -860,38 +1186,50 @@ function drawCharacterSelect() {
     ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
   }
 
-  // Semi-transparent panel behind title for clarity
-  const titlePanelW = 600;
-  const titlePanelH = 100;
-  const titlePanelX = (SCREEN_WIDTH - titlePanelW) / 2;
-  const titlePanelY = 40;
-  ctx.fillStyle = 'rgba(0,0,0,0.65)';
-  ctx.fillRect(titlePanelX, titlePanelY, titlePanelW, titlePanelH);
-  ctx.strokeStyle = Colors.GOLD;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(titlePanelX, titlePanelY, titlePanelW, titlePanelH);
-
-  // Title with shadow
-  ctx.shadowColor = 'rgba(0,0,0,0.9)';
-  ctx.shadowBlur = 6;
-  ctx.shadowOffsetY = 2;
+  // Title banner (BannerLarge sprite with the header text centered on it)
+  const titleBannerW = 640;
+  const titleBannerH = 110;
+  const titleBannerX = (SCREEN_WIDTH - titleBannerW) / 2;
+  const titleBannerY = 30;
+  if (images.banner_large) {
+    ctx.drawImage(images.banner_large, titleBannerX, titleBannerY, titleBannerW, titleBannerH);
+  } else {
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(titleBannerX, titleBannerY, titleBannerW, titleBannerH);
+    ctx.strokeStyle = Colors.GOLD;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(titleBannerX, titleBannerY, titleBannerW, titleBannerH);
+  }
+  ctx.save();
+  // Strong drop shadow: same style as card names so text consistently floats.
+  ctx.shadowColor = 'rgba(0,0,0,0.95)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 3;
   ctx.fillStyle = Colors.GOLD;
   ctx.font = 'bold 44px serif';
   ctx.textAlign = 'center';
-  ctx.fillText('Choose Your Class', SCREEN_WIDTH / 2, titlePanelY + 60);
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
+  ctx.fillText('Choose Your Class', SCREEN_WIDTH / 2, titleBannerY + titleBannerH / 2 + 12);
+  ctx.restore();
 
   const classArtIds = {
     Paladin: 'paladin_class', Ranger: 'ranger_class', Wizard: 'wizard_class',
     Rogue: 'rogue_class', Warrior: 'warrior_class', Druid: 'druid_class',
   };
 
+  const artShift = 10; // push hero art down further so the top filigree clears faces/heads
+  const nameBarH = 92;  // was 70 — adds ~1 line of vertical room so the frame's bottom
+                        // filigree doesn't chew into the Class Name / description text.
   for (const r of getClassRects()) {
     const hovered = hitTest(mouseX, mouseY, r);
     const art = getCardArt(classArtIds[r.name]);
 
+    // 1. Art — shifted down `artShift` px, clipped to the card rect so the
+    // overflow at the bottom doesn't spill past the card.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.clip();
     if (art) {
       const imgAspect = art.width / art.height;
       const cardAspect = r.w / r.h;
@@ -899,7 +1237,7 @@ function drawCharacterSelect() {
       if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
       else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
       ctx.globalAlpha = hovered ? 1 : 0.85;
-      ctx.drawImage(art, sx, sy, sw, sh, r.x, r.y, r.w, r.h);
+      ctx.drawImage(art, sx, sy, sw, sh, r.x, r.y + artShift, r.w, r.h);
       ctx.globalAlpha = 1;
     } else {
       ctx.fillStyle = hovered ? r.color : '#2a1a4e';
@@ -907,37 +1245,70 @@ function drawCharacterSelect() {
       ctx.fillRect(r.x, r.y, r.w, r.h);
       ctx.globalAlpha = 1;
     }
+    ctx.restore();
 
-    ctx.strokeStyle = hovered ? Colors.GOLD : '#888';
-    ctx.lineWidth = hovered ? 4 : 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-
-    // Name bar at bottom — taller, more opaque
-    const nameBarH = 70;
+    // 2. Description / name bar at bottom — drawn BEFORE the frame so the
+    // frame's bottom filigree sits on top of the bar. The top-edge stroke
+    // matches the class-tinted frame so the bar reads as part of the theme.
     ctx.fillStyle = 'rgba(0,0,0,0.85)';
     ctx.fillRect(r.x, r.y + r.h - nameBarH, r.w, nameBarH);
-    // Top edge highlight
-    ctx.strokeStyle = hovered ? Colors.GOLD : '#666';
+    ctx.strokeStyle = hovered ? Colors.GOLD : getFrameAccentColorFromHex(r.color);
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(r.x, r.y + r.h - nameBarH);
     ctx.lineTo(r.x + r.w, r.y + r.h - nameBarH);
     ctx.stroke();
 
-    // Class name with shadow
-    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
     ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 2;
     ctx.fillStyle = hovered ? Colors.GOLD : Colors.WHITE;
     ctx.font = 'bold 24px serif';
     ctx.textAlign = 'center';
-    ctx.fillText(r.name, r.x + r.w / 2, r.y + r.h - 40);
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
+    ctx.textBaseline = 'middle'; // Y coord is the vertical CENTER of the text
+    // Class name: fixed near the top of the name bar so it sits in the same
+    // place whether the description takes 1 or 2 lines.
+    ctx.fillText(r.name, r.x + r.w / 2, r.y + r.h - 74);
+    ctx.restore();
 
-    // Description — brighter, larger
-    ctx.fillStyle = '#e0e0e0';
+    // Description: wrap to at most 2 lines. Longer descriptions (e.g. "Skilled
+    // archer with companions") no longer clip off the right edge.
     ctx.font = '14px sans-serif';
-    ctx.fillText(r.desc, r.x + r.w / 2, r.y + r.h - 15);
+    const descLines = wrapText(r.desc, r.w - 20, 14).slice(0, 2);
+    ctx.fillStyle = '#e0e0e0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (descLines.length === 1) {
+      ctx.fillText(descLines[0], r.x + r.w / 2, r.y + r.h - 36);
+    } else {
+      ctx.fillText(descLines[0], r.x + r.w / 2, r.y + r.h - 46);
+      ctx.fillText(descLines[1], r.x + r.w / 2, r.y + r.h - 26);
+    }
+    ctx.textBaseline = 'alphabetic';
+
+    // 3. Ornate 9-slice frame on top of art + name bar, tinted by class color.
+    const frameImg = images.frame_common;
+    if (frameImg) {
+      const corner = CARD_FRAME_CORNERS.frame_common || 24;
+      const scaledCorner = Math.max(8, Math.min(corner, Math.floor(Math.min(r.w, r.h) * 0.11)));
+      const tinted = getTintedFrameImage(frameImg, 'frame_common', r.color);
+      draw9SliceFrame(tinted, r.x, r.y, r.w, r.h, scaledCorner);
+      if (hovered) {
+        ctx.save();
+        ctx.strokeStyle = Colors.GOLD;
+        ctx.lineWidth = 3;
+        ctx.shadowColor = Colors.GOLD;
+        ctx.shadowBlur = 16;
+        ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+        ctx.restore();
+      }
+    } else {
+      ctx.strokeStyle = hovered ? Colors.GOLD : '#888';
+      ctx.lineWidth = hovered ? 4 : 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+    }
   }
 
   // Back button
@@ -966,21 +1337,44 @@ function getAbilityCardRects() {
 }
 
 function handleAbilitySelectClick(x, y) {
-  // Back button (matches character select style)
-  const backBtn = { x: 40, y: SCREEN_HEIGHT - 100, w: 200, h: 70 };
-  if (hitTest(x, y, backBtn)) {
-    state = GameState.CHARACTER_SELECT;
-    return;
+  // Back button (matches character select style) — not shown in shrine mode
+  if (!shrineAbilityMode) {
+    const backBtn = { x: 40, y: SCREEN_HEIGHT - 100, w: 200, h: 70 };
+    if (hitTest(x, y, backBtn)) {
+      state = GameState.CHARACTER_SELECT;
+      return;
+    }
   }
 
   const rects = getAbilityCardRects();
   for (let i = 0; i < rects.length; i++) {
     if (hitTest(x, y, rects[i])) {
+      if (shrineAbilityMode) {
+        // Lost Shrine: add the chosen card to master deck and place a copy in hand
+        // (overflowing to the top of the draw pile if the hand is full).
+        const ability = abilityChoices[i];
+        player.deck.addCard(ability); // adds original to masterDeck only
+        const copy = ability.copy();
+        if (player.deck.hand.length < MAX_HAND_SIZE) {
+          player.deck.hand.push(copy);
+          addLog(`The shrine bestows ${ability.name} (added to hand).`, Colors.GOLD);
+        } else {
+          player.deck.drawPile.unshift(copy);
+          addLog(`The shrine bestows ${ability.name} (top of deck — hand is full).`, Colors.GOLD);
+        }
+        shrineAbilityMode = false;
+        abilityChoices = [];
+        state = GameState.MAP;
+        autosaveNow();
+        return;
+      }
       if (player) {
-        // Level-up ability selection (mid-game)
+        // Level-up ability selection (mid-game) — add to deck then rebalance
         const ability = abilityChoices[i];
         player.deck.addCard(ability);
         player.level++;
+        // Rebalance: merge everything, heal all, shuffle, draw fresh hand
+        player.deck.rebalance(getPlayerHandSize(), MAX_HAND_SIZE);
         addLog(`Level Up! Gained ${ability.name}. Level ${player.level}.`, Colors.GOLD);
         // Upgrade companions at level 3+
         if (player.level >= 3) upgradeCompanions();
@@ -1019,13 +1413,18 @@ function drawAbilitySelect() {
   ctx.fillStyle = Colors.GOLD;
   ctx.font = 'bold 36px serif';
   ctx.textAlign = 'center';
-  ctx.fillText('Choose Your Starting Ability', SCREEN_WIDTH / 2, 80);
+  const titleText = shrineAbilityMode ? "The Shrine's Blessing" : 'Choose Your Starting Ability';
+  ctx.fillText(titleText, SCREEN_WIDTH / 2, 80);
 
   ctx.fillStyle = '#e0e0e0';
   ctx.font = '20px sans-serif';
-  ctx.fillText(`${selectedClass} — Pick one ability card to add to your deck`, SCREEN_WIDTH / 2, 120);
+  const subtitleText = shrineAbilityMode
+    ? `${selectedClass} — Choose one card. It joins your hand immediately.`
+    : `${selectedClass} — Pick one ability card to add to your deck`;
+  ctx.fillText(subtitleText, SCREEN_WIDTH / 2, 120);
 
   const rects = getAbilityCardRects();
+  let hoveredAbilityIdx = -1;
   for (let i = 0; i < abilityChoices.length; i++) {
     const card = abilityChoices[i];
     const r = rects[i];
@@ -1033,6 +1432,7 @@ function drawAbilitySelect() {
     drawCard(card, r.x, r.y, r.w, r.h, hovered, hovered, 'full');
 
     if (hovered) {
+      hoveredAbilityIdx = i;
       ctx.fillStyle = Colors.GOLD;
       ctx.font = 'bold 14px sans-serif';
       ctx.textAlign = 'center';
@@ -1040,8 +1440,33 @@ function drawAbilitySelect() {
     }
   }
 
-  // Back button (matches character select style)
-  drawStyledButton(40, SCREEN_HEIGHT - 100, 200, 70, '< Back', () => { state = GameState.CHARACTER_SELECT; }, 'large', 22);
+  // If the hovered ability has a previewCard or previewCreature, show a small
+  // mini-card preview to the right of the hovered card (matches in-combat hover).
+  if (hoveredAbilityIdx >= 0) {
+    const card = abilityChoices[hoveredAbilityIdx];
+    const r = rects[hoveredAbilityIdx];
+    if (card.previewCard || card.previewCreature) {
+      const sideW = COMBAT_POWER_W;
+      const sideH = COMBAT_POWER_H;
+      const gap = 10;
+      let sx = r.x + r.w + gap;
+      // Flip to the left if it would go off-screen
+      if (sx + sideW > SCREEN_WIDTH - 10) {
+        sx = r.x - sideW - gap;
+      }
+      const sy = r.y + Math.floor((r.h - sideH) / 2);
+      if (card.previewCard) {
+        drawCard(card.previewCard, sx, sy, sideW, sideH, false, false);
+      } else if (card.previewCreature) {
+        drawCreatureMiniCard(card.previewCreature, { x: sx, y: sy, w: sideW, h: sideH }, true);
+      }
+    }
+  }
+
+  // Back button (matches character select style) — hidden in shrine mode
+  if (!shrineAbilityMode) {
+    drawStyledButton(40, SCREEN_HEIGHT - 100, 200, 70, '< Back', () => { state = GameState.CHARACTER_SELECT; }, 'large', 22);
+  }
 
   ctx.textAlign = 'left';
 }
@@ -1050,16 +1475,99 @@ function drawAbilitySelect() {
 // MAP
 // ============================================================
 
+function getMapTransform(area) {
+  const mapImg = images[`map_${area}`];
+  let scale = 1, offX = 0, offY = 0;
+  if (mapImg) {
+    scale = Math.min(SCREEN_WIDTH / mapImg.width, SCREEN_HEIGHT / mapImg.height);
+    const drawW = mapImg.width * scale;
+    const drawH = mapImg.height * scale;
+    offX = Math.floor((SCREEN_WIDTH - drawW) / 2);
+    offY = Math.floor((SCREEN_HEIGHT - drawH) / 2);
+  }
+  return {
+    scale, offX, offY,
+    toScreen: (pos) => ({
+      x: Math.round(offX + pos[0] * scale),
+      y: Math.round(offY + pos[1] * scale),
+    }),
+  };
+}
+
 function getMapNodeRects() {
   if (!currentMap) return [];
   const currentArea = currentMap.getCurrentNode()?.mapArea || '';
+  const { toScreen } = getMapTransform(currentArea);
   const rects = [];
   for (const [id, node] of Object.entries(currentMap.nodes)) {
     if (node.mapArea !== currentArea) continue;
-    const [nx, ny] = node.position;
+    const { x: nx, y: ny } = toScreen(node.position);
     rects.push({ x: nx - 18, y: ny - 18, w: 36, h: 36, nodeId: id, node });
   }
   return rects;
+}
+
+// Pick the best connected, accessible node to move to in a given arrow direction.
+// Direction is one of 'up' | 'down' | 'left' | 'right'.
+// Returns a node (or null if nothing matches).
+//
+// How this works: for each accessible connection, we take the vector from the
+// current node to the candidate (image-space coords; +y points down). We split
+// candidates into primary axes by picking the axis whose delta is larger in
+// magnitude — that's the direction the path is "mostly" going. Ties favor the
+// horizontal (the map tends to have wider corridors than vertical drops).
+// Among candidates that match the requested direction we pick the most-aligned
+// one — i.e. the smallest perpendicular drift relative to the primary delta.
+function pickMapNodeInDirection(direction) {
+  if (!currentMap) return null;
+  const current = currentMap.getCurrentNode();
+  if (!current) return null;
+  const [cx, cy] = current.position;
+  let best = null;
+  let bestScore = Infinity;
+  for (const connId of current.connections) {
+    const node = currentMap.getNode(connId);
+    if (!node) continue;
+    if (node.mapArea !== current.mapArea) continue;
+    if (node.isLocked) continue;
+    const [nx, ny] = node.position;
+    const dx = nx - cx;
+    const dy = ny - cy;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    // Primary axis of this connection (>= ties horizontal so roughly-diagonal paths
+    // respond to LEFT/RIGHT rather than UP/DOWN — matches most map layouts).
+    const horizontal = adx >= ady;
+    let matches = false;
+    switch (direction) {
+      case 'right': matches = horizontal && dx > 0; break;
+      case 'left':  matches = horizontal && dx < 0; break;
+      case 'down':  matches = !horizontal && dy > 0; break;
+      case 'up':    matches = !horizontal && dy < 0; break;
+    }
+    if (!matches) continue;
+    // Score: lower = better match. Use the perpendicular drift (how off-axis the
+    // path points). Shorter paths tie-break slightly in favor of nearer nodes.
+    const perp = (direction === 'up' || direction === 'down') ? adx : ady;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const score = perp * 1000 + dist; // perp dominates; dist breaks ties
+    if (score < bestScore) {
+      bestScore = score;
+      best = node;
+    }
+  }
+  return best;
+}
+
+function moveToMapNode(node) {
+  if (!node || !currentMap) return;
+  if (node.isLocked) return;
+  const current = currentMap.getCurrentNode();
+  if (!current || !current.connections.includes(node.id)) return;
+  if (node.isDone && !node.canRevisit) {
+    currentMap.currentNodeId = node.id;
+  } else {
+    startNodeEncounter(node.id);
+  }
 }
 
 function handleMapClick(x, y) {
@@ -1309,8 +1817,8 @@ function advanceEncounterPhase() {
     }
 
     state = GameState.MAP;
-    // Auto-save
-    saveToAutoSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack });
+    // Autosave after the full encounter (combat + loot + all dialogs) is done
+    autosaveNow();
     return;
   }
 
@@ -1323,6 +1831,31 @@ function advanceEncounterPhase() {
       break;
     case EncounterPhase.CHOICE:
       encounterChoiceResult = null;
+      // Restore persisted exhausted state from the current map node so previous
+      // visits' choices remain greyed out across re-entries.
+      {
+        const node = currentMap ? currentMap.getCurrentNode() : null;
+        const persisted = (node && Array.isArray(node.exhaustedChoices)) ? node.exhaustedChoices : [];
+        if (persisted.length > 0 && phase.choices) {
+          for (const c of phase.choices) {
+            const key = c.effectType || c.text;
+            if (persisted.includes(key)) c.exhausted = true;
+          }
+        }
+        // If every repeat-choice is already exhausted, the node is dormant — bail out.
+        if (phase.choices) {
+          const repeatChoices = phase.choices.filter(c => c.returnToChoices);
+          const allDone = repeatChoices.length > 0 && repeatChoices.every(c => c.exhausted);
+          if (allDone && node) {
+            node.isDone = true;
+            node.canRevisit = false;
+            currentEncounter = null;
+            state = GameState.MAP;
+            autosaveNow();
+            return;
+          }
+        }
+      }
       state = GameState.ENCOUNTER_CHOICE;
       break;
     case EncounterPhase.COMBAT:
@@ -1340,11 +1873,20 @@ function advanceEncounterPhase() {
       // Add loot cards to player's deck
       phase._lootedCards = [];
       for (const cardId of phase.lootCards) {
-        const creator = CARD_REGISTRY[cardId];
-        if (creator) {
-          const card = creator();
-          player.deck.addCard(card);
-          phase._lootedCards.push(card);
+        // Loot tables: special IDs that roll a random card
+        const lootTableCards = rollLootTable(cardId);
+        if (lootTableCards) {
+          for (const card of lootTableCards) {
+            player.deck.addCard(card, true);
+            phase._lootedCards.push(card);
+          }
+        } else {
+          const creator = CARD_REGISTRY[cardId];
+          if (creator) {
+            const card = creator();
+            player.deck.addCard(card, true);
+            phase._lootedCards.push(card);
+          }
         }
       }
       phase._lootGoldAmount = lootGoldAmount;
@@ -1392,6 +1934,7 @@ function setupEnemyForCombat(enemyId) {
       enemy = new Character('Slime');
       enemy.deck = new Deck();
       for (let i = 0; i < 12; i++) enemy.deck.addCard(createSlimeAppendage());
+      enemy.addPower(createSplit());
     },
     prison_guards: () => {
       enemy = new Character('Kobold Warden');
@@ -1658,35 +2201,54 @@ function drawMap() {
   const currentArea = currentNode?.mapArea || '';
   const mapImg = images[`map_${currentArea}`];
 
+  // Compute image→screen transform so node positions (in image coords) map correctly.
+  const { scale: mapScale, offX: mapOffX, offY: mapOffY, toScreen } = getMapTransform(currentArea);
   if (mapImg) {
-    ctx.drawImage(mapImg, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    const drawW = mapImg.width * mapScale;
+    const drawH = mapImg.height * mapScale;
+    // Fill background (letterbox)
+    ctx.fillStyle = '#0a0a14';
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    ctx.drawImage(mapImg, mapOffX, mapOffY, drawW, drawH);
   } else {
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
   }
 
-  // Draw connections
+  // Draw connections (skip lines to/from locked nodes)
   ctx.strokeStyle = 'rgba(200,200,200,0.3)';
   ctx.lineWidth = 2;
   for (const [id, node] of Object.entries(currentMap.nodes)) {
     if (node.mapArea !== currentArea) continue;
+    if (node.isLocked) continue;
     for (const connId of node.connections) {
       const conn = currentMap.getNode(connId);
-      if (!conn || conn.mapArea !== currentArea) continue;
+      if (!conn || conn.mapArea !== currentArea || conn.isLocked) continue;
+      const a = toScreen(node.position);
+      const b = toScreen(conn.position);
       ctx.beginPath();
-      ctx.moveTo(node.position[0], node.position[1]);
-      ctx.lineTo(conn.position[0], conn.position[1]);
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
       ctx.stroke();
     }
   }
 
-  // Draw nodes
+  // Fog of war overlay (drawn between map background and nodes)
+  drawFogOfWar(currentArea);
+
+  // Draw nodes (on top of fog)
   const accessible = currentMap.getAccessibleNodes().map(n => n.id);
   for (const [id, node] of Object.entries(currentMap.nodes)) {
     if (node.mapArea !== currentArea) continue;
-    const [nx, ny] = node.position;
+    if (node.isLocked) continue;
+    const { x: nx, y: ny } = toScreen(node.position);
     const isCurrent = id === currentMap.currentNodeId;
     const isAccessible = accessible.includes(id);
+    const isVisible = visitedNodes.has(id) || isAccessible || isCurrent;
+    // In fog areas (non-outdoor), only show visible nodes
+    const outdoorAreas = new Set(['mountain_path', 'plains', 'arriving_city', 'qualibaf', 'north_qualibaf', 'tharnag', 'grand_hall', 'grand_staircase', 'throne_room', 'artisan_hall', 'personal_quarters', 'volcano']);
+    if (!outdoorAreas.has(currentArea) && !isVisible) continue;
+
     const hovered = hitTest(mouseX, mouseY, { x: nx - 18, y: ny - 18, w: 36, h: 36 });
 
     // Node circle
@@ -1724,13 +2286,10 @@ function drawMap() {
     }
   }
 
-  // Fog of war overlay for dark areas
-  drawFogOfWar(currentArea);
-
   // Current node description panel
   if (currentNode) {
     const panelY = SCREEN_HEIGHT - 120;
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fillRect(0, panelY, SCREEN_WIDTH, 120);
     ctx.fillStyle = Colors.GOLD;
     ctx.font = 'bold 20px sans-serif';
@@ -1918,7 +2477,9 @@ function handleEncounterChoiceClick(x, y) {
     // Apply effect based on type
     switch (eff) {
       case 'damage':
-        if (val > 0) player.takeDamageFromDeck(val);
+        if (val > 0) {
+          player.takeDamageFromDeck(val);
+        }
         break;
 
       case 'fall_to_sewers': {
@@ -1931,13 +2492,9 @@ function handleEncounterChoiceClick(x, y) {
       }
 
       case 'short_rest':
-        // Heal val HP (move cards from damage pile back)
-        healPlayer(val);
-        break;
-
       case 'search_camp':
-        // Give a random small reward
-        gold += Math.floor(Math.random() * 6) + 1;
+        // Already resolved at selection time — autosave after state change
+        autosaveNow();
         break;
 
       case 'move_to_kitchen': {
@@ -1957,7 +2514,7 @@ function handleEncounterChoiceClick(x, y) {
       case 'kitchen_talk': {
         // Cook gives chicken leg
         const leg = createChickenLeg();
-        player.deck.addCard(leg);
+        player.deck.addCard(leg, true);
         break;
       }
 
@@ -1989,9 +2546,32 @@ function handleEncounterChoiceClick(x, y) {
         healPlayer(99);
         break;
 
+      case 'shrine_ability_card': {
+        // Lost Shrine grants a class ability card. Route through ABILITY_SELECT.
+        abilityChoices = getAbilityChoices(selectedClass, 3);
+        shrineAbilityMode = true;
+        // Deactivate the shrine node now — praying is a one-time gift.
+        const node = currentMap.getCurrentNode();
+        if (node) { node.isDone = true; node.canRevisit = false; }
+        encounterChoiceResult = null;
+        currentEncounter = null;
+        state = GameState.ABILITY_SELECT;
+        return;
+      }
+
       case 'try_squeeze':
-        // Recharge a random card (take 1 damage)
-        player.takeDamageFromDeck(1);
+        // Already resolved at selection time (see resolveTrySqueeze)
+        // If squeeze succeeded, complete the encounter and deactivate the node
+        if (encounterChoiceResult._squeezeSucceeded) {
+          const node = currentMap.getCurrentNode();
+          currentMap.completeCurrentNode();
+          if (node) { node.canRevisit = false; }
+          encounterChoiceResult = null;
+          currentEncounter = null;
+          state = GameState.MAP;
+          autosaveNow();
+          return;
+        }
         break;
 
       case 'prison_fight':
@@ -2053,8 +2633,64 @@ function handleEncounterChoiceClick(x, y) {
       }
 
       default:
-        // No effect or unknown effect
         break;
+    }
+
+    // Deactivate the map node if this choice requires it
+    if (encounterChoiceResult.deactivatesNode) {
+      const node = currentMap.getCurrentNode();
+      if (node) { node.isDone = true; node.canRevisit = false; }
+    }
+
+    if (encounterChoiceResult.returnToChoices) {
+      // Mark exhausted unless repeatable
+      if (!encounterChoiceResult.repeatable) {
+        encounterChoiceResult.exhausted = true;
+        // Persist to the map node so the option stays greyed out across revisits.
+        const node = currentMap.getCurrentNode();
+        if (node) {
+          if (!Array.isArray(node.exhaustedChoices)) node.exhaustedChoices = [];
+          const key = encounterChoiceResult.effectType || encounterChoiceResult.text;
+          if (key && !node.exhaustedChoices.includes(key)) {
+            node.exhaustedChoices.push(key);
+          }
+          autosaveNow();
+        }
+      }
+      encounterChoiceResult = null;
+      // If every repeat choice is now exhausted, the node becomes dormant and the
+      // encounter auto-completes — the player doesn't have to click Leave.
+      const phase = currentEncounter && currentEncounter.currentPhase;
+      if (phase && phase.choices) {
+        const repeats = phase.choices.filter(c => c.returnToChoices);
+        const allDone = repeats.length > 0 && repeats.every(c => c.exhausted);
+        if (allDone) {
+          const node = currentMap.getCurrentNode();
+          if (node) { node.isDone = true; node.canRevisit = false; }
+          currentEncounter = null;
+          state = GameState.MAP;
+          autosaveNow();
+        }
+      }
+      return;
+    }
+    if (encounterChoiceResult.completesEncounter) {
+      // Check if all non-leave choices were exhausted — if so, deactivate the node
+      const phase = currentEncounter.currentPhase;
+      let nodeDeactivated = false;
+      if (phase && phase.choices) {
+        const nonLeaveChoices = phase.choices.filter(c => c.returnToChoices);
+        const allExhausted = nonLeaveChoices.length > 0 && nonLeaveChoices.every(c => c.exhausted);
+        if (allExhausted) {
+          const node = currentMap.getCurrentNode();
+          if (node) { node.isDone = true; node.canRevisit = false; nodeDeactivated = true; }
+        }
+      }
+      encounterChoiceResult = null;
+      currentEncounter = null;
+      state = GameState.MAP;
+      if (nodeDeactivated) autosaveNow();
+      return;
     }
 
     currentEncounter.advancePhase();
@@ -2065,70 +2701,230 @@ function handleEncounterChoiceClick(x, y) {
   const rects = getChoiceRects();
   for (const r of rects) {
     if (hitTest(x, y, r)) {
+      if (r.choice.exhausted) return;
       encounterChoiceResult = r.choice;
+      if (r.choice.effectType === 'damage' && r.choice.effectValue > 0) {
+        showDamageToast(`-${r.choice.effectValue} HP!`, 3000);
+      }
+      // Resolve try_squeeze immediately so result text is dynamic
+      if (r.choice.effectType === 'try_squeeze') resolveTrySqueeze(r.choice);
+      // Resolve search_camp immediately to generate loot/gold for result text
+      if (r.choice.effectType === 'search_camp') resolveSearchCamp(r.choice);
+      // Resolve short_rest immediately
+      if (r.choice.effectType === 'short_rest') resolveShortRest(r.choice);
       return;
     }
+  }
+}
+
+// Safe autosave — wraps try/catch so a save failure never crashes the game
+function autosaveNow() {
+  try {
+    if (!player || !currentMap) return;
+    saveToAutoSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack });
+    addLog('  [Auto-saved]', Colors.GRAY);
+  } catch (err) {
+    console.warn('Autosave failed:', err);
+  }
+}
+
+function resolveTrySqueeze(choice) {
+  if (!player || !player.deck || player.deck.hand.length === 0) {
+    choice.resultText = 'You have no cards to spare for the attempt.';
+    choice.exhausted = true;
+    return;
+  }
+  // Recharge a random card (bottom of draw pile)
+  const idx = Math.floor(Math.random() * player.deck.hand.length);
+  const card = player.deck.hand.splice(idx, 1)[0];
+  player.deck.drawPile.unshift(card);
+  const succeeded = Math.random() < 0.5;
+  // Success → green/heal-styled toast. Failure → plain neutral toast.
+  if (succeeded) {
+    showStyledToast(`Recharged: ${card.name}`, 'heal', 2500);
+  } else {
+    showToast(`Recharged: ${card.name}`, 2000);
+  }
+  if (succeeded) {
+    const shrine = currentMap.getNode('lost_shrine');
+    if (shrine) {
+      shrine.isLocked = false;
+      shrine.hiddenName = '';
+      shrine.hiddenDescription = '';
+    }
+    choice.resultText = `You squeeze through to the other side! A faint golden glow beckons from deeper within.`;
+    choice._squeezeSucceeded = true;
+  } else {
+    const left = player.deck.hand.length;
+    choice.resultText = `The gap is too tight — you scrape back out. (${left} card${left !== 1 ? 's' : ''} left)`;
+  }
+}
+
+function resolveSearchCamp(choice) {
+  // 2D6 gold + 2 distinct random items from camp loot pool (matches Python table)
+  const goldAmt = (Math.floor(Math.random() * 6) + 1) + (Math.floor(Math.random() * 6) + 1);
+  gold += goldAmt;
+  const lootPool = [
+    { creator: createSmallPouch, weight: 1.0 },
+    { creator: createBadRations, weight: 1.0 },
+    { creator: createTorch, weight: 0.5 },
+    { creator: createSturdyBoots, weight: 0.5 },
+    { creator: createScrollOfPotency, weight: 0.5 },
+    { creator: createWandOfFire, weight: 0.5 },
+    { creator: createMinorHealingPotion, weight: 0.25 },
+  ];
+  // Draw 2 distinct entries from the pool (weighted without replacement)
+  const available = lootPool.slice();
+  const loot = [];
+  for (let i = 0; i < 2 && available.length > 0; i++) {
+    const total = available.reduce((s, e) => s + e.weight, 0);
+    let roll = Math.random() * total;
+    let pickedIdx = 0;
+    for (let j = 0; j < available.length; j++) {
+      roll -= available[j].weight;
+      if (roll <= 0) { pickedIdx = j; break; }
+    }
+    loot.push(available[pickedIdx].creator());
+    available.splice(pickedIdx, 1);
+  }
+  for (const c of loot) player.deck.addCard(c, true);
+  choice._lootItems = loot;
+  choice._lootGold = goldAmt;
+  choice.resultText = `You rummage through the supplies, finding ${goldAmt} gold and useful odds and ends.`;
+  showStyledToast(`+${goldAmt} gold`, 'gold', 2500);
+}
+
+function resolveShortRest(choice) {
+  // Out of combat: just reduce discard pile (simulates healing for next combat)
+  const amount = choice.effectValue || 5;
+  const healed = [];
+  for (let i = 0; i < amount && player.deck.discardPile.length > 0; i++) {
+    const card = player.deck.discardPile.pop();
+    healed.push(card.name);
+  }
+  if (healed.length > 0) {
+    choice.resultText = `You rest and feel strength returning. Recovered ${healed.length} card${healed.length > 1 ? 's' : ''}.`;
+    spawnHealOnTarget(player, healed.length);
+    showStyledToast(`+${healed.length} Healed`, 'heal', 2500);
+  } else {
+    choice.resultText = 'You rest, but you weren\'t hurt to begin with.';
   }
 }
 
 function drawEncounterChoice() {
   drawEncounterBg();
 
+  // Title — same style as encounter text (40px bold Georgia with shadow)
   ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 28px serif';
+  ctx.font = 'bold 40px Georgia, serif';
   ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
   ctx.fillText(currentEncounter.name, SCREEN_WIDTH / 2, 60);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 
   if (encounterChoiceResult) {
-    // Show result
-    const boxX = 100, boxY = 200, boxW = SCREEN_WIDTH - 200, boxH = 300;
-    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    const lootItems = encounterChoiceResult._lootItems;
+    const hasLoot = Array.isArray(lootItems) && lootItems.length > 0;
+
+    // Result text box: dynamically size to its content (keeps the loot row close to the text).
+    const boxW = SCREEN_WIDTH - 200;
+    const boxX = 100;
+    const boxY = hasLoot ? 130 : 200;
+    const lineHeight = 30;
+
+    ctx.font = '21px Georgia, serif';
+    const lines = wrapTextLong(encounterChoiceResult.resultText, boxW - 48, 21);
+
+    // Compute box height: padding + text + optional damage line + bottom padding for "Click to continue"
+    const hasDamageLine = encounterChoiceResult.effectType === 'damage' && encounterChoiceResult.effectValue > 0;
+    const contentH = lines.length * lineHeight + (hasDamageLine ? 44 : 0);
+    const verticalPad = hasLoot ? 28 : 40;
+    const continueRowH = hasLoot ? 0 : 36; // continue prompt lives inside the box only when no loot
+    const boxH = Math.max(hasLoot ? 100 : 340, contentH + verticalPad * 2 + continueRowH);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
     ctx.fillRect(boxX, boxY, boxW, boxH);
     ctx.strokeStyle = Colors.GOLD;
     ctx.lineWidth = 2;
     ctx.strokeRect(boxX, boxY, boxW, boxH);
 
     ctx.fillStyle = Colors.WHITE;
-    ctx.font = '16px sans-serif';
+    ctx.font = '21px Georgia, serif';
     ctx.textAlign = 'left';
-    const lines = wrapTextLong(encounterChoiceResult.resultText, boxW - 40, 16);
-    let textY = boxY + 40;
+    let textY = boxY + verticalPad + 18;
     for (const line of lines) {
-      ctx.fillText(line, boxX + 20, textY);
-      textY += 22;
+      ctx.fillText(line, boxX + 24, textY);
+      textY += lineHeight;
     }
 
-    if (encounterChoiceResult.effectType === 'damage' && encounterChoiceResult.effectValue > 0) {
+    if (hasDamageLine) {
       ctx.fillStyle = Colors.RED;
-      ctx.font = 'bold 16px sans-serif';
+      ctx.font = 'bold 21px Georgia, serif';
       ctx.textAlign = 'center';
       ctx.fillText(`You take ${encounterChoiceResult.effectValue} damage!`, SCREEN_WIDTH / 2, textY + 20);
     }
 
+    // Show looted cards side-by-side (Abandoned Camp search, etc.)
+    if (hasLoot) {
+      const cardW = 220;
+      const cardH = 308;
+      const gap = 32;
+      const totalW = lootItems.length * cardW + (lootItems.length - 1) * gap;
+      const startX = Math.floor((SCREEN_WIDTH - totalW) / 2);
+      const lootY = boxY + boxH + 26;
+      // Gold banner above the cards
+      if (encounterChoiceResult._lootGold > 0) {
+        ctx.fillStyle = Colors.GOLD;
+        ctx.font = 'bold 22px Georgia, serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`+${encounterChoiceResult._lootGold} Gold  (Total: ${gold})`, SCREEN_WIDTH / 2, lootY - 4);
+      }
+      for (let i = 0; i < lootItems.length; i++) {
+        const cx = startX + i * (cardW + gap);
+        drawCard(lootItems[i], cx, lootY + 16, cardW, cardH, false, false, 'full');
+      }
+    }
+
     ctx.fillStyle = Colors.GRAY;
-    ctx.font = '14px sans-serif';
+    ctx.font = '16px Georgia, serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Click to continue', SCREEN_WIDTH / 2, boxY + boxH - 20);
+    const continueY = hasLoot ? SCREEN_HEIGHT - 40 : boxY + boxH - 24;
+    ctx.fillText('Click to continue', SCREEN_WIDTH / 2, continueY);
   } else {
     // Show choices
     ctx.fillStyle = Colors.WHITE;
-    ctx.font = '22px sans-serif';
+    ctx.font = '24px Georgia, serif';
     ctx.textAlign = 'center';
     ctx.fillText('What do you do?', SCREEN_WIDTH / 2, 140);
 
     const rects = getChoiceRects();
     for (const r of rects) {
-      const hovered = hitTest(mouseX, mouseY, r);
-      ctx.fillStyle = hovered ? '#4a3a6e' : '#2a1a4e';
+      const choice = r.choice;
+      const exhausted = choice.exhausted;
+      const hovered = !exhausted && hitTest(mouseX, mouseY, r);
+
+      // Transparent background with white border
+      ctx.fillStyle = exhausted ? 'rgba(40,40,40,0.6)' : (hovered ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.3)');
       ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = hovered ? Colors.GOLD : Colors.GRAY;
+      ctx.strokeStyle = exhausted ? '#555' : (hovered ? Colors.WHITE : 'rgba(255,255,255,0.6)');
       ctx.lineWidth = 2;
       ctx.strokeRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = hovered ? Colors.GOLD : Colors.WHITE;
-      ctx.font = '16px sans-serif';
+
+      // Text
+      ctx.font = '16px Georgia, serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(r.choice.text, r.x + r.w / 2, r.y + r.h / 2);
+      if (exhausted) {
+        ctx.fillStyle = '#666';
+        ctx.fillText(`${choice.text}  (Done)`, r.x + r.w / 2, r.y + r.h / 2);
+      } else {
+        ctx.fillStyle = hovered ? Colors.WHITE : 'rgba(255,255,255,0.85)';
+        ctx.fillText(choice.text, r.x + r.w / 2, r.y + r.h / 2);
+      }
       ctx.textBaseline = 'alphabetic';
     }
   }
@@ -2156,35 +2952,63 @@ function drawEncounterLoot() {
   drawEncounterBg();
 
   ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 48px serif';
+  ctx.font = 'bold 40px Georgia, serif';
   ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
   ctx.fillText('Loot!', SCREEN_WIDTH / 2, 150);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 
   const phase = currentEncounter.currentPhase;
   let y = 230;
 
   if (phase._lootGoldAmount > 0) {
     ctx.fillStyle = Colors.GOLD;
-    ctx.font = '24px sans-serif';
+    ctx.font = '21px Georgia, serif';
     ctx.fillText(`+${phase._lootGoldAmount} Gold  (Total: ${gold})`, SCREEN_WIDTH / 2, y);
     y += 50;
   }
 
-  // Draw looted cards with art
+  // Draw looted cards full-size with art (and side preview for cards that summon).
   const lootedCards = phase._lootedCards || [];
   if (lootedCards.length > 0) {
     ctx.fillStyle = Colors.WHITE;
-    ctx.font = '20px sans-serif';
+    ctx.font = '21px Georgia, serif';
     ctx.fillText('Cards added to your deck:', SCREEN_WIDTH / 2, y);
-    y += 20;
-    const cardW = 120;
-    const cardH = 170;
-    const gap = 20;
-    const totalW = lootedCards.length * (cardW + gap) - gap;
-    const startX = (SCREEN_WIDTH - totalW) / 2;
+    y += 24;
+    const cardW = 240;
+    const cardH = 336;
+    const sideW = COMBAT_POWER_W;
+    const sideH = COMBAT_POWER_H;
+    const sideGap = 10;
+    // Calculate total width including side previews so the row stays centered
+    let totalW = 0;
+    for (const c of lootedCards) {
+      const has = c.previewCard || c.previewCreature;
+      totalW += cardW + (has ? sideGap + sideW : 0);
+    }
+    const groupGap = 24;
+    totalW += (lootedCards.length - 1) * groupGap;
+    let cx = Math.floor((SCREEN_WIDTH - totalW) / 2);
     for (let i = 0; i < lootedCards.length; i++) {
       const card = lootedCards[i];
-      drawCard(card, startX + i * (cardW + gap), y, cardW, cardH, true, false);
+      drawCard(card, cx, y, cardW, cardH, false, false, 'full');
+      cx += cardW;
+      if (card.previewCard) {
+        const sx = cx + sideGap;
+        const sy = y + Math.floor((cardH - sideH) / 2);
+        drawCard(card.previewCard, sx, sy, sideW, sideH, false, false);
+        cx += sideGap + sideW;
+      } else if (card.previewCreature) {
+        const sx = cx + sideGap;
+        const sy = y + Math.floor((cardH - sideH) / 2);
+        drawCreatureMiniCard(card.previewCreature, { x: sx, y: sy, w: sideW, h: sideH }, true);
+        cx += sideGap + sideW;
+      }
+      cx += groupGap;
     }
     y += cardH + 20;
   } else if (phase.lootCards.length > 0) {
@@ -2209,9 +3033,11 @@ function drawEncounterLoot() {
 
 function startCombat() {
   combatLog = [];
+  combatLogScrollY = 0;
   isPlayerTurn = true;
   selectedCardIndex = -1;
   enemyActions = [];
+  enemyArrow = null;
   enemyActionIndex = 0;
   enemyActionTimer = 0;
   attacksThisTurn = 0;
@@ -2272,12 +3098,14 @@ function applyPerksCombatStart() {
   if (shieldStacks > 0) {
     player.shield += shieldStacks;
     addLog(`  Tough: +${shieldStacks} Shield!`, Colors.ALLY_BLUE);
+    spawnTokenOnTarget(player, shieldStacks, 'Shield', Colors.ALLY_BLUE);
   }
   // Heroism perk
   const heroismStacks = player.getPerkStacks('combat_start_heroism');
   if (heroismStacks > 0) {
     player.heroism += heroismStacks;
     addLog(`  Prepared: +${heroismStacks} Heroism!`, Colors.GOLD);
+    spawnTokenOnTarget(player, heroismStacks, 'Heroism', Colors.GOLD);
   }
   // First Strike perk
   const firstStrike = player.getPerkStacks('combat_start_first_strike');
@@ -2372,13 +3200,14 @@ function getHandCardHoverRect(rects, index) {
 
 // Compute the (x, y) for a slot in a creature grid placed to the right of a character card.
 // Enemies use 2 rows of 6 starting at the top of the enemy character card.
-// Players use 1 row of 6 placed above the player hand (in the empty space at the top of the player area).
+// Players use 1 row of 6 aligned with the player power row (bottom of the row sits
+// at the same y as the bottom of the power cards, just above the player character card).
 function getCreatureSlotRect(ownerIsPlayer, slot) {
   const charRect = getCharacterCardRect(ownerIsPlayer);
   const startX = charRect.x + charRect.w + 16;
   const startY = ownerIsPlayer
-    ? COMBAT_PLAYER_AREA.y + 8 // top of the player area, above the hand and the char card
-    : charRect.y;              // top of the enemy character card
+    ? charRect.y - CREATURE_CARD_H - 6 // aligned with the power row, just above the char card
+    : charRect.y;                      // top of the enemy character card
   const col = slot % CREATURE_COLS;
   const row = Math.floor(slot / CREATURE_COLS);
   const x = startX + col * (CREATURE_CARD_W + CREATURE_GRID_GAP);
@@ -2413,9 +3242,11 @@ const KEYWORD_ICONS = {
   armor: { iconKey: 'icon_armor', label: 'Armor', desc: 'Absorbs damage from each hit (permanent)' },
   fire: { iconKey: 'icon_fire', label: 'Fire', desc: 'Deals damage equal to stacks each turn, decays by 1' },
   ice: { iconKey: 'icon_ice', label: 'Ice', desc: 'Reduces damage dealt by stacks, decays by 1' },
-  poison: { iconKey: 'icon_poison', label: 'Poison', desc: 'Deals 1 unpreventable damage per turn' },
+  poison: { iconKey: 'icon_poison', label: 'Poison', desc: 'Deals damage equal to stacks each turn. Only removed by healing.' },
   shock: { iconKey: 'icon_shock', label: 'Shock', desc: '-1 dmg dealt and +1 dmg taken per stack' },
   rage: { iconKey: 'icon_rage', label: 'Rage', desc: 'Permanent bonus damage to all attacks' },
+  scry: { isTextKeyword: true, color: '#7ec8ff', label: 'Scry N', desc: 'Look at the top N cards. Pick 1 to draw, recharge the rest.' },
+  heal: { isTextKeyword: true, color: '#7cff9c', label: 'Heal N', desc: 'Restore up to N cards from your discard pile. If you have Poison, each stack is cleared first (1 heal = 1 Poison removed); any leftover heals cards.' },
 };
 
 // Tokenize text into words and inline icons
@@ -2423,8 +3254,9 @@ const KEYWORD_ICONS = {
 function tokenizeKeywordText(text) {
   // Split into words while preserving delimiters
   const tokens = [];
-  // Match keywords (case-insensitive whole word) - longest first to avoid partial matches
-  const keywords = ['Heroism', 'Shields', 'Shield', 'Armor', 'Fire', 'Ice', 'Poison', 'Shock', 'Rage'];
+  // Match keywords (case-insensitive whole word) - longest first to avoid partial matches.
+  // "Scry N" and "Heal N" are captured as a single token (number stays with the keyword).
+  const keywords = ['Scry\\s+\\d+', 'Heal\\s+\\d+', 'Heroism', 'Shields', 'Shield', 'Armor', 'Fire', 'Ice', 'Poison', 'Shock', 'Rage'];
   const pattern = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
   let lastIdx = 0;
   let match;
@@ -2432,14 +3264,17 @@ function tokenizeKeywordText(text) {
     if (match.index > lastIdx) {
       tokens.push({ type: 'text', text: text.slice(lastIdx, match.index) });
     }
-    const kw = match[1].toLowerCase();
+    const raw = match[1];
+    const kw = raw.toLowerCase().split(/\s/)[0];
     const info = KEYWORD_ICONS[kw];
-    if (info) {
+    if (info && info.isTextKeyword) {
+      tokens.push({ type: 'kwtext', keyword: kw, text: raw, color: info.color });
+    } else if (info) {
       tokens.push({ type: 'icon', keyword: kw, iconKey: info.iconKey });
     } else {
-      tokens.push({ type: 'text', text: match[1] });
+      tokens.push({ type: 'text', text: raw });
     }
-    lastIdx = match.index + match[1].length;
+    lastIdx = match.index + raw.length;
   }
   if (lastIdx < text.length) {
     tokens.push({ type: 'text', text: text.slice(lastIdx) });
@@ -2488,7 +3323,7 @@ function drawIconText(text, centerX, startY, maxWidth, fontSize, color = '#eee')
   // Build word-level units (split text tokens on whitespace)
   const units = [];
   for (const tok of tokens) {
-    if (tok.type === 'icon') {
+    if (tok.type === 'icon' || tok.type === 'kwtext') {
       units.push(tok);
     } else {
       const parts = tok.text.split(/(\s+)/);
@@ -2544,6 +3379,16 @@ function drawIconText(text, centerX, startY, maxWidth, fontSize, color = '#eee')
           x: cx, y: cy - iconSize / 2, w: iconSize, h: iconSize,
           keyword: u.keyword,
         });
+        cx += u.width;
+      } else if (u.type === 'kwtext') {
+        // Colored keyword text (e.g. "Scry 2") with a hover tooltip
+        ctx.fillStyle = u.color || color;
+        ctx.fillText(u.text, cx, cy);
+        iconHitAreas.push({
+          x: cx, y: cy - iconSize / 2, w: u.width, h: iconSize,
+          keyword: u.keyword,
+        });
+        ctx.fillStyle = color;
         cx += u.width;
       } else {
         ctx.fillStyle = color;
@@ -2605,7 +3450,7 @@ function drawIconTextLeft(text, startX, startY, maxWidth, fontSize, color = '#ee
 
   const units = [];
   for (const tok of tokens) {
-    if (tok.type === 'icon') {
+    if (tok.type === 'icon' || tok.type === 'kwtext') {
       units.push(tok);
     } else {
       const parts = tok.text.split(/(\s+)/);
@@ -2656,6 +3501,15 @@ function drawIconTextLeft(text, startX, startY, maxWidth, fontSize, color = '#ee
           keyword: u.keyword,
         });
         cx += u.width;
+      } else if (u.type === 'kwtext') {
+        ctx.fillStyle = u.color || color;
+        ctx.fillText(u.text, Math.round(cx), Math.round(cy));
+        iconHitAreas.push({
+          x: cx, y: cy - iconSize / 2, w: u.width, h: iconSize,
+          keyword: u.keyword,
+        });
+        ctx.fillStyle = color;
+        cx += u.width;
       } else {
         ctx.fillStyle = color;
         ctx.fillText(u.text, Math.round(cx), Math.round(cy));
@@ -2699,9 +3553,160 @@ function drawBadgeTooltip() {
 }
 
 // Get the border color for a card based on subtype (falls back to card type)
+function getSubtypeLabel(card) {
+  const sub = (card.subtype || '').toLowerCase();
+  const LABELS = {
+    clothing: 'Clothing', light_armor: 'Light Armor', heavy_armor: 'Heavy Armor',
+    martial: 'Martial', simple: 'Simple', martial_2h: '2H Martial',
+    ranged: 'Ranged', ranged_2h: '2H Ranged',
+    staff: 'Staff', wand: 'Wand',
+    ability: 'Ability', ally: 'Ally', allies: 'Ally', companion: 'Companion',
+    item: 'Item', potion: 'Potion', food: 'Food', scroll: 'Scroll', relic: 'Relic',
+    shield: 'Shield', weapon: 'Weapon', buff: 'Buff',
+  };
+  if (LABELS[sub]) return LABELS[sub];
+  // Fallback to cardType
+  const type = (card.cardType || '').toUpperCase();
+  if (type === 'ATTACK') return 'Attack';
+  if (type === 'DEFENSE') return 'Defense';
+  if (type === 'ABILITY') return 'Ability';
+  if (type === 'CREATURE') return 'Ally';
+  if (type === 'ITEM') return 'Item';
+  return sub || null;
+}
+
 function getCardBorderColor(card) {
   if (card.subtype && SUBTYPE_COLORS[card.subtype]) return SUBTYPE_COLORS[card.subtype];
   return CARD_COLORS[card.cardType] || '#666';
+}
+
+// Wrap a card name onto at most 2 lines that fit within maxWidth. Returns an
+// array of 1 or 2 strings. If the name can't be split cleanly (single word
+// that's too long), returns the original name as a single line — the caller
+// can still draw it and let it clip rather than mangle.
+// Requires ctx.font to already be set to the name font.
+function wrapCardName(name, maxWidth, ctx) {
+  if (ctx.measureText(name).width <= maxWidth) return [name];
+  const words = name.split(' ');
+  if (words.length === 1) return [name]; // single word: just let it draw
+  // Pick the split point that best balances line widths while keeping each line
+  // under maxWidth.
+  let bestSplit = -1;
+  let bestDiff = Infinity;
+  for (let i = 1; i < words.length; i++) {
+    const line1 = words.slice(0, i).join(' ');
+    const line2 = words.slice(i).join(' ');
+    const w1 = ctx.measureText(line1).width;
+    const w2 = ctx.measureText(line2).width;
+    if (w1 > maxWidth || w2 > maxWidth) continue;
+    const diff = Math.abs(w1 - w2);
+    if (diff < bestDiff) { bestDiff = diff; bestSplit = i; }
+  }
+  if (bestSplit === -1) return [name]; // nothing fit — fall back to single line
+  return [words.slice(0, bestSplit).join(' '), words.slice(bestSplit).join(' ')];
+}
+
+// Draw a 9-slice stretched frame onto a rect. Corners stay crisp; edges stretch
+// along one axis; the center is left as-is from the PNG (transparent in our
+// frames, so the underlying card art shows through).
+// `corner` is the source-pixel corner size — tune per frame image.
+function draw9SliceFrame(img, dx, dy, dw, dh, corner) {
+  if (!img) return;
+  const iw = img.width, ih = img.height;
+  const c = Math.max(1, Math.min(corner, Math.floor(iw / 2), Math.floor(ih / 2)));
+  const srcEdgeW = iw - c * 2;
+  const srcEdgeH = ih - c * 2;
+  const dstEdgeW = Math.max(0, dw - c * 2);
+  const dstEdgeH = Math.max(0, dh - c * 2);
+  // Corners (no stretch)
+  ctx.drawImage(img, 0,      0,      c, c, dx,            dy,            c, c); // TL
+  ctx.drawImage(img, iw - c, 0,      c, c, dx + dw - c,   dy,            c, c); // TR
+  ctx.drawImage(img, 0,      ih - c, c, c, dx,            dy + dh - c,   c, c); // BL
+  ctx.drawImage(img, iw - c, ih - c, c, c, dx + dw - c,   dy + dh - c,   c, c); // BR
+  // Horizontal edges (stretch X)
+  if (dstEdgeW > 0 && srcEdgeW > 0) {
+    ctx.drawImage(img, c, 0,      srcEdgeW, c, dx + c, dy,          dstEdgeW, c);
+    ctx.drawImage(img, c, ih - c, srcEdgeW, c, dx + c, dy + dh - c, dstEdgeW, c);
+  }
+  // Vertical edges (stretch Y)
+  if (dstEdgeH > 0 && srcEdgeH > 0) {
+    ctx.drawImage(img, 0,      c, c, srcEdgeH, dx,            dy + c, c, dstEdgeH);
+    ctx.drawImage(img, iw - c, c, c, srcEdgeH, dx + dw - c,   dy + c, c, dstEdgeH);
+  }
+}
+
+// Which frame asset to use for a given card. Returns the image key or null to
+// skip frame rendering. For now every non-rare card uses frame_common; we can
+// branch on rarity/class later as more frame PNGs land.
+function getCardFrameKey(card) {
+  return 'frame_common';
+}
+
+// Blend a hex tint color with gold (40/60) to approximate the visible color of
+// the tinted frame — used for UI accents (name bar stroke, description box
+// outline, subtype label) so they read as part of the same theme.
+function getFrameAccentColorFromHex(tintHex) {
+  if (!tintHex) return Colors.GOLD;
+  const tr = parseInt(tintHex.slice(1, 3), 16);
+  const tg = parseInt(tintHex.slice(3, 5), 16);
+  const tb = parseInt(tintHex.slice(5, 7), 16);
+  // Gold #ffd700 → 255, 215, 0
+  const r = Math.round(255 * 0.4 + tr * 0.6);
+  const g = Math.round(215 * 0.4 + tg * 0.6);
+  const b = Math.round(0   * 0.4 + tb * 0.6);
+  return `rgb(${r},${g},${b})`;
+}
+
+// Convenience wrapper for cards: look up the subtype's hex and call the
+// hex-based helper.
+function getFrameAccentColor(subtype) {
+  const tintHex = subtype ? SUBTYPE_COLORS[subtype] : null;
+  return getFrameAccentColorFromHex(tintHex);
+}
+
+// Tinted-frame cache. Colorizing the frame PNG is the expensive part, so we
+// build an offscreen canvas per (frame, tint) pair the first time it's needed
+// and reuse it forever. Key: `${frameKey}::${tintColor}`.
+const tintedFrameCache = {};
+function getTintedFrameImage(frameImg, frameKey, tintColor) {
+  if (!tintColor) return frameImg;
+  const cacheKey = `${frameKey}::${tintColor}`;
+  if (tintedFrameCache[cacheKey]) return tintedFrameCache[cacheKey];
+  const off = document.createElement('canvas');
+  off.width = frameImg.width;
+  off.height = frameImg.height;
+  const oCtx = off.getContext('2d');
+  // Step 1: draw the original frame (keeps the filigree geometry + gold detail).
+  oCtx.drawImage(frameImg, 0, 0);
+  // Step 2: 'source-atop' only paints over existing (non-transparent) pixels, so
+  // the tint lands on the frame but NOT on the transparent center. Low alpha so
+  // the underlying bronze/gold still reads through.
+  oCtx.globalCompositeOperation = 'source-atop';
+  oCtx.globalAlpha = 0.2;
+  oCtx.fillStyle = tintColor;
+  oCtx.fillRect(0, 0, frameImg.width, frameImg.height);
+  tintedFrameCache[cacheKey] = off;
+  return off;
+}
+
+// Corner size (in frame-image pixels) for the 9-slice. Tuned by visual inspection
+// of each frame PNG — the corner art should stay crisp, edges should stretch.
+const CARD_FRAME_CORNERS = {
+  // Source-px corner for the 9-slice. Smaller = less of the PNG's decorative
+  // border drawn, so more art shows through the transparent center. 38 pulls
+  // in just the corner filigree without much of the straight gold band.
+  frame_common: 38,
+};
+
+// True when a card rendered now is actually being shown in live combat — used
+// to decide whether to substitute dynamic values like Sneak Attack's X with
+// the current attack count.
+function isCombatContext() {
+  return state === GameState.COMBAT || state === GameState.TARGETING ||
+    state === GameState.DEFENDING || state === GameState.DAMAGE_SOURCE ||
+    state === GameState.POWER_TARGETING || state === GameState.POWER_CHOICE ||
+    state === GameState.ALLY_TARGETING || state === GameState.MULTI_TARGETING ||
+    state === GameState.SCRY_SELECT || state === GameState.MODAL_SELECT;
 }
 
 function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size = 'small') {
@@ -2727,62 +3732,141 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size =
     ctx.fillRect(x, y, w, h);
   }
 
-  // 2. Tight name box at top — auto-sized to wrap around the text (no colored border)
+  // Subtype tint is no longer applied to the art. Instead, the frame itself is
+  // recolored by subtype (see the 9-slice block below) so the card's theme reads
+  // as blue/red/purple/brown on the frame without muddying the art.
+
+  // 2. Card name — no background box. Drop shadow for readability. If the name
+  // is too wide for the card (e.g. "Wooden Greatsword") we wrap to 2 lines.
   const nameFont = 'bold ' + Math.max(8, Math.floor(w * 0.085)) + 'px sans-serif';
   ctx.font = nameFont;
-  const nameMetrics = ctx.measureText(card.name);
-  const nameW = Math.min(w - 4, nameMetrics.width + 12);
-  const nameH = Math.max(14, Math.floor(w * 0.13));
-  const nameX = x + (w - nameW) / 2;
-  const nameY = y + 8;
-  ctx.fillStyle = 'rgba(0,0,0,0.8)';
-  ctx.fillRect(nameX, nameY, nameW, nameH);
-  ctx.fillStyle = Colors.GOLD;
+  const nameH = Math.max(13, Math.floor(w * 0.12));
+  const nameOffset = isFullSize ? 16 : 13;
+  // (nameY is computed AFTER we know line count so we can push 2-line names
+  // further down below the frame's top filigree.)
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(card.name, x + w / 2, nameY + nameH / 2 + 1);
+  // Usable horizontal space for the name: the whole card minus the frame's
+  // top-corner filigree so letters don't slip behind the decoration. The
+  // filigree corners themselves draw ~11% of the card on full previews and
+  // ~8% on hand cards, and they flare inward a bit past the pure corner, so
+  // we budget roughly 2.5× the corner size for safe clearance.
+  const filigreeClearance = isFullSize ? 80 : 24;
+  const maxNameWidth = w - filigreeClearance;
+  const nameLines = wrapCardName(card.name, maxNameWidth, ctx);
+  // Push 2-line names further down so the first line clears the frame's top
+  // filigree instead of tucking underneath it.
+  const twoLineBump = nameLines.length > 1 ? (isFullSize ? 10 : 6) : 0;
+  const nameY = y + nameOffset + twoLineBump;
+  // Vertical stacking: use 85% of nameH per line for tighter spacing.
+  const lineH = Math.floor(nameH * 0.85);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.95)';
+  ctx.shadowBlur = isFullSize ? 4 : 3;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = Colors.GOLD;
+  for (let li = 0; li < nameLines.length; li++) {
+    const lineCy = nameY + nameH / 2 + 1 + (li - (nameLines.length - 1) / 2) * lineH;
+    ctx.fillText(nameLines[li], x + w / 2, lineCy);
+  }
+  ctx.restore();
   ctx.textBaseline = 'alphabetic';
 
-  // 3. Description box at bottom
+  // 3. Description box at bottom — sits inside the frame's inner edge
   if (isFullSize) {
-    // Full size: fixed 1/4 card height box with full description, inset from edges
-    const inset = 6;
-    const descBoxH = Math.floor(h / 4);
-    const descBoxX = x + inset;
-    const descBoxY = y + h - descBoxH - inset;
-    const descBoxW = w - inset * 2;
+    // Full size: ~1/5 card height (was 1/4) so the art gets more real estate.
+    // Side inset 14 (was 6) keeps text well clear of the frame's filigree.
+    // Bottom inset 14 (was 6) shifts the whole box up the card.
+    const leftInset = 13;  // -1 so the box extends 1 px further to the left
+    const rightInset = 11; // -1 so the box extends 1 px further to the right
+    const bottomInset = 14;
+    const descBoxW = w - leftInset - rightInset;
+
+    // Measure the wrapped text FIRST so we can auto-expand the box if the
+    // description doesn't fit its base height (e.g. Magic Missiles at 4 lines).
+    const descFontSize = Math.max(11, Math.floor(w * 0.058));
+    let descText = card.description || card.shortDesc || '';
+    if (card.id === 'sneak_attack' && isCombatContext()) descText = descText.replace(/X/g, String(attacksThisTurn + 1));
+    const iconSize = Math.floor(descFontSize * 1.3);
+    const lineH = Math.max(descFontSize + 4, iconSize + 2);
+    const lines = countWrappedLines(descText, descBoxW - 16, descFontSize);
+    const totalH = lines * lineH;
+    const textPadding = 14; // internal padding: 7 px top + 7 px bottom
+    const baseBoxH = Math.floor(h / 5);
+    // Grow the box only when the text won't fit the base height.
+    const descBoxH = Math.max(baseBoxH, totalH + textPadding);
+
+    const descBoxX = x + leftInset;
+    const descBoxY = y + h - descBoxH - bottomInset;
 
     ctx.fillStyle = 'rgba(0,0,0,0.78)';
     ctx.fillRect(descBoxX, descBoxY, descBoxW, descBoxH);
-    ctx.strokeStyle = borderColor;
+    ctx.strokeStyle = getFrameAccentColor(card.subtype);
     ctx.lineWidth = 1;
     ctx.strokeRect(descBoxX, descBoxY, descBoxW, descBoxH);
 
-    const descFontSize = Math.max(11, Math.floor(w * 0.058));
-    const descText = card.description || card.shortDesc || '';
-    // Center vertically by computing height first
-    const lines = countWrappedLines(descText, descBoxW - 16, descFontSize);
-    const iconSize = Math.floor(descFontSize * 1.3);
-    const lineH = Math.max(descFontSize + 4, iconSize + 2);
-    const totalH = lines * lineH;
     const startY = descBoxY + (descBoxH - totalH) / 2;
     drawIconText(descText, x + w / 2, startY, descBoxW - 16, descFontSize, '#f0f0f0');
   } else if (card.shortDesc || card.description) {
-    // Small size: tight auto-sized box with short desc
-    const descText = card.shortDesc || card.description;
+    // Small size: auto-sized box. Sides 6 px inside frame (was 2), bottom
+    // inset 6 (was 2) to lift it off the frame's bottom filigree.
+    let descText = card.shortDesc || card.description;
+    if (card.id === 'sneak_attack' && isCombatContext()) descText = descText.replace(/X/g, String(attacksThisTurn + 1));
     const descFontSize = Math.max(8, Math.floor(w * 0.085));
-    const lines = countWrappedLines(descText, w - 12, descFontSize);
+    const sideInset = 6;
+    const bottomInset = 10; // lifted another 4 px off the bottom filigree
+    const lines = countWrappedLines(descText, w - sideInset * 2 - 4, descFontSize);
     const linesToShow = Math.min(2, lines);
     const iconSize = Math.floor(descFontSize * 1.3);
     const lineH = Math.max(descFontSize + 2, iconSize + 1);
     const descBoxH = linesToShow * lineH + 4;
-    const descBoxY = y + h - descBoxH - 2;
+    const descBoxY = y + h - descBoxH - bottomInset;
     ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(x + 2, descBoxY, w - 4, descBoxH);
-    drawIconText(descText, x + w / 2, descBoxY + 2, w - 12, descFontSize, '#eee');
+    ctx.fillRect(x + sideInset, descBoxY, w - sideInset * 2, descBoxH);
+    drawIconText(descText, x + w / 2, descBoxY + 2, w - sideInset * 2 - 4, descFontSize, '#eee');
   }
 
-  // 3b. Tier and rarity badge (bottom-right, full size only)
+  // Badges (tier/rarity bottom-right + subtype bottom-left) are drawn AFTER
+  // the frame so they sit on top of the filigree and stay visible.
+
+  // 4b. Ornate 9-slice frame on every card size. The cap is tiered so hand-size
+  // cards get a *much* thinner frame than full-size previews — the filigree
+  // still reads, but it doesn't eat half the card.
+  const frameKey = getCardFrameKey(card);
+  const frameImg = frameKey ? images[frameKey] : null;
+  if (frameImg) {
+    const corner = CARD_FRAME_CORNERS[frameKey] || 24;
+    // Tiered corner caps so the filigree reads similarly at every size:
+    //   Full preview → ~11% (was 14% — trimmed 20% so the corners don't dominate).
+    //   Small cards  → ~8% with a minimum of 6 (was 7%/4, which was almost invisible).
+    const capPct = isFullSize ? 0.11 : 0.08;
+    const minCorner = isFullSize ? 8 : 6;
+    const scaledCorner = Math.max(minCorner, Math.min(corner, Math.floor(Math.min(w, h) * capPct)));
+    // Tint the frame by subtype (blue for armor, red for weapons, etc.). Skip
+    // items (neutral grey) — the plain bronze frame reads cleaner for those.
+    const tint = (card.subtype && card.subtype !== 'item') ? SUBTYPE_COLORS[card.subtype] : null;
+    const drawnFrame = tint ? getTintedFrameImage(frameImg, frameKey, tint) : frameImg;
+    draw9SliceFrame(drawnFrame, x, y, w, h, scaledCorner);
+    // Gold glow only for SELECTED cards, inset inside the frame.
+    if (highlighted) {
+      ctx.save();
+      ctx.strokeStyle = Colors.GOLD;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = Colors.GOLD;
+      ctx.shadowBlur = 12;
+      ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      ctx.restore();
+    }
+  } else {
+    // No frame registered — fall back to the classic colored border.
+    ctx.strokeStyle = highlighted ? Colors.GOLD : (hovered ? '#fff' : borderColor);
+    ctx.lineWidth = highlighted ? 4 : (hovered ? 3 : 2);
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  // 4c. Tier/rarity + subtype badges — drawn on TOP of the frame so the frame's
+  // bottom filigree can't hide them.
   if (isFullSize) {
     const RARITY_CODES = { common: 'C', uncommon: 'U', rare: 'R', epic: 'E', legendary: 'L' };
     const RARITY_LABELS = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare', epic: 'Epic', legendary: 'Legendary' };
@@ -2805,37 +3889,32 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size =
     const totalW = codeW + tierW + padX * 4 + sepW;
     const badgeH = badgeFontSize + padY * 2;
     const badgeX = x + w - totalW - 6;
-    const badgeY = y + h - badgeH - 6;
+    const badgeY = y + h - badgeH - 4; // 2 px lower — sits on the frame's bottom filigree
 
-    // Background
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
     ctx.fillRect(badgeX, badgeY, totalW, badgeH);
     ctx.strokeStyle = color;
     ctx.lineWidth = 1;
     ctx.strokeRect(badgeX, badgeY, totalW, badgeH);
 
-    // Rarity letter (left half)
     const codeBoxW = codeW + padX * 2;
     ctx.fillStyle = color;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(code, badgeX + codeBoxW / 2, badgeY + badgeH / 2 + 1);
 
-    // Separator line
     ctx.strokeStyle = color;
     ctx.beginPath();
     ctx.moveTo(badgeX + codeBoxW + sepW / 2, badgeY + 2);
     ctx.lineTo(badgeX + codeBoxW + sepW / 2, badgeY + badgeH - 2);
     ctx.stroke();
 
-    // Tier label (right half)
     const tierBoxX = badgeX + codeBoxW + sepW;
     const tierBoxW = tierW + padX * 2;
     ctx.fillStyle = '#e0e0e0';
     ctx.fillText(tierText, tierBoxX + tierBoxW / 2, badgeY + badgeH / 2 + 1);
     ctx.textBaseline = 'alphabetic';
 
-    // Register hover hit areas for tooltips
     cardBadgeHitAreas.push({
       x: badgeX, y: badgeY, w: codeBoxW, h: badgeH,
       label: RARITY_LABELS[rarity] || 'Common',
@@ -2844,12 +3923,28 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size =
       x: tierBoxX, y: badgeY, w: tierBoxW, h: badgeH,
       label: `Tier ${tier}`,
     });
-  }
 
-  // 4. Border — uses subtype color (or gold when highlighted)
-  ctx.strokeStyle = highlighted ? Colors.GOLD : (hovered ? '#fff' : borderColor);
-  ctx.lineWidth = highlighted ? 4 : (hovered ? 3 : 2);
-  ctx.strokeRect(x, y, w, h);
+    // Subtype label (bottom-left), colored with the frame-echo color so it
+    // matches the description box outline.
+    const subLabel = getSubtypeLabel(card);
+    if (subLabel) {
+      const accentColor = getFrameAccentColor(card.subtype);
+      ctx.font = `${badgeFontSize}px sans-serif`;
+      const slW = ctx.measureText(subLabel).width + padX * 2;
+      const slX = x + 6;
+      const slY = badgeY;
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(slX, slY, slW, badgeH);
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(slX, slY, slW, badgeH);
+      ctx.fillStyle = accentColor;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(subLabel, slX + slW / 2, slY + badgeH / 2 + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+  }
 
   // 5. Exhausted (stays-in-hand) overlay: dim + Zzz
   if (card.exhausted) {
@@ -2888,16 +3983,29 @@ function wrapText(text, maxWidth, fontSize) {
 
 // --- HP display (draw pile + hand + recharge = HP) ---
 function getHP(character) {
+  // HP = cards still "alive" in the active cycle: draw pile + hand + recharge pile
   const d = character.deck;
   return d.drawPile.length + d.hand.length + d.rechargePile.length;
 }
 
 function getMaxHP(character) {
-  return character.deck.masterDeck.length;
+  // During combat, max HP = every card across ALL combat piles (including tokens
+  // created mid-combat like Goodberry). Banished cards are removed from all piles
+  // so max HP drops when a card is banished.
+  const d = character.deck;
+  if (d.isInCombat()) {
+    return d.drawPile.length + d.hand.length + d.rechargePile.length
+         + d.discardPile.length
+         + d.damagePile.length + d.playPile.length;
+  }
+  // Out of combat: master deck is the canonical total
+  return d.masterDeck.length;
 }
 
 function getDamage(character) {
-  return character.deck.damagePile.length;
+  // "Damage" = cards that left the active cycle (discard + exhaust + damage piles)
+  const d = character.deck;
+  return d.discardPile.length + d.damagePile.length;
 }
 
 // --- Combat drawing ---
@@ -2920,31 +4028,61 @@ function drawCombat() {
   ctx.fillRect(COMBAT_RIGHT_X, COMBAT_RIGHT_BTN_Y - 1, COMBAT_RIGHT_W, 2);
 
   // --- Enemy area (top) ---
-  drawCharacterPanel(enemy, 'enemy');
+  // Shake only the attacking source (creature or enemy card), not the whole field
+  const shaking = enemyArrow && enemyArrow.timer > 0;
+  const shakeIntensity = shaking ? Math.min(1, enemyArrow.timer / ENEMY_ARROW_DURATION) * 5 : 0;
+  const shakeSrc = shaking ? enemyArrow.sourceCreature : null;
 
-  // Enemy creatures (grid up to 2 rows of 6 to the right of the enemy character card)
+  // Shake enemy card only if the attack comes from the enemy itself (no creature source)
+  if (shaking && !shakeSrc) {
+    const si = shakeIntensity;
+    ctx.save();
+    ctx.translate(Math.round((Math.random() - 0.5) * si * 2), Math.round((Math.random() - 0.5) * si * 2));
+  }
+  drawCharacterPanel(enemy, 'enemy');
+  if (shaking && !shakeSrc) ctx.restore();
+
+  // Enemy creatures — shake only the one that's attacking
   const creatureRects = getEnemyCreatureRects();
   for (let i = 0; i < enemy.creatures.length; i++) {
     const c = enemy.creatures[i];
     const r = creatureRects[i];
+    const isAttacker = shaking && shakeSrc === c;
+    if (isAttacker) {
+      ctx.save();
+      ctx.translate(Math.round((Math.random() - 0.5) * shakeIntensity * 2), Math.round((Math.random() - 0.5) * shakeIntensity * 2));
+    }
     drawCreatureCard(c, r, false);
+    if (isAttacker) ctx.restore();
   }
 
   // --- Player area (bottom) ---
   drawCharacterPanel(player, 'player');
 
   // --- Player hand ---
-  hoveredCardPreview = null;
-  hoveredPowerPreview = null;
+  // While Shift is held, keep whichever preview was active pinned. New hover
+  // detection is skipped (hand cards, panels, log entries, powers) so nothing
+  // can swap the preview until Shift is released.
+  if (isShiftFrozen()) {
+    hoveredCardPreview = shiftFreezeCard;
+    hoveredPowerPreview = shiftFreezePower;
+    hoveredCreaturePreview = shiftFreezeCreature;
+  } else {
+    hoveredCardPreview = null;
+    hoveredPowerPreview = null;
+    hoveredCreaturePreview = null;
+  }
 
   // (Log/panel hover detection runs at the end of drawCombat after everything is populated.)
   const handRects = getHandCardRects(player.deck.hand);
   // Determine which card is hovered first (use visible-portion hit areas, topmost first)
   // Topmost card visually is the LAST one (drawn last so rendered on top).
   let hoveredHandIndex = -1;
-  for (let i = player.deck.hand.length - 1; i >= 0; i--) {
-    const hr = getHandCardHoverRect(handRects, i);
-    if (hitTest(mouseX, mouseY, hr)) { hoveredHandIndex = i; break; }
+  if (!isShiftFrozen()) {
+    for (let i = player.deck.hand.length - 1; i >= 0; i--) {
+      const hr = getHandCardHoverRect(handRects, i);
+      if (hitTest(mouseX, mouseY, hr)) { hoveredHandIndex = i; break; }
+    }
   }
   // Draw all cards in order so later cards overlap earlier ones,
   // EXCEPT the hovered (and selected) cards — draw them last so they sit on top.
@@ -2965,7 +4103,10 @@ function drawCombat() {
     const r = handRects[hoveredHandIndex];
     const selected = hoveredHandIndex === selectedCardIndex;
     drawCard(card, r.x, selected ? r.y - 20 : r.y, r.w, r.h, selected, true);
-    hoveredCardPreview = card;
+    // Preview copy without Zzz overlay
+    const preview = card.copy ? card.copy() : card;
+    preview.exhausted = false;
+    hoveredCardPreview = preview;
   }
 
   // --- Player Allies ---
@@ -3006,12 +4147,32 @@ function drawCombat() {
 
   // --- Targeting arrow (hint shown via toast) ---
   if (state === GameState.TARGETING) {
-    // Draw red targeting arrow from selected card center to cursor
-    if (selectedCardIndex >= 0 && selectedCardIndex < player.deck.hand.length) {
+    if (barrageMode && barrageShotsLeft > 0 && barrageCardIndex >= 0 && barrageCardIndex < player.deck.hand.length) {
+      // Barrage shooting: arrow from MM card in hand to cursor
+      const handRects = getHandCardRects(player.deck.hand);
+      const r = handRects[barrageCardIndex];
+      drawTargetingArrow(r.x + r.w / 2, r.y + r.h / 2 - 20, mouseX, mouseY, Colors.ORANGE);
+      // Done button
+      const doneR = { x: COMBAT_LEFT_W / 2 - 80, y: COMBAT_DIVIDER_Y + 35, w: 160, h: 40 };
+      const doneHov = hitTest(mouseX, mouseY, doneR);
+      ctx.fillStyle = doneHov ? '#3a8a3a' : '#1c5a1c';
+      ctx.fillRect(doneR.x, doneR.y, doneR.w, doneR.h);
+      ctx.strokeStyle = Colors.GREEN;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(doneR.x, doneR.y, doneR.w, doneR.h);
+      ctx.fillStyle = Colors.WHITE;
+      ctx.font = 'bold 16px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`Done (${barrageShotsFired}/3)`, doneR.x + doneR.w / 2, doneR.y + doneR.h / 2);
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+    } else if (selectedCardIndex >= 0 && selectedCardIndex < player.deck.hand.length) {
+      // Normal: arrow from selected card center to cursor
       const handRects = getHandCardRects(player.deck.hand);
       const r = handRects[selectedCardIndex];
       const startX = r.x + r.w / 2;
-      const startY = r.y + r.h / 2 - 20; // -20 because selected card lifts up
+      const startY = r.y + r.h / 2 - 20;
       drawTargetingArrow(startX, startY, mouseX, mouseY, Colors.RED);
     }
   } else if (state === GameState.POWER_TARGETING && selectedPower) {
@@ -3023,6 +4184,62 @@ function drawCombat() {
       const startY = r.y + r.h / 2;
       drawTargetingArrow(startX, startY, mouseX, mouseY, Colors.RED);
     }
+  } else if (state === GameState.ALLY_TARGETING && selectedAlly) {
+    // Arrow from the ally mini card to the cursor
+    const allyRects = getPlayerCreatureRects();
+    const idx = player.creatures.indexOf(selectedAlly);
+    if (idx !== -1 && allyRects[idx]) {
+      const r = allyRects[idx];
+      drawTargetingArrow(r.x + r.w / 2, r.y + r.h / 2, mouseX, mouseY, Colors.RED);
+    }
+  } else if (state === GameState.MULTI_TARGETING && multiCardIndex >= 0) {
+    const handRects = getHandCardRects(player.deck.hand);
+    if (handRects[multiCardIndex]) {
+      const r = handRects[multiCardIndex];
+      const sx = r.x + r.w / 2, sy = r.y + r.h / 2 - 20;
+      // Arrows to already-picked targets (gold, persist until done/cancel)
+      for (const t of multiTargets) {
+        let tx, ty;
+        if (t === enemy) {
+          const er = getCharacterCardRect(false);
+          tx = er.x + er.w / 2; ty = er.y + er.h / 2;
+        } else {
+          const crs = getEnemyCreatureRects();
+          const ci = enemy.creatures.indexOf(t);
+          if (ci !== -1 && crs[ci]) { tx = crs[ci].x + crs[ci].w / 2; ty = crs[ci].y + crs[ci].h / 2; }
+        }
+        if (tx !== undefined) drawTargetingArrow(sx, sy, tx, ty, Colors.GOLD);
+      }
+      // Arrow from hand card to cursor (only if we can still pick more)
+      if (multiTargets.length < multiMaxTargets) {
+        drawTargetingArrow(sx, sy, mouseX, mouseY, Colors.RED);
+      }
+    }
+  }
+
+  // --- Enemy showcase card (briefly shown in center when enemy plays a card) ---
+  if (showcaseCard && showcaseTimer > 0) {
+    const fadeIn = Math.min(1, showcaseFadeIn / SHOWCASE_FADE);
+    const fadeOut = Math.min(1, showcaseTimer / SHOWCASE_FADE);
+    const alpha = Math.min(fadeIn, fadeOut);
+    ctx.globalAlpha = alpha * 0.92;
+    const scW = 180, scH = 252;
+    const scX = Math.floor((COMBAT_LEFT_W - scW) / 2);
+    const scY = Math.floor((SCREEN_HEIGHT - scH) / 2) - 20;
+    drawCard(showcaseCard, scX, scY, scW, scH, false, false, 'full');
+    // Red tinted border
+    ctx.strokeStyle = `rgba(255,60,60,${alpha})`;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(scX - 2, scY - 2, scW + 4, scH + 4);
+    ctx.globalAlpha = 1;
+  }
+
+  // --- Enemy attack arrow (animated, fades out) ---
+  if (enemyArrow) {
+    const a = Math.min(1, enemyArrow.timer / (ENEMY_ARROW_DURATION * 0.3));
+    ctx.globalAlpha = a;
+    drawTargetingArrow(enemyArrow.x1, enemyArrow.y1, enemyArrow.x2, enemyArrow.y2, Colors.RED);
+    ctx.globalAlpha = 1;
   }
 
   // --- Right column buttons (End Turn, Inventory, Help) ---
@@ -3032,11 +4249,33 @@ function drawCombat() {
   drawCombatLog();
 
   // --- Log/panel hover detection (must run after both panels and log have populated) ---
-  // Hovering a log entry, a discard pile label, or any panel hit area shows the full card preview.
-  // Only override the hand-card hover (set above) if the user is actually pointing at a panel/log area.
-  for (const area of logCardHitAreas) {
+  // Hovering a log entry, a discard pile label, a creature mini card, or any panel hit area
+  // shows the full card preview. Only override the hand-card hover (set above) if the user
+  // is actually pointing at a panel/log area. Skipped while Shift-freeze is active.
+  if (!isShiftFrozen()) for (const area of logCardHitAreas) {
     if (hitTest(mouseX, mouseY, area)) {
-      if (area.card instanceof Power) {
+      if (area.buff) {
+        // Show buff as a card-style hover using the buff's card art
+        const buffCard = {
+          id: area.buff.imageId,
+          name: area.buff.name,
+          description: area.buff.description,
+          shortDesc: area.buff.turnsRemaining > 0
+            ? `${area.buff.description}\n(${area.buff.turnsRemaining} turns left)`
+            : area.buff.description,
+          cardType: 'ABILITY',
+          costType: 'FREE',
+          subtype: 'buff',
+          effects: [],
+          modes: null,
+          currentEffects: [],
+          copy: () => buffCard,
+          exhausted: false,
+        };
+        hoveredCardPreview = buffCard;
+      } else if (area.creature) {
+        hoveredCreaturePreview = area.creature;
+      } else if (area.card instanceof Power) {
         hoveredPowerPreview = area.card;
       } else if (area.card && typeof area.card.copy === 'function') {
         const fresh = area.card.copy();
@@ -3063,42 +4302,206 @@ function drawCombat() {
   ctx.textAlign = 'left';
 }
 
-// Draw a full-size preview card following the cursor (top-right of cursor by default)
+// Draw a full-size preview card following the cursor (top-right of cursor by default).
+// While Shift-freeze is active, the preview pins to wherever the cursor was when
+// Shift was first pressed, so the player can mouse over its keyword icons.
 function drawHoverPreview() {
-  if (!hoveredCardPreview && !hoveredPowerPreview) return;
+  if (!hoveredCardPreview && !hoveredPowerPreview && !hoveredCreaturePreview) return;
 
   // Preview card size (~py 312x438, scaled smaller for our screen)
   const previewW = 240;
   const previewH = 336;
   const margin = 12;
 
-  // Default position: above and right of cursor
-  let x = mouseX + 24;
-  let y = mouseY - previewH - 16;
+  // Side preview (smaller — used when a card has a previewCard or previewCreature
+  // that shows the summon/produced card next to the main hover preview)
+  const sidePreview = hoveredCardPreview && (
+    hoveredCardPreview.previewCard ||
+    hoveredCardPreview.previewCreature
+  );
+  const sideW = COMBAT_POWER_W;   // small mini-card size matches in-combat layout
+  const sideH = COMBAT_POWER_H;
+  const sideGap = 10;
+  const totalW = previewW + (sidePreview ? sideGap + sideW : 0);
+
+  // Anchor mouse (frozen if shift-lock, live otherwise).
+  const anchorX = isShiftFrozen() ? shiftFreezeMouseX : mouseX;
+  const anchorY = isShiftFrozen() ? shiftFreezeMouseY : mouseY;
+
+  // Default position: above and right of anchor
+  let x = anchorX + 24;
+  let y = anchorY - previewH - 16;
 
   // Flip to left if too close to right edge
-  if (x + previewW + margin > SCREEN_WIDTH) {
-    x = mouseX - previewW - 24;
+  if (x + totalW + margin > SCREEN_WIDTH) {
+    x = anchorX - totalW - 24;
   }
+
   // Flip below if too close to top
   if (y < margin) {
-    y = mouseY + 24;
+    y = anchorY + 24;
   }
   // Clamp to screen bounds
-  x = Math.max(margin, Math.min(x, SCREEN_WIDTH - previewW - margin));
+  x = Math.max(margin, Math.min(x, SCREEN_WIDTH - totalW - margin));
   y = Math.max(margin, Math.min(y, SCREEN_HEIGHT - previewH - margin));
 
-  if (hoveredCardPreview) {
+  if (hoveredCreaturePreview) {
+    drawCreaturePreviewCard(hoveredCreaturePreview, x, y, previewW, previewH);
+  } else if (hoveredCardPreview) {
     // Draw a full-size version of the card
     drawCard(hoveredCardPreview, x, y, previewW, previewH, false, false, 'full');
+    // If the card produces other cards/creatures, show them at the same size as
+    // the in-combat mini cards, to the right of the main preview.
+    if (sidePreview) {
+      const sx = x + previewW + sideGap;
+      // Center the side preview vertically against the main preview
+      const sy = y + Math.floor((previewH - sideH) / 2);
+      if (hoveredCardPreview.previewCard) {
+        drawCard(hoveredCardPreview.previewCard, sx, sy, sideW, sideH, false, false);
+      } else if (hoveredCardPreview.previewCreature) {
+        drawCreatureMiniCard(hoveredCardPreview.previewCreature, { x: sx, y: sy, w: sideW, h: sideH }, true);
+      }
+    }
   } else if (hoveredPowerPreview) {
     drawPowerPreviewCard(hoveredPowerPreview, x, y, previewW, previewH);
   }
 }
 
+// Draw a full-size preview card for a creature. Mirrors the small mini-card layout
+// at a larger size: art fills the card, gold name banner at top, and a single
+// semi-transparent box at the BOTTOM (like a weapon card's description box) that
+// contains the attack number on the left, the HP bar on the right, and the
+// description text above (when present).
+function drawCreaturePreviewCard(creature, x, y, w, h) {
+  const isPlayerOwned = creature.owner === player;
+
+  // 1. Art fills the card
+  const artKey = (creature.name || '').toLowerCase().replace(/ /g, '_');
+  const art = images[`creature_${artKey}`] || getCardArt(artKey);
+  if (art) {
+    const imgAspect = art.width / art.height;
+    const cardAspect = w / h;
+    let sx = 0, sy = 0, sw = art.width, sh = art.height;
+    if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
+    else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
+    ctx.drawImage(art, sx, sy, sw, sh, x, y, w, h);
+  } else {
+    ctx.fillStyle = isPlayerOwned ? '#1a3a4e' : '#3a2020';
+    ctx.fillRect(x, y, w, h);
+  }
+
+  // 2. Name banner at top — gold text on a dark backing
+  const nameFontSize = Math.max(14, Math.floor(w * 0.085));
+  ctx.font = `bold ${nameFontSize}px Georgia, serif`;
+  const nameLines = wrapText(creature.name, w - 16, nameFontSize);
+  const nameLineH = nameFontSize + 4;
+  let maxNameW = 0;
+  for (const line of nameLines) {
+    const m = ctx.measureText(line).width;
+    if (m > maxNameW) maxNameW = m;
+  }
+  const nameBoxW = Math.min(w - 8, maxNameW + 16);
+  const nameBoxH = nameLines.length * nameLineH + 8;
+  const nameBoxX = x + (w - nameBoxW) / 2;
+  const nameBoxY = y + 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
+  ctx.fillStyle = Colors.GOLD;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let nameY = nameBoxY + nameLineH / 2 + 4;
+  for (const line of nameLines) {
+    ctx.fillText(line, x + w / 2, nameY);
+    nameY += nameLineH;
+  }
+
+  // 3. Bottom box — ~1/5 of card height by default. Contains the description text
+  // (if any) at the top of the box and a stats row (attack number + HP bar) at the
+  // bottom. Grows slightly when there's a description that wouldn't otherwise fit.
+  let boxH = Math.floor(h / 5);
+  if (creature.description) {
+    // Reserve enough room for the stats row plus at least one description line
+    const minDescH = 20;
+    const minStatsH = 28;
+    boxH = Math.max(boxH, minDescH + minStatsH);
+  }
+  const boxX = x + 8;
+  const boxY = y + h - boxH - 8;
+  const boxW = w - 16;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = isPlayerOwned ? Colors.ALLY_BLUE : Colors.BROWN;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  // Stats row inside the bottom box
+  const statsRowH = Math.max(20, Math.floor(boxH * 0.45));
+  const statsTop = boxY + boxH - statsRowH;
+  const statsBottom = boxY + boxH - 4;
+
+  // HP bar (right half of stats row)
+  const hpBarX = boxX + boxW / 2 + 4;
+  const hpBarW = (boxW / 2) - 8;
+  const hpBarH = Math.floor(statsRowH * 0.7);
+  const hpBarY = statsBottom - hpBarH;
+  ctx.fillStyle = '#222';
+  ctx.fillRect(hpBarX, hpBarY, hpBarW, hpBarH);
+  const hpPct = creature.maxHp > 0 ? Math.max(0, creature.currentHp) / creature.maxHp : 0;
+  ctx.fillStyle = hpPct > 0.5 ? Colors.GREEN : (hpPct > 0.25 ? Colors.GOLD : Colors.RED);
+  ctx.fillRect(hpBarX, hpBarY, hpBarW * hpPct, hpBarH);
+  ctx.strokeStyle = Colors.WHITE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(hpBarX, hpBarY, hpBarW, hpBarH);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = `bold ${Math.floor(hpBarH * 0.7)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${creature.currentHp}/${creature.maxHp}`, hpBarX + hpBarW / 2, hpBarY + hpBarH / 2 + 1);
+
+  // Attack number (left half of stats row)
+  ctx.font = `bold ${Math.floor(statsRowH * 0.85)}px sans-serif`;
+  ctx.fillStyle = Colors.WHITE;
+  ctx.textAlign = 'left';
+  ctx.fillText(`${creature.attack}`, boxX + 8, hpBarY + hpBarH / 2 + 1);
+  if (creature.poisonAttack) {
+    const atkTextW = ctx.measureText(`${creature.attack}`).width;
+    const poisonImg = images['icon_poison'];
+    const pIconSize = Math.max(12, Math.floor(statsRowH * 0.75));
+    const px = boxX + 8 + atkTextW + 3;
+    const py = hpBarY + (hpBarH - pIconSize) / 2;
+    if (poisonImg) ctx.drawImage(poisonImg, px, py, pIconSize, pIconSize);
+  }
+
+  // Description text inside the box, above the stats row
+  const descText = creature.description || (creature.unpreventable ? 'Deals Unpreventable Damage' : '');
+  if (descText) {
+    ctx.fillStyle = '#f0f0f0';
+    const dFont = 13;
+    ctx.font = `${dFont}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const descAreaH = statsTop - boxY - 6;
+    const lines = wrapText(descText, boxW - 12, dFont);
+    let dy = boxY + 4;
+    const maxLines = Math.max(1, Math.floor(descAreaH / (dFont + 3)));
+    for (const line of lines.slice(0, maxLines)) {
+      ctx.fillText(line, x + w / 2, dy);
+      dy += dFont + 3;
+    }
+  }
+
+  // 4. Outer border
+  ctx.strokeStyle = isPlayerOwned ? Colors.ALLY_BLUE : Colors.BROWN;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, w, h);
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
 // Draw a full-size preview of a power card (similar to a card but without modes/etc)
 function drawPowerPreviewCard(power, x, y, w, h) {
-  const art = getPowerArt(power.id);
+  const art = images[`power_${power.id}`];
 
   if (art) {
     const imgAspect = art.width / art.height;
@@ -3149,8 +4552,14 @@ function drawPowerPreviewCard(power, x, y, w, h) {
   ctx.lineWidth = 1;
   ctx.strokeRect(descBoxX, descBoxY, descBoxW, descBoxH);
 
-  // Draw description with inline keyword icons
-  const descText = power.effectDescription || power.fullDescription || '';
+  // Draw the full description with cost on the full preview:
+  // "Recharge 2 Cards -> Deal 3 Damage." instead of just the effect.
+  let descText;
+  if (power.costDescription && power.costDescription !== 'Passive') {
+    descText = `${power.costDescription} -> ${power.effectDescription || ''}`.trim();
+  } else {
+    descText = power.effectDescription || power.fullDescription || '';
+  }
   const fontSize = 14;
   const lineCount = countWrappedLines(descText, descBoxW - 12, fontSize);
   const iconSize = Math.floor(fontSize * 1.3);
@@ -3170,28 +4579,88 @@ function drawPowerPreviewCard(power, x, y, w, h) {
 
 // Draw a chunky arrow from start to end (matches py game)
 function drawToast() {
-  // Fade out in last 400ms
   const alpha = (!toastSticky && toastTimer < 400) ? toastTimer / 400 : 1;
-  ctx.font = 'bold 22px Georgia, serif';
+  const s = toastStyle;
+  const isStyled = s === 'damage' || s === 'recharge' || s === 'multi' || s === 'scry' || s === 'heal' || s === 'gold';
+  const fontSize = isStyled ? 24 : 22;
+  ctx.font = `bold ${fontSize}px Georgia, serif`;
   ctx.textAlign = 'center';
-  const tw = ctx.measureText(toastMessage).width;
-  const padX = 24, padY = 12;
-  const boxW = tw + padX * 2;
-  const boxH = 22 + padY * 2;
-  const x = (SCREEN_WIDTH - boxW) / 2;
-  const y = SCREEN_HEIGHT / 2 - 100;
 
-  ctx.fillStyle = `rgba(0,0,0,${0.8 * alpha})`;
+  // Style palettes: [bgColor, borderColor, textColor, numColor]
+  const palettes = {
+    damage:   { bg: '60,0,0',   border: '255,60,60',  text: '255,180,80', num: '255,60,60' },
+    recharge: { bg: '30,0,50',  border: '160,80,200', text: '200,170,255', num: '200,120,255' },
+    scry:     { bg: '0,30,70',  border: '80,160,255', text: '180,220,255', num: '60,150,255' },
+    multi:    { bg: '50,40,0',  border: '255,200,50', text: '255,230,150', num: '255,200,50' },
+    heal:     { bg: '0,40,10',  border: '80,220,120', text: '180,255,200', num: '100,255,150' },
+    gold:     { bg: '50,30,0',  border: '255,200,80', text: '255,230,150', num: '255,215,80' },
+  };
+  const pal = palettes[s];
+
+  // Split text into tokens: numbers get highlighted when styled
+  const tokens = toastMessage.split(/(\d+)/);
+  let totalW = 0;
+  const measured = tokens.map(t => {
+    if (isStyled && /^\d+$/.test(t)) {
+      ctx.font = `bold ${fontSize + 8}px Georgia, serif`;
+      const w = ctx.measureText(t).width;
+      ctx.font = `bold ${fontSize}px Georgia, serif`;
+      return { text: t, w, isNum: true };
+    }
+    return { text: t, w: ctx.measureText(t).width, isNum: false };
+  });
+  for (const m of measured) totalW += m.w;
+
+  const padX = 24, padY = isStyled ? 14 : 12;
+  const boxW = totalW + padX * 2;
+  const boxH = fontSize + padY * 2;
+  // Center in the combat left area during combat, full screen otherwise
+  const isOverlayState = state === GameState.SCRY_SELECT || state === GameState.MODAL_SELECT ||
+    state === GameState.POWER_CHOICE;
+  const isCombatState = !isOverlayState && (state === GameState.COMBAT || state === GameState.TARGETING ||
+    state === GameState.DEFENDING || state === GameState.DAMAGE_SOURCE ||
+    state === GameState.POWER_TARGETING ||
+    state === GameState.ALLY_TARGETING || state === GameState.MULTI_TARGETING);
+  const centerW = isCombatState ? COMBAT_LEFT_W : SCREEN_WIDTH;
+  const x = (centerW - boxW) / 2;
+  // Position toast above cards for overlay states (scry, modal, power choice)
+  const isOverlay = state === GameState.SCRY_SELECT || state === GameState.MODAL_SELECT ||
+    state === GameState.POWER_CHOICE;
+  const y = isOverlay ? 130 : SCREEN_HEIGHT / 2 - 100;
+
+  // Background
+  ctx.fillStyle = pal ? `rgba(${pal.bg},${0.9 * alpha})` : `rgba(0,0,0,${0.8 * alpha})`;
   ctx.fillRect(x, y, boxW, boxH);
-  ctx.strokeStyle = `rgba(255, 215, 0, ${alpha})`;
-  ctx.lineWidth = 2;
+  // Border
+  ctx.strokeStyle = pal ? `rgba(${pal.border},${alpha})` : `rgba(255,215,0,${alpha})`;
+  ctx.lineWidth = isStyled ? 3 : 2;
   ctx.strokeRect(x, y, boxW, boxH);
 
-  ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+  // Draw tokens left-to-right
   ctx.textBaseline = 'middle';
-  ctx.fillText(toastMessage, x + boxW / 2, y + boxH / 2);
+  const textY = y + boxH / 2;
+  let tx = x + padX;
+  for (const m of measured) {
+    if (isStyled && m.isNum && pal) {
+      ctx.font = `bold ${fontSize + 8}px Georgia, serif`;
+      ctx.fillStyle = `rgba(${pal.num},${alpha})`;
+    } else {
+      ctx.font = `bold ${fontSize}px Georgia, serif`;
+      ctx.fillStyle = pal ? `rgba(${pal.text},${alpha})` : `rgba(255,215,0,${alpha})`;
+    }
+    ctx.textAlign = 'left';
+    ctx.fillText(m.text, tx, textY);
+    tx += m.w;
+  }
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
+}
+
+function drawScreenFlash() {
+  if (screenFlashTimer <= 0) return;
+  const alpha = Math.min(0.25, screenFlashTimer / 300 * 0.25);
+  ctx.fillStyle = `rgba(200, 0, 0, ${alpha})`;
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 function drawTargetingArrow(x1, y1, x2, y2, color = Colors.RED) {
@@ -3485,8 +4954,16 @@ function drawCharacterPanel(character, side) {
   const rect = getCharacterCardRect(isPlayer);
 
   // Targetable highlight (red border outside the card) — drawn first
-  if ((state === GameState.TARGETING || state === GameState.POWER_TARGETING) && !isPlayer) {
-    ctx.strokeStyle = Colors.RED;
+  if ((state === GameState.TARGETING ||
+       state === GameState.POWER_TARGETING ||
+       state === GameState.ALLY_TARGETING ||
+       state === GameState.MULTI_TARGETING) && !isPlayer) {
+    // Gold border if already picked in multi-target
+    if (state === GameState.MULTI_TARGETING && multiTargets.includes(enemy)) {
+      ctx.strokeStyle = Colors.GOLD;
+    } else {
+      ctx.strokeStyle = Colors.RED;
+    }
     ctx.lineWidth = 4;
     ctx.strokeRect(rect.x - 4, rect.y - 4, rect.w + 8, rect.h + 8);
   }
@@ -3543,7 +5020,20 @@ function drawCharacterPanel(character, side) {
 
   let deckText = `Deck: ${deckCount}`;
   if (rechargeCount > 0) deckText += `(${rechargeCount})`;
+  // In debug mode, highlight deck count as clickable (draw 1 card)
+  if (debugMode && isPlayer) ctx.fillStyle = '#8f8';
   ctx.fillText(deckText, rect.x + rect.w / 2, infoTop + 22);
+  if (debugMode && isPlayer) {
+    const deckW = ctx.measureText(deckText).width;
+    logCardHitAreas.push({
+      x: rect.x + rect.w / 2 - deckW / 2 - 4,
+      y: infoTop + 22 - 14,
+      w: deckW + 8,
+      h: 18,
+      debugDraw: true,
+    });
+    ctx.fillStyle = Colors.WHITE;
+  }
 
   // "Discard: N" — hover the row to preview the top discarded card
   ctx.fillStyle = '#aaa';
@@ -3591,6 +5081,42 @@ function drawCharacterPanel(character, side) {
   drawStatusIcon('icon_poison', character.getStatus('POISON') || 0, Colors.GREEN, 'poison');
   drawStatusIcon('icon_shock', character.getStatus('SHOCK') || 0, Colors.SHOCK_YELLOW, 'shock');
 
+  // Combat buff badges (continue on same row as status icons, using iconX)
+  if (character.combatBuffs && character.combatBuffs.length > 0) {
+    if (iconX > rect.x + 10) iconX += 4; // small gap after status icons
+    const buffSize = iconSize;
+    for (const buff of character.combatBuffs) {
+      const buffArt = getCardArt(buff.imageId);
+      if (buffArt) {
+        ctx.drawImage(buffArt, iconX, iconRowY, buffSize, buffSize);
+      } else {
+        ctx.fillStyle = '#3a6a3a';
+        ctx.fillRect(iconX, iconRowY, buffSize, buffSize);
+      }
+      ctx.strokeStyle = Colors.GREEN;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(iconX, iconRowY, buffSize, buffSize);
+      // Count badge: turns remaining (timed buffs) or stacks (persistent buffs)
+      const badgeNum = buff.turnsRemaining > 0
+        ? buff.turnsRemaining
+        : (buff.stacks && buff.stacks > 1 ? buff.stacks : 0);
+      if (badgeNum > 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(iconX + buffSize - 10, iconRowY, 12, 12);
+        ctx.fillStyle = Colors.WHITE;
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(badgeNum.toString(), iconX + buffSize - 4, iconRowY + 10);
+        ctx.textAlign = 'left';
+      }
+      logCardHitAreas.push({
+        x: iconX, y: iconRowY, w: buffSize, h: buffSize,
+        buff,
+      });
+      iconX += buffSize + 3;
+    }
+  }
+
   // HP bar at the bottom of the card (green)
   const hp = getHP(character);
   const maxHp = getMaxHP(character);
@@ -3616,23 +5142,39 @@ function drawCharacterPanel(character, side) {
 // Player allies use a blue border; enemies use brown. Targetable highlights with red,
 // already-picked (multi-target) highlights with gold.
 function drawCreatureCard(creature, rect, isPlayer) {
-  const targetingNow = state === GameState.TARGETING || state === GameState.POWER_TARGETING;
+  const targetingNow =
+    state === GameState.TARGETING ||
+    state === GameState.POWER_TARGETING ||
+    state === GameState.ALLY_TARGETING ||
+    state === GameState.MULTI_TARGETING;
   const isTargetable = targetingNow && !isPlayer;
-  const isPicked = state === GameState.POWER_TARGETING && powerTargets.includes(creature);
+  const isPicked =
+    (state === GameState.POWER_TARGETING && powerTargets.includes(creature)) ||
+    (state === GameState.MULTI_TARGETING && multiTargets.includes(creature));
+  // Highlight a ready ally that's selected for ally-targeting
+  const isSelectedAlly = isPlayer && state === GameState.ALLY_TARGETING && selectedAlly === creature;
+  const isReadyAlly = isPlayer && !creature.exhausted && state === GameState.COMBAT;
 
   // Outer highlight
-  if (isPicked) {
+  if (isPicked || isSelectedAlly) {
     ctx.fillStyle = Colors.GOLD;
     ctx.fillRect(rect.x - 4, rect.y - 4, rect.w + 8, rect.h + 8);
   } else if (isTargetable) {
     ctx.strokeStyle = Colors.RED;
     ctx.lineWidth = 3;
     ctx.strokeRect(rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6);
+  } else if (isReadyAlly) {
+    // Subtle green ring on ready allies so the player knows they can click them
+    ctx.strokeStyle = Colors.GREEN;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6);
   }
 
-  // Try creature art first (image keyed off snake-cased creature name)
+  // Try creature art first (image keyed off snake-cased creature name).
+  // Eagerly preloaded creature art lives in the `images` map under `creature_<key>`.
+  // Fall back to the lazy getCardArt cache if not preloaded.
   const artKey = (creature.name || '').toLowerCase().replace(/ /g, '_');
-  const art = getCardArt(artKey);
+  const art = images[`creature_${artKey}`] || getCardArt(artKey);
   if (art) {
     const imgAspect = art.width / art.height;
     const cardAspect = rect.w / rect.h;
@@ -3688,15 +5230,30 @@ function drawCreatureCard(creature, rect, isPlayer) {
   ctx.fillText(`${creature.currentHp}/${creature.maxHp}`, hpBarX + hpBarW / 2, hpBarY + hpBarH / 2 + 1);
 
   // Attack number on the left of the bottom row
-  ctx.font = 'bold 14px sans-serif';
+  ctx.font = 'bold 16px sans-serif';
   ctx.fillStyle = Colors.WHITE;
   ctx.textAlign = 'left';
   ctx.fillText(`${creature.attack}`, rect.x + 6, hpBarY + hpBarH / 2 + 1);
+  // Poison-attack indicator (icon beside the attack number)
+  if (creature.poisonAttack) {
+    const atkTextW = ctx.measureText(`${creature.attack}`).width;
+    const poisonImg = images['icon_poison'];
+    const pIconSize = 14;
+    const px = rect.x + 6 + atkTextW + 2;
+    const py = hpBarY + (hpBarH - pIconSize) / 2;
+    if (poisonImg) {
+      ctx.drawImage(poisonImg, px, py, pIconSize, pIconSize);
+    } else {
+      // Fallback dot
+      ctx.fillStyle = Colors.GREEN;
+      ctx.beginPath(); ctx.arc(px + 6, py + 7, 4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
 
-  // Status badges row (above HP/attack): shield, heroism on the left; fire/ice/poison stacked
-  const badgeY = hpBarY - 16;
-  let bx = rect.x + 6;
-  ctx.font = 'bold 10px sans-serif';
+  // Status badges row (above HP/attack): shield, heroism, armor, fire/ice/poison
+  const badgeY = hpBarY - 18;
+  let bx = rect.x + 4;
+  ctx.font = 'bold 12px sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   if (creature.shield > 0) {
@@ -3714,28 +5271,27 @@ function drawCreatureCard(creature, rect, isPlayer) {
     ctx.fillText(`A${creature.armor}`, bx, badgeY + 6);
     bx += 18;
   }
-  // Right side: fire / ice / poison
-  let rx = rect.x + rect.w - 6;
-  if (creature.fireStacks > 0) {
-    ctx.fillStyle = Colors.ORANGE;
-    ctx.textAlign = 'right';
-    ctx.fillText(`F${creature.fireStacks}`, rx, badgeY + 6);
-    rx -= 20;
-  }
-  if (creature.iceStacks > 0) {
-    ctx.fillStyle = Colors.ICE_BLUE;
-    ctx.textAlign = 'right';
-    ctx.fillText(`I${creature.iceStacks}`, rx, badgeY + 6);
-    rx -= 20;
-  }
-  if (creature.poisonStacks > 0) {
-    ctx.fillStyle = Colors.GREEN;
-    ctx.textAlign = 'right';
-    ctx.fillText(`P${creature.poisonStacks}`, rx, badgeY + 6);
-  }
+  // Status effects: fire / ice / poison / shock — left-aligned with icons
+  const cIconSize = 14;
+  const drawCreatureStatus = (iconKey, stacks, color) => {
+    if (stacks <= 0) return;
+    const img = images[iconKey];
+    if (img) {
+      ctx.drawImage(img, bx, badgeY - 1, cIconSize, cIconSize);
+      bx += cIconSize + 1;
+    }
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.fillText(stacks.toString(), bx, badgeY + 6);
+    bx += ctx.measureText(stacks.toString()).width + 4;
+  };
+  drawCreatureStatus('icon_fire', creature.fireStacks, Colors.ORANGE);
+  drawCreatureStatus('icon_ice', creature.iceStacks, Colors.ICE_BLUE);
+  drawCreatureStatus('icon_poison', creature.poisonStacks, Colors.GREEN);
+  drawCreatureStatus('icon_shock', creature.shockStacks || 0, Colors.SHOCK_YELLOW);
 
-  // Exhausted overlay (Zzz) — primarily for player allies
-  if (creature.exhausted && isPlayer) {
+  // Exhausted overlay (Zzz) for any exhausted creature (player ally or freshly summoned enemy)
+  if (creature.exhausted) {
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
     ctx.fillStyle = Colors.ORANGE;
@@ -3743,6 +5299,114 @@ function drawCreatureCard(creature, rect, isPlayer) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('Zzz', rect.x + rect.w / 2, rect.y + rect.h / 2);
+  }
+
+  // Info badge for creatures with special abilities (centered, below the Zzz area)
+  if (creature.unpreventable || creature.description) {
+    const ix = rect.x + rect.w / 2;
+    const iy = rect.y + rect.h / 2 + 16;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath();
+    ctx.arc(ix, iy, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = Colors.ALLY_BLUE;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = Colors.ALLY_BLUE;
+    ctx.font = 'bold 13px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('i', ix, iy + 1);
+  }
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+
+  // Register hover hit area so hovering shows the full-size preview
+  logCardHitAreas.push({
+    x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+    creature: creature,
+  });
+}
+
+// Visual-only creature mini card (no hit area registration). Used for the side
+// preview that appears next to a hovered card with a previewCreature, so hovering
+// over it doesn't try to chain another preview.
+function drawCreatureMiniCard(creature, rect, isPlayer) {
+  // Try creature art first
+  const artKey = (creature.name || '').toLowerCase().replace(/ /g, '_');
+  const art = images[`creature_${artKey}`] || getCardArt(artKey);
+  if (art) {
+    const imgAspect = art.width / art.height;
+    const cardAspect = rect.w / rect.h;
+    let sx = 0, sy = 0, sw = art.width, sh = art.height;
+    if (imgAspect > cardAspect) { sw = art.height * cardAspect; sx = (art.width - sw) / 2; }
+    else { sh = art.width / cardAspect; sy = (art.height - sh) / 2; }
+    ctx.drawImage(art, sx, sy, sw, sh, rect.x, rect.y, rect.w, rect.h);
+  } else {
+    ctx.fillStyle = isPlayer ? '#1a3a4e' : '#3a2020';
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  }
+
+  // Border
+  ctx.strokeStyle = isPlayer ? Colors.ALLY_BLUE : Colors.BROWN;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+
+  // Name banner at top
+  const nameFontSize = 11;
+  ctx.font = `bold ${nameFontSize}px sans-serif`;
+  const nameLines = wrapText(creature.name, rect.w - 6, nameFontSize);
+  const nameLineH = nameFontSize + 2;
+  const nameBgH = Math.min(nameLines.length, 2) * nameLineH + 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(rect.x + 2, rect.y + 2, rect.w - 4, nameBgH);
+  ctx.fillStyle = Colors.GOLD;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  let ny = rect.y + 4;
+  for (let i = 0; i < Math.min(nameLines.length, 2); i++) {
+    ctx.fillText(nameLines[i], rect.x + rect.w / 2, ny);
+    ny += nameLineH;
+  }
+
+  // Bottom box: attack number on left, HP bar on right
+  const boxH = Math.floor(rect.h / 5) + 4;
+  const boxY = rect.y + rect.h - boxH - 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(rect.x + 2, boxY, rect.w - 4, boxH);
+
+  // HP bar (right half)
+  const hpBarX = rect.x + rect.w / 2 + 2;
+  const hpBarW = rect.w / 2 - 6;
+  const hpBarH = Math.floor(boxH * 0.6);
+  const hpBarY = boxY + (boxH - hpBarH) / 2;
+  ctx.fillStyle = '#222';
+  ctx.fillRect(hpBarX, hpBarY, hpBarW, hpBarH);
+  const hpPct = creature.maxHp > 0 ? Math.max(0, creature.currentHp) / creature.maxHp : 0;
+  ctx.fillStyle = hpPct > 0.5 ? Colors.GREEN : (hpPct > 0.25 ? Colors.GOLD : Colors.RED);
+  ctx.fillRect(hpBarX, hpBarY, hpBarW * hpPct, hpBarH);
+  ctx.strokeStyle = Colors.WHITE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(hpBarX, hpBarY, hpBarW, hpBarH);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = `bold ${Math.floor(hpBarH * 0.7)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${creature.currentHp}/${creature.maxHp}`, hpBarX + hpBarW / 2, hpBarY + hpBarH / 2 + 1);
+
+  // Attack number (left half)
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = Colors.WHITE;
+  ctx.textAlign = 'left';
+  ctx.fillText(`${creature.attack}`, rect.x + 6, hpBarY + hpBarH / 2 + 1);
+  if (creature.poisonAttack) {
+    const atkTextW = ctx.measureText(`${creature.attack}`).width;
+    const poisonImg = images['icon_poison'];
+    const pIconSize = 12;
+    const px = rect.x + 6 + atkTextW + 2;
+    const py = hpBarY + (hpBarH - pIconSize) / 2;
+    if (poisonImg) ctx.drawImage(poisonImg, px, py, pIconSize, pIconSize);
   }
 
   ctx.textBaseline = 'alphabetic';
@@ -3761,37 +5425,46 @@ function drawCombatLog() {
   ctx.lineWidth = 1;
   ctx.strokeRect(logX, logY, logW, logH);
 
-  // (logCardHitAreas is cleared at the start of drawCombat — don't clear here.)
-
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'left';
   const lineH = 15;
-  const maxWidth = logW - 12;
+  const sbW = 6; // scrollbar width
+  const maxWidth = logW - 12 - sbW;
 
-  // Build wrapped lines from bottom up to fill the visible area
+  // Build ALL wrapped lines
   const wrappedEntries = [];
-  for (let i = combatLog.length - 1; i >= 0; i--) {
-    const entry = combatLog[i];
+  for (const entry of combatLog) {
     const lines = wrapTextLong(entry.text, maxWidth, 12);
-    // Push lines in order so the entry stays in reading order
-    for (let j = lines.length - 1; j >= 0; j--) {
-      wrappedEntries.unshift({
+    for (let j = 0; j < lines.length; j++) {
+      wrappedEntries.push({
         text: lines[j], color: entry.color, card: entry.card,
+        creature: entry.creature,
         isFirstLine: j === 0, arrow: entry.arrow && j === 0,
       });
     }
-    // Stop when we have enough lines
-    if (wrappedEntries.length * lineH > logH) break;
   }
 
-  // Render bottom-aligned (newest at bottom)
-  const visibleLines = Math.floor((logH - 4) / lineH);
-  const startIdx = Math.max(0, wrappedEntries.length - visibleLines);
-  let y = logY + 14;
-  for (let i = startIdx; i < wrappedEntries.length; i++) {
+  const totalContentH = wrappedEntries.length * lineH;
+  const visibleH = logH - 4;
+  const maxScroll = Math.max(0, totalContentH - visibleH);
+
+  // Clamp scroll and auto-pin to bottom when new entries arrive
+  combatLogScrollY = Math.min(combatLogScrollY, maxScroll);
+
+  // Calculate which line to start from (bottom-aligned with scroll offset)
+  const scrollOffset = maxScroll - combatLogScrollY;
+
+  // Clip to log area
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(logX, logY, logW - sbW, logH);
+  ctx.clip();
+
+  let y = logY + 14 - scrollOffset;
+  for (let i = 0; i < wrappedEntries.length; i++) {
+    if (y + lineH < logY || y > logY + logH) { y += lineH; continue; }
     const e = wrappedEntries[i];
     if (e.arrow && e.text.startsWith('→ ')) {
-      // Render arrow in orange, rest in entry color (white by default)
       ctx.fillStyle = Colors.ORANGE;
       ctx.fillText('→', logX + 6, y);
       const arrowW = ctx.measureText('→ ').width;
@@ -3801,14 +5474,26 @@ function drawCombatLog() {
       ctx.fillStyle = e.color;
       ctx.fillText(e.text, logX + 6, y);
     }
-    if (e.card && e.isFirstLine) {
-      // Register hit area for this log entry's card
+    if ((e.card || e.creature) && e.isFirstLine && y >= logY && y <= logY + logH) {
       logCardHitAreas.push({
         x: logX + 4, y: y - 12, w: maxWidth + 4, h: lineH,
-        card: e.card,
+        card: e.card || null,
+        creature: e.creature || null,
       });
     }
     y += lineH;
+  }
+  ctx.restore();
+
+  // Scrollbar (right edge of log)
+  if (totalContentH > visibleH) {
+    const sbX = logX + logW - sbW;
+    const thumbH = Math.max(16, visibleH * (visibleH / totalContentH));
+    const thumbY = logY + (scrollOffset / totalContentH) * (visibleH - thumbH);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(sbX, logY, sbW, logH);
+    ctx.fillStyle = 'rgba(255,215,0,0.5)';
+    ctx.fillRect(sbX, thumbY, sbW, thumbH);
   }
 }
 
@@ -3930,8 +5615,9 @@ function getPowerRect(index = 0) {
 // Draw a single power card at a given rect
 function drawPowerCard(power, r, clickable) {
   const hovered = hitTest(mouseX, mouseY, r);
-  if (hovered) hoveredPowerPreview = power;
-  const art = getPowerArt(power.id);
+  if (hovered && !isShiftFrozen()) hoveredPowerPreview = power;
+  // Check eager preload first to avoid any lazy-load reload flicker on hover
+  const art = images[`power_${power.id}`];
   const usable = clickable && power.canUse() && isPlayerTurn && !powerRechargeMode;
 
   if (art) {
@@ -4051,6 +5737,22 @@ function handleCombatClick(x, y) {
     return;
   }
 
+  // Debug: click "Deck: N" text to draw 1 card
+  if (debugMode && state === GameState.COMBAT && isPlayerTurn) {
+    for (const area of logCardHitAreas) {
+      if (area.debugDraw && hitTest(x, y, area)) {
+        if (player.deck.drawPile.length > 0) {
+          const card = player.deck.drawPile.pop();
+          player.deck.hand.push(card);
+          addLog(`[DBG] Drew: ${card.name}`, Colors.GREEN, card);
+        } else {
+          showToast('Draw pile empty.');
+        }
+        return;
+      }
+    }
+  }
+
   // Click on player or enemy character card → show splash (only if not in targeting/recharge mode)
   if (!powerRechargeMode && state === GameState.COMBAT) {
     const playerCardRect = getCharacterCardRect(true);
@@ -4087,6 +5789,28 @@ function handleCombatClick(x, y) {
     const r = getCharacterPowerRect(true, i);
     if (hitTest(x, y, r)) {
       handlePowerClick(power);
+      return;
+    }
+  }
+
+  // Check player ally click → enter ally targeting if ready
+  const allyRects = getPlayerCreatureRects();
+  for (let i = 0; i < player.creatures.length; i++) {
+    if (!allyRects[i]) continue;
+    if (hitTest(x, y, allyRects[i])) {
+      const ally = player.creatures[i];
+      if (!ally.isAlive) return;
+      if (ally.exhausted) {
+        if (ally.justSummoned) {
+          showToast(`${ally.name} can't attack the turn it's summoned.`);
+        } else {
+          showToast(`${ally.name} already attacked this turn.`);
+        }
+        return;
+      }
+      selectedAlly = ally;
+      state = GameState.ALLY_TARGETING;
+      showStickyToast(`${ally.name}: Click an enemy target (or click elsewhere to cancel)`);
       return;
     }
   }
@@ -4130,7 +5854,7 @@ function handleCombatClick(x, y) {
           // Need other cards in hand to pay the cost
           const otherCards = player.deck.hand.filter((c, j) => j !== i).length;
           if (otherCards < rechargeNeeded) {
-            addLog(`Not enough cards in hand to pay Recharge +${rechargeNeeded} cost.`, Colors.RED);
+            showToast(`Not enough cards in hand to pay Recharge +${rechargeNeeded} cost.`);
             selectedCardIndex = -1;
             return;
           }
@@ -4138,12 +5862,27 @@ function handleCombatClick(x, y) {
           cardRechargeNeeded = rechargeNeeded;
           cardRechargedCards = [];
           pendingRechargeNames = [];
-          showStickyToast(`Recharge: Click another card to recharge as cost (${rechargeNeeded} more, ESC to cancel)`);
+          showStyledToast(`Recharge: Click another card to recharge as cost (${rechargeNeeded} more, ESC to cancel)`, 'recharge');
+          return;
+        }
+        // Check for barrage (Magic Missiles optional extra recharge)
+        const hasBarrage = (card.effects || []).some(e => e.effectType === 'barrage');
+        if (hasBarrage && needsTarget(card)) {
+          selectedCardIndex = i;
+          barrageMode = true;
+          barrageShotsLeft = 0;
+          barrageShotsFired = 0;
+          barrageCardIndex = i;
+          barrageRechargedCard = null;
+          state = GameState.TARGETING;
+          showStyledToast('Recharge 1 card for 3 shots, or click enemy for 1 shot', 'recharge');
           return;
         }
         // No extra recharge cost: proceed normally
         if (canPlayWithoutTarget(card)) {
           playCardSelf(i);
+        } else if (cardIsMultiTarget(card)) {
+          enterMultiTargeting(i);
         } else if (needsTarget(card)) {
           state = GameState.TARGETING;
           showStickyToast('Click on an enemy to attack (or click elsewhere to cancel)');
@@ -4172,6 +5911,8 @@ function handleCardRechargeClick(x, y) {
     if (i === selectedCardIndex) continue;
     if (hitTest(x, y, getHandCardHoverRect(handRects, i))) {
       const card = player.deck.hand[i];
+      // Remember exhausted state so cancelling restores it (addToRechargePile resets it)
+      card._preRechargeExhausted = !!card.exhausted;
       // Move to recharge pile (held until end of turn, then flushed under the deck)
       player.deck.hand.splice(i, 1);
       player.deck.addToRechargePile(card);
@@ -4192,12 +5933,15 @@ function handleCardRechargeClick(x, y) {
           for (const n of pendingRechargeNames) addLog(`  Recharge: ${n}`);
           pendingRechargeNames = [];
           cardRechargedCards = [];
+        } else if (cardIsMultiTarget(selectedCard)) {
+          hideToast();
+          enterMultiTargeting(selectedCardIndex);
         } else {
           state = GameState.TARGETING;
           showStickyToast('Click on an enemy to attack (or click elsewhere to cancel)');
         }
       } else {
-        showStickyToast(`Recharge: Click another card to recharge as cost (${cardRechargeNeeded} more, ESC to cancel)`);
+        showStyledToast(`Recharge: Click another card to recharge as cost (${cardRechargeNeeded} more, ESC to cancel)`, 'recharge');
       }
       return;
     }
@@ -4213,20 +5957,28 @@ function handleDefendingClick(x, y) {
   for (let i = handRects.length - 1; i >= 0; i--) {
     if (!hitTest(x, y, getHandCardHoverRect(handRects, i))) continue;
     const card = player.deck.hand[i];
-    if (card.cardType !== CardType.DEFENSE) {
+    // Modal cards (e.g. Sturdy Boots) with a block-mode can also be played for defense.
+    const blockMode = (card.isModal && Array.isArray(card.modes))
+      ? card.modes.find(m => (m.effects || []).some(e => e.effectType === 'block'))
+      : null;
+    if (card.cardType !== CardType.DEFENSE && !blockMode) {
       showToast('Only defense cards can be played here.');
       return;
     }
-    // Play the defense card
+    // Play the defense card (or the block-mode of a modal card)
     player.deck.playCard(card);
     addLog(`You play ${card.name}`, Colors.GREEN, card);
-    for (const eff of card.currentEffects) {
+    const effectsToApply = blockMode ? blockMode.effects : card.currentEffects;
+    if (blockMode) addLog(`  Mode: ${blockMode.description}`, Colors.WHITE);
+    for (const eff of effectsToApply) {
       if (eff.effectType === 'block') {
         player.addBlock(eff.value);
         addLog(`  +${eff.value} Block`, Colors.BLUE);
+        spawnTokenOnTarget(player, eff.value, 'Block', BLOCK_BLUE);
       } else if (eff.effectType === 'gain_shield') {
         player.shield += eff.value;
         addLog(`  +${eff.value} Shield (S:${player.shield})`, Colors.ALLY_BLUE);
+        spawnTokenOnTarget(player, eff.value, 'Shield', Colors.ALLY_BLUE);
       } else if (eff.effectType === 'draw') {
         const drawn = player.deck.draw(eff.value, MAX_HAND_SIZE);
         for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
@@ -4239,7 +5991,7 @@ function handleDefendingClick(x, y) {
       finishIncomingDamage();
     } else {
       // Update toast with new remaining
-      showStickyToast(`Incoming ${pendingIncomingDamage} damage. Click defense cards or pass.`);
+      showStyledToast(`Incoming ${pendingIncomingDamage} damage. Play defense cards or pass.`, 'damage');
     }
     return;
   }
@@ -4251,6 +6003,43 @@ function handleDefendingClick(x, y) {
 }
 
 function drawDefendingOverlay() {
+  // Highlight playable defense cards with a pulsing blue glow. Clipped to the
+  // card's visible portion (horizontally) so overlapping cards don't bleed
+  // into each other, but padded vertically so the outer glow can extend past
+  // the card edges and read as "flashing" rather than a thin outline.
+  const pulse = (Math.sin(performance.now() / 150) + 1) / 2;
+  const glowAlpha = 0.7 + 0.3 * pulse;
+  const handRects = getHandCardRects(player.deck.hand);
+  for (let i = 0; i < handRects.length; i++) {
+    const card = player.deck.hand[i];
+    const hasBlockMode = card.isModal && Array.isArray(card.modes) &&
+      card.modes.some(m => (m.effects || []).some(e => e.effectType === 'block'));
+    if (card.cardType !== CardType.DEFENSE && !hasBlockMode) continue;
+    const hr = handRects[i];
+    const visR = getHandCardHoverRect(handRects, i);
+    // Let the glow extend off the outer edges of the hand (no neighbor to hide
+    // behind), but keep the narrow clip for middle cards so their frames don't
+    // bleed over the neighbor stacked on top.
+    const padLeft = (i === 0) ? 20 : 0;
+    const padRight = (i === handRects.length - 1) ? 20 : 0;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(visR.x - padLeft, visR.y - 16, visR.w + padLeft + padRight, visR.h + 32);
+    ctx.clip();
+    // Outer soft glow — wide, slightly desaturated
+    ctx.shadowColor = `rgba(80, 160, 255, ${glowAlpha})`;
+    ctx.shadowBlur = 32;
+    ctx.strokeStyle = `rgba(80, 160, 255, ${glowAlpha * 0.9})`;
+    ctx.lineWidth = 7;
+    ctx.strokeRect(hr.x - 3, hr.y - 3, hr.w + 6, hr.h + 6);
+    // Bright inner line: near-white blue, no shadow so it pops sharply
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = `rgba(200, 230, 255, ${Math.min(1, glowAlpha + 0.15)})`;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(hr.x, hr.y, hr.w, hr.h);
+    ctx.restore();
+  }
+
   // Pass button
   const r = getDefendingPassBtnRect();
   const hov = hitTest(mouseX, mouseY, r);
@@ -4269,7 +6058,8 @@ function drawDefendingOverlay() {
 }
 
 function getDefendingPassBtnRect() {
-  return { x: SCREEN_WIDTH / 2 - 110, y: COMBAT_DIVIDER_Y + 35, w: 220, h: 44 };
+  // Centered within the left card area (excluding the right log column)
+  return { x: COMBAT_LEFT_W / 2 - 110, y: COMBAT_DIVIDER_Y + 35, w: 220, h: 44 };
 }
 
 function cancelCardRecharge() {
@@ -4277,6 +6067,9 @@ function cancelCardRecharge() {
   for (const c of cardRechargedCards) {
     const idx = player.deck.rechargePile.indexOf(c);
     if (idx !== -1) player.deck.rechargePile.splice(idx, 1);
+    // Restore pre-recharge exhausted state (addToRechargePile had reset it)
+    c.exhausted = !!c._preRechargeExhausted;
+    delete c._preRechargeExhausted;
     player.deck.hand.push(c);
   }
   cardRechargedCards = [];
@@ -4289,39 +6082,165 @@ function cancelCardRecharge() {
 }
 
 function handleTargetingClick(x, y) {
-  // Click on enemy character card to target enemy directly
+  // Barrage shooting phase: each click on enemy resolves 1 shot
+  if (barrageMode && barrageShotsLeft > 0) {
+    // Check for Done button
+    const doneR = { x: COMBAT_LEFT_W / 2 - 80, y: COMBAT_DIVIDER_Y + 35, w: 160, h: 40 };
+    if (hitTest(x, y, doneR)) {
+      finishBarrage();
+      return;
+    }
+    const target = getClickedEnemyTarget(x, y);
+    if (target) {
+      resolveBarrageShot(target);
+      return;
+    }
+    return; // ignore other clicks during barrage
+  }
+
+  // Barrage pre-pay phase: click hand card to pay, or click enemy for single shot
+  if (barrageMode && barrageShotsLeft === 0) {
+    const handRects = getHandCardRects(player.deck.hand);
+    for (let i = handRects.length - 1; i >= 0; i--) {
+      if (i === barrageCardIndex) continue; // can't recharge MM itself
+      if (!hitTest(x, y, getHandCardHoverRect(handRects, i))) continue;
+      // Pay: recharge the clicked card (MM stays in hand)
+      const payCard = player.deck.hand[i];
+      player.deck.hand.splice(i, 1);
+      player.deck.addToRechargePile(payCard);
+      if (i < barrageCardIndex) barrageCardIndex--;
+      selectedCardIndex = barrageCardIndex;
+      barrageRechargedCard = payCard;
+      addLog(`  Recharge: ${payCard.name}`);
+      barrageShotsLeft = 3;
+      barrageShotsFired = 0;
+      showStyledToast(`Magic Missiles: 3 shots left — click a target (or Done)`, 'multi');
+      return;
+    }
+    // Clicked an enemy: single shot, fall through to normal targeting below
+  }
+
+  // Normal targeting: click enemy character
   const enemyCardRect = getCharacterCardRect(false);
   if (hitTest(x, y, enemyCardRect)) {
     const names = pendingRechargeNames.slice();
-    cardRechargedCards = []; // commit recharged cards
+    cardRechargedCards = [];
     pendingRechargeNames = [];
     hideToast();
+    barrageMode = false;
     playCardOnEnemy(selectedCardIndex);
     for (const n of names) addLog(`  Recharge: ${n}`);
     return;
   }
 
-  // Click on enemy creatures
+  // Normal targeting: click enemy creature
   const creatureRects = getEnemyCreatureRects();
   for (let i = 0; i < creatureRects.length; i++) {
     if (hitTest(x, y, creatureRects[i])) {
       const names = pendingRechargeNames.slice();
-      cardRechargedCards = []; // commit recharged cards
+      cardRechargedCards = [];
       pendingRechargeNames = [];
       hideToast();
+      barrageMode = false;
       playCardOnCreature(selectedCardIndex, enemy.creatures[i]);
       for (const n of names) addLog(`  Recharge: ${n}`);
       return;
     }
   }
 
-  // Click elsewhere → cancel and refund recharged cards
+  // Click elsewhere → cancel
   if (cardRechargedCards.length > 0) {
     cancelCardRecharge();
   }
+  cancelBarrage();
   hideToast();
   selectedCardIndex = -1;
   state = GameState.COMBAT;
+}
+
+// Helper: find which enemy target was clicked (character or creature)
+function getClickedEnemyTarget(x, y) {
+  const enemyCardRect = getCharacterCardRect(false);
+  if (hitTest(x, y, enemyCardRect)) return enemy;
+  const creatureRects = getEnemyCreatureRects();
+  for (let i = 0; i < creatureRects.length; i++) {
+    if (hitTest(x, y, creatureRects[i])) return enemy.creatures[i];
+  }
+  return null;
+}
+
+// Resolve one barrage shot on a target
+function resolveBarrageShot(target) {
+  barrageShotsLeft--;
+  barrageShotsFired++;
+  attacksThisTurn++;
+  const dmg = 1 + player.heroism + getDamageModifier(player);
+  if (player.heroism > 0) {
+    addLog(`  (Heroism +${player.heroism})`, Colors.GOLD);
+    player.heroism = 0;
+  }
+  addLog(`  Shot ${barrageShotsFired}:`, Colors.GRAY);
+  if (target === enemy) {
+    enemyAutoPlayDefenses(dmg);
+    const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+    if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
+    const bs = blocked > 0 ? ` (blocked ${blocked})` : '';
+    addLog(`  ${enemy.name}: ${taken} dmg${bs}`, Colors.RED);
+  } else if (target.isAlive) {
+    const actual = target.takeDamage(dmg);
+    if (actual > 0) spawnDamageOnTarget(target, actual);
+    addLog(`  ${target.name}: ${actual} dmg`, Colors.RED);
+    if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); }
+  }
+  countAndRemoveDeadCreatures();
+
+  if (barrageShotsLeft <= 0 || checkCombatEnd()) {
+    finishBarrage();
+  } else {
+    showStyledToast(`Magic Missiles: ${barrageShotsLeft} shot${barrageShotsLeft > 1 ? 's' : ''} left — click target or Done`, 'multi');
+  }
+}
+
+// Finish barrage: draw 1, pay card cost, clean up
+function finishBarrage() {
+  // Play MM from hand: lift, draw 1, pay cost (recharge)
+  if (barrageCardIndex >= 0 && barrageCardIndex < player.deck.hand.length) {
+    const card = player.deck.hand[barrageCardIndex];
+    if (barrageShotsFired === 0) addLog(`You play ${card.name}`, Colors.GREEN, card);
+    player.deck.hand.splice(barrageCardIndex, 1);
+    const drawn = player.deck.draw(1, MAX_HAND_SIZE);
+    for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
+    player.deck.placeByCost(card);
+  }
+  barrageRechargedCard = null;
+  barrageMode = false;
+  barrageShotsLeft = 0;
+  barrageShotsFired = 0;
+  barrageCardIndex = -1;
+  selectedCardIndex = -1;
+  state = GameState.COMBAT;
+  hideToast();
+  checkCombatEnd();
+}
+
+// Cancel barrage: only if no shots fired yet, refund the recharged card
+function cancelBarrage() {
+  if (barrageShotsFired > 0) {
+    // Can't cancel mid-barrage — finish instead
+    finishBarrage();
+    return;
+  }
+  if (barrageRechargedCard) {
+    const idx = player.deck.rechargePile.indexOf(barrageRechargedCard);
+    if (idx !== -1) player.deck.rechargePile.splice(idx, 1);
+    player.deck.hand.push(barrageRechargedCard);
+    addLog('  Barrage cancelled, card refunded.', Colors.GRAY);
+  }
+  barrageRechargedCard = null;
+  barrageMode = false;
+  barrageShotsLeft = 0;
+  barrageShotsFired = 0;
+  barrageCardIndex = -1;
 }
 
 let attacksThisTurn = 0; // for sneak_attack scaling
@@ -4349,14 +6268,28 @@ function needsTarget(card) {
     e.target === TargetType.SINGLE_ENEMY &&
     (e.effectType === 'damage' || e.effectType === 'apply_poison' ||
      e.effectType === 'armor_bonus_damage' || e.effectType === 'unpreventable_damage' ||
-     e.effectType === 'sneak_attack' || e.effectType === 'multi_damage')
+     e.effectType === 'sneak_attack' || e.effectType === 'multi_damage' ||
+     e.effectType === 'shield_bash' || e.effectType === 'charge_attack')
   );
 }
 
 // Reactively play any defense cards still in the enemy's hand (during player turn).
 // Called just before player damage lands on the enemy character.
-function enemyAutoPlayDefenses() {
+function enemyAutoPlayDefenses(incomingDmg = null) {
   if (!enemy || !enemy.deck) return;
+  // Calculate how much damage would actually land after existing defenses.
+  // If incomingDmg is provided, only play defenses when damage would actually hit.
+  let landingDmg = incomingDmg;
+  if (landingDmg !== null) {
+    // Simulate: shield → armor → block
+    let remaining = landingDmg;
+    remaining = Math.max(0, remaining - (enemy.shield || 0));
+    remaining = Math.max(0, remaining - (enemy.armor || 0));
+    remaining = Math.max(0, remaining - (enemy.currentBlock || 0));
+    landingDmg = remaining;
+    if (landingDmg <= 0) return; // fully absorbed, no need to defend
+  }
+
   const defenseCards = enemy.deck.hand.filter(c => c.cardType === CardType.DEFENSE);
   for (const card of defenseCards) {
     enemy.deck.playCard(card);
@@ -4365,11 +6298,25 @@ function enemyAutoPlayDefenses() {
       if (eff.effectType === 'block') {
         enemy.addBlock(eff.value);
         addLog(`  +${eff.value} Block`, Colors.BLUE);
+        spawnTokenOnTarget(enemy, eff.value, 'Block', BLOCK_BLUE);
+        if (landingDmg !== null) landingDmg = Math.max(0, landingDmg - eff.value);
       } else if (eff.effectType === 'gain_shield') {
         enemy.shield += eff.value;
         addLog(`  +${eff.value} Shield (S:${enemy.shield})`, Colors.ALLY_BLUE);
+        spawnTokenOnTarget(enemy, eff.value, 'Shield', Colors.ALLY_BLUE);
+        if (landingDmg !== null) landingDmg = Math.max(0, landingDmg - eff.value);
       }
     }
+    // Loose Bone: spawn a Restless Bone when it blocks
+    if (card.id === 'loose_bone') {
+      const bone = new Creature({ name: 'Restless Bone', attack: 1, maxHp: 2 });
+      enemy.addCreature(bone);
+      addLog(`  Restless Bone rises!`, Colors.ORANGE);
+      const lastEntry = combatLog[combatLog.length - 1];
+      if (lastEntry) lastEntry.creature = bone;
+    }
+    // Stop playing defense cards once incoming damage is fully absorbed
+    if (landingDmg !== null && landingDmg <= 0) break;
   }
 }
 
@@ -4383,34 +6330,109 @@ function resolveEffect(eff, caster, target) {
       const incomingMod = getIncomingDamageModifier(target instanceof Creature ? enemy : target);
       dmg += incomingMod;
       dmg = Math.max(0, dmg);
-      // Enemy reactively plays defense cards before damage lands on enemy character
-      if (!(target instanceof Creature) && target === enemy) {
-        enemyAutoPlayDefenses();
+      const unpreventable = consumeUnpreventableBuff(caster);
+      // Enemy reactively plays defense cards before damage lands on enemy character —
+      // skipped when the Slime Jar buff makes this attack unpreventable.
+      if (!unpreventable && !(target instanceof Creature) && target === enemy) {
+        enemyAutoPlayDefenses(dmg);
       }
       if (target instanceof Creature) {
-        const before = target.shield + target.currentHp;
-        const actual = target.takeDamage(dmg);
-        const blocked = Math.max(0, dmg - actual);
-        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
-        addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
-        if (!target.isAlive) { addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (unpreventable) {
+          target.takeUnpreventableDamage(dmg);
+          if (dmg > 0) spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const actual = target.takeDamage(dmg);
+          if (actual > 0) spawnDamageOnTarget(target, actual);
+          const blocked = Math.max(0, dmg - actual);
+          const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+          addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
+          consumePoisonBuff(caster, target, actual);
+        }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
       } else {
-        const [blocked, taken] = target.takeDamageWithDefense(dmg);
-        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
-        addLog(`  ${target.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+        if (unpreventable) {
+          target.takeDamageFromDeck(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(target, dmg, Colors.ORANGE); triggerSplitPower(target); }
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const [blocked, taken] = target.takeDamageWithDefense(dmg);
+          if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+          addLog(`  ${target.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+          consumePoisonBuff(caster, target, taken);
+        }
       }
       attacksThisTurn++;
+      break;
+    }
+    case 'charge_attack': {
+      // Warrior Charge: Deal N damage. Draw 1 if this was the first attack this turn.
+      const wasFirstAttack = (attacksThisTurn === 0);
+      const heroism = caster.heroism;
+      if (heroism > 0) { addLog(`  (Heroism +${heroism})`, Colors.GOLD); caster.heroism = 0; }
+      let dmg = Math.max(0, eff.value + heroism + caster.rage + getDamageModifier(caster));
+      const incomingMod = getIncomingDamageModifier(target instanceof Creature ? enemy : target);
+      dmg = Math.max(0, dmg + incomingMod);
+      const unpreventable = consumeUnpreventableBuff(caster);
+      if (!unpreventable && !(target instanceof Creature) && target === enemy) {
+        enemyAutoPlayDefenses(dmg);
+      }
+      if (target instanceof Creature) {
+        if (unpreventable) {
+          target.takeUnpreventableDamage(dmg);
+          if (dmg > 0) spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const actual = target.takeDamage(dmg);
+          if (actual > 0) spawnDamageOnTarget(target, actual);
+          const blocked = Math.max(0, dmg - actual);
+          const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+          addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
+          consumePoisonBuff(caster, target, actual);
+        }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+      } else {
+        if (unpreventable) {
+          target.takeDamageFromDeck(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(target, dmg, Colors.ORANGE); triggerSplitPower(target); }
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const [blocked, taken] = target.takeDamageWithDefense(dmg);
+          if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+          addLog(`  ${target.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+          consumePoisonBuff(caster, target, taken);
+        }
+      }
+      attacksThisTurn++;
+      // Conditional card-advantage kicker: draw 1 if this opened the turn.
+      if (wasFirstAttack) {
+        const drawn = caster.deck.draw(1, MAX_HAND_SIZE);
+        for (const d of drawn) addLog(`  Charge! Draw: ${d.name}`, Colors.GREEN, d);
+        if (drawn.length === 0) addLog(`  Charge! (no cards to draw)`, Colors.GRAY);
+      } else {
+        addLog(`  (not first attack — no draw)`, Colors.GRAY);
+      }
       break;
     }
     case 'unpreventable_damage': {
       const dmg = eff.value;
       if (target instanceof Creature) {
         target.takeUnpreventableDamage(dmg);
-        addLog(`  ${dmg} true dmg to ${target.name}`, Colors.RED);
-        if (!target.isAlive) { addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+        addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
+        consumePoisonBuff(caster, target, dmg);
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
       } else {
         target.takeDamageFromDeck(dmg);
-        addLog(`  ${dmg} true dmg to ${target.name}`, Colors.RED);
+        spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+        addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
+        consumePoisonBuff(caster, target, dmg);
       }
       attacksThisTurn++;
       break;
@@ -4420,31 +6442,120 @@ function resolveEffect(eff, caster, target) {
       const base = Math.floor(eff.value / 10);
       const bonus = eff.value % 10;
       const heroism = caster.heroism;
-      if (heroism > 0) { caster.heroism = 0; }
+      if (heroism > 0) { addLog(`  (Heroism +${heroism})`, Colors.GOLD); caster.heroism = 0; }
+      const hasArmor = target.armor > 0 || target.shield > 0;
       let dmg = base + heroism;
-      if (target.armor > 0 || target.shield > 0) dmg = bonus + heroism;
-      if (target instanceof Creature) {
-        const actual = target.takeDamage(dmg);
-        addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
-        if (!target.isAlive) { addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+      if (hasArmor) {
+        dmg = bonus + heroism;
+        addLog(`  Armor bonus: ${bonus} dmg (target has armor/shield)`, Colors.GOLD);
       } else {
-        const [blocked, taken] = target.takeDamageWithDefense(dmg);
-        addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
+        addLog(`  Base: ${base} dmg`, Colors.GRAY);
+      }
+      const unpreventable = consumeUnpreventableBuff(caster);
+      if (target instanceof Creature) {
+        if (unpreventable) {
+          target.takeUnpreventableDamage(dmg);
+          if (dmg > 0) spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const actual = target.takeDamage(dmg);
+          if (actual > 0) spawnDamageOnTarget(target, actual);
+          const absorbed = dmg - actual;
+          const bs = absorbed > 0 ? ` (${absorbed} absorbed)` : '';
+          addLog(`  ${target.name}: ${actual} dmg${bs}`, Colors.RED);
+          consumePoisonBuff(caster, target, actual);
+        }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+      } else {
+        if (unpreventable) {
+          target.takeDamageFromDeck(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(target, dmg, Colors.ORANGE); triggerSplitPower(target); }
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          if (target === enemy) enemyAutoPlayDefenses(dmg);
+          const [blocked, taken] = target.takeDamageWithDefense(dmg);
+          if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          const bs = blocked > 0 ? ` (${blocked} absorbed)` : '';
+          addLog(`  ${target.name}: ${taken} dmg${bs}`, Colors.RED);
+          consumePoisonBuff(caster, target, taken);
+        }
       }
       attacksThisTurn++;
       break;
     }
     case 'sneak_attack': {
+      attacksThisTurn++; // count itself first
       const dmg = attacksThisTurn + caster.heroism;
       if (caster.heroism > 0) { addLog(`  (Heroism +${caster.heroism})`, Colors.GOLD); caster.heroism = 0; }
       addLog(`  Sneak Attack x${attacksThisTurn}!`, Colors.GOLD);
+      const unpreventable = consumeUnpreventableBuff(caster);
       if (target instanceof Creature) {
-        const actual = target.takeDamage(dmg);
-        addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
-        if (!target.isAlive) { addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (unpreventable) {
+          target.takeUnpreventableDamage(dmg);
+          if (dmg > 0) spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+          addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const actual = target.takeDamage(dmg);
+          if (actual > 0) spawnDamageOnTarget(target, actual);
+          addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
+          consumePoisonBuff(caster, target, actual);
+        }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
       } else {
-        const [blocked, taken] = target.takeDamageWithDefense(dmg);
-        addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
+        if (unpreventable) {
+          target.takeDamageFromDeck(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(target, dmg, Colors.ORANGE); triggerSplitPower(target); }
+          addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const [blocked, taken] = target.takeDamageWithDefense(dmg);
+          if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
+          consumePoisonBuff(caster, target, taken);
+        }
+      }
+      break;
+    }
+    case 'shield_bash': {
+      // Gain N shield, then deal damage equal to total shield
+      caster.shield += eff.value;
+      addLog(`  +${eff.value} Shield (S:${caster.shield})`, Colors.ALLY_BLUE);
+      spawnTokenOnTarget(caster, eff.value, 'Shield', Colors.ALLY_BLUE);
+      const dmg = caster.shield + caster.heroism;
+      if (caster.heroism > 0) { addLog(`  (Heroism +${caster.heroism})`, Colors.GOLD); caster.heroism = 0; }
+      const unpreventable = consumeUnpreventableBuff(caster);
+      if (!unpreventable && !(target instanceof Creature) && target === enemy) {
+        enemyAutoPlayDefenses(dmg);
+      }
+      if (target instanceof Creature) {
+        if (unpreventable) {
+          target.takeUnpreventableDamage(dmg);
+          if (dmg > 0) spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const actual = target.takeDamage(dmg);
+          if (actual > 0) spawnDamageOnTarget(target, actual);
+          addLog(`  ${target.name}: ${actual} dmg`, Colors.RED);
+          consumePoisonBuff(caster, target, actual);
+        }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+      } else {
+        if (unpreventable) {
+          target.takeDamageFromDeck(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(target, dmg, Colors.ORANGE); triggerSplitPower(target); }
+          addLog(`  ${target.name}: ${dmg} true dmg`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const [blocked, taken] = target.takeDamageWithDefense(dmg);
+          if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          const bs = blocked > 0 ? ` (blocked ${blocked})` : '';
+          addLog(`  ${target.name}: ${taken} dmg${bs}`, Colors.RED);
+          consumePoisonBuff(caster, target, taken);
+        }
       }
       attacksThisTurn++;
       break;
@@ -4455,29 +6566,56 @@ function resolveEffect(eff, caster, target) {
       if (caster.heroism > 0) { addLog(`  (Heroism +${caster.heroism})`, Colors.GOLD); caster.heroism = 0; }
       let hits = 0;
       const maxT = eff.maxTargets || 2;
+      const unpreventable = consumeUnpreventableBuff(caster);
       // Hit the clicked target first
       if (target instanceof Creature) {
-        const actual = target.takeDamage(dmg);
-        addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
+        if (unpreventable) {
+          target.takeUnpreventableDamage(dmg);
+          if (dmg > 0) spawnDamageOnTarget(target, dmg, Colors.ORANGE);
+          addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const actual = target.takeDamage(dmg);
+          addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
+          consumePoisonBuff(caster, target, actual);
+        }
         if (!target.isAlive) addLog(`  ${target.name} destroyed!`, Colors.GOLD);
         hits++;
       } else {
-        const [blocked, taken] = target.takeDamageWithDefense(dmg);
-        addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
+        if (unpreventable) {
+          target.takeDamageFromDeck(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(target, dmg, Colors.ORANGE); triggerSplitPower(target); }
+          addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
+          consumePoisonBuff(caster, target, dmg);
+        } else {
+          const [blocked, taken] = target.takeDamageWithDefense(dmg);
+          addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
+          consumePoisonBuff(caster, target, taken);
+        }
         hits++;
       }
-      // Hit additional targets
+      // Hit additional targets (also unpreventable when the buff fired)
       const others = [...enemy.creatures.filter(c => c.isAlive && c !== target)];
       for (const c of others) {
         if (hits >= maxT) break;
-        const actual = c.takeDamage(dmg);
-        addLog(`  ${actual} dmg to ${c.name}`, Colors.RED);
+        if (unpreventable) {
+          c.takeUnpreventableDamage(dmg);
+          addLog(`  ${dmg} true dmg to ${c.name}`, Colors.ORANGE);
+        } else {
+          const actual = c.takeDamage(dmg);
+          addLog(`  ${actual} dmg to ${c.name}`, Colors.RED);
+        }
         if (!c.isAlive) addLog(`  ${c.name} destroyed!`, Colors.GOLD);
         hits++;
       }
       if (hits < maxT && !(target === enemy)) {
-        const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
-        addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
+        if (unpreventable) {
+          enemy.takeDamageFromDeck(dmg);
+          addLog(`  ${dmg} true dmg to ${enemy.name}`, Colors.ORANGE);
+        } else {
+          const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+          addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
+        }
       }
       countAndRemoveDeadCreatures();
       attacksThisTurn++;
@@ -4491,48 +6629,170 @@ function resolveEffect(eff, caster, target) {
         target.applyStatus('POISON', eff.value);
         addLog(`  +${eff.value} Poison on ${target.name}`, Colors.GREEN);
       }
+      spawnTokenOnTarget(target, eff.value, 'Poison', Colors.GREEN);
+      break;
+    }
+    case 'grant_poison_buff': {
+      caster.poisonBuff = (caster.poisonBuff || 0) + eff.value;
+      // Stacking visual badge on the character. If an existing Vial buff is already
+      // present, bump its stacks; otherwise add a fresh one.
+      const existing = (caster.combatBuffs || []).find(b => b.id === 'vial_poison');
+      if (existing) {
+        existing.stacks = (existing.stacks || 1) + eff.value;
+      } else {
+        caster.addCombatBuff(new CombatBuff({
+          id: 'vial_poison',
+          name: 'Vial of Poison',
+          description: 'Your next attack applies +1 Poison to the target.',
+          imageId: 'vial_of_poison',
+          effectType: 'grant_poison_buff',
+          effectValue: eff.value,
+          trigger: 'on_attack',
+          combatsRemaining: 1,
+          turnsRemaining: 0,
+        }));
+        const buff = caster.combatBuffs[caster.combatBuffs.length - 1];
+        buff.stacks = eff.value;
+      }
+      addLog(`  ${caster.name}: next attack applies +${eff.value} Poison`, Colors.GREEN);
+      break;
+    }
+    case 'grant_unpreventable_buff': {
+      caster.unpreventableBuff = (caster.unpreventableBuff || 0) + eff.value;
+      // Stacking visual badge on the character (mirrors Vial of Poison display logic).
+      const existing = (caster.combatBuffs || []).find(b => b.id === 'slime_jar_buff');
+      if (existing) {
+        existing.stacks = (existing.stacks || 1) + eff.value;
+      } else {
+        caster.addCombatBuff(new CombatBuff({
+          id: 'slime_jar_buff',
+          name: 'Slime Jar',
+          description: 'Your next attack is Unpreventable.',
+          imageId: 'slime_jar',
+          effectType: 'grant_unpreventable_buff',
+          effectValue: eff.value,
+          trigger: 'on_attack',
+          combatsRemaining: 1,
+          turnsRemaining: 0,
+        }));
+        const buff = caster.combatBuffs[caster.combatBuffs.length - 1];
+        buff.stacks = eff.value;
+      }
+      addLog(`  ${caster.name}: next attack is Unpreventable`, Colors.ORANGE);
       break;
     }
     case 'apply_ice': {
+      let appliedIce = 0;
       if (target instanceof Creature) {
-        target.iceStacks += eff.value;
-        addLog(`  +${eff.value} Ice on ${target.name}`, Colors.ICE_BLUE);
+        // Ice cancels fire first
+        const cancel = Math.min(target.fireStacks, eff.value);
+        if (cancel > 0) {
+          target.fireStacks -= cancel;
+          addLog(`  Ice cancels ${cancel} Fire on ${target.name}`, Colors.ICE_BLUE);
+        }
+        const remaining = eff.value - cancel;
+        if (remaining > 0) {
+          target.iceStacks += remaining;
+          addLog(`  +${remaining} Ice on ${target.name}`, Colors.ICE_BLUE);
+          appliedIce = remaining;
+        }
       } else {
-        target.applyStatus('ICE', eff.value);
-        addLog(`  +${eff.value} Ice on ${target.name}`, Colors.ICE_BLUE);
+        const fire = target.getStatus('FIRE') || 0;
+        const cancel = Math.min(fire, eff.value);
+        if (cancel > 0) {
+          target.removeStatus('FIRE', cancel);
+          addLog(`  Ice cancels ${cancel} Fire on ${target.name}`, Colors.ICE_BLUE);
+        }
+        const remaining = eff.value - cancel;
+        if (remaining > 0) {
+          target.applyStatus('ICE', remaining);
+          addLog(`  +${remaining} Ice on ${target.name}`, Colors.ICE_BLUE);
+          appliedIce = remaining;
+        }
       }
+      if (appliedIce > 0) spawnTokenOnTarget(target, appliedIce, 'Ice', Colors.ICE_BLUE);
       break;
     }
     case 'apply_fire': {
+      let appliedFire = 0;
       if (target instanceof Creature) {
-        target.fireStacks += eff.value;
-        addLog(`  +${eff.value} Fire on ${target.name}`, Colors.RED);
+        // Fire cancels ice first
+        const cancel = Math.min(target.iceStacks, eff.value);
+        if (cancel > 0) {
+          target.iceStacks -= cancel;
+          addLog(`  Fire cancels ${cancel} Ice on ${target.name}`, Colors.ORANGE);
+        }
+        const remaining = eff.value - cancel;
+        if (remaining > 0) {
+          target.fireStacks += remaining;
+          addLog(`  +${remaining} Fire on ${target.name}`, Colors.RED);
+          appliedFire = remaining;
+        }
       } else {
-        target.applyStatus('FIRE', eff.value);
-        addLog(`  +${eff.value} Fire on ${target.name}`, Colors.RED);
+        const ice = target.getStatus('ICE') || 0;
+        const cancel = Math.min(ice, eff.value);
+        if (cancel > 0) {
+          target.removeStatus('ICE', cancel);
+          addLog(`  Fire cancels ${cancel} Ice on ${target.name}`, Colors.ORANGE);
+        }
+        const remaining = eff.value - cancel;
+        if (remaining > 0) {
+          target.applyStatus('FIRE', remaining);
+          addLog(`  +${remaining} Fire on ${target.name}`, Colors.RED);
+          appliedFire = remaining;
+        }
       }
+      if (appliedFire > 0) spawnTokenOnTarget(target, appliedFire, 'Fire', Colors.ORANGE);
       break;
     }
     case 'apply_fire_all': {
       enemy.applyStatus('FIRE', eff.value);
       addLog(`  +${eff.value} Fire on ${enemy.name}`, Colors.RED);
+      spawnTokenOnTarget(enemy, eff.value, 'Fire', Colors.ORANGE);
       for (const c of enemy.creatures) {
         c.fireStacks += eff.value;
         addLog(`  +${eff.value} Fire on ${c.name}`, Colors.RED);
+        spawnTokenOnTarget(c, eff.value, 'Fire', Colors.ORANGE);
       }
       break;
     }
     case 'block':
       caster.addBlock(eff.value);
       addLog(`  +${eff.value} Block`, Colors.BLUE);
+      spawnTokenOnTarget(caster, eff.value, 'Block', BLOCK_BLUE);
       break;
     case 'gain_shield':
       caster.shield += eff.value;
       addLog(`  +${eff.value} Shield (S:${caster.shield})`, Colors.ALLY_BLUE);
+      spawnTokenOnTarget(caster, eff.value, 'Shield', Colors.ALLY_BLUE);
       break;
     case 'heal':
       healPlayer(eff.value);
       break;
+    case 'discard_deck': {
+      // Lose N cards from the top of the draw pile (Bad Rations side-effect)
+      const before = player.deck.drawPile.length + player.deck.rechargePile.length;
+      const taken = player.takeDamageFromDeck(eff.value);
+      if (taken > 0) addLog(`  Lost ${taken} card${taken > 1 ? 's' : ''} from deck`, Colors.RED);
+      else if (before === 0) addLog(`  (no cards in deck to discard)`, Colors.GRAY);
+      break;
+    }
+    case 'regen_buff': {
+      const buff = new CombatBuff({
+        id: 'regrowth_regen',
+        name: 'Regrowth',
+        description: `Heal 1 at start of turn (${eff.value} turns)`,
+        imageId: 'regrowth',
+        effectType: 'heal',
+        effectValue: 1,
+        trigger: 'start_of_turn',
+        combatsRemaining: 1,
+        turnsRemaining: eff.value,
+      });
+      caster.addCombatBuff(buff);
+      addLog(`  Regrowth: Heal 1 for ${eff.value} turns`, Colors.GREEN);
+      break;
+    }
     case 'draw': {
       const drawn = caster.deck.draw(eff.value, MAX_HAND_SIZE);
       for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
@@ -4541,6 +6801,7 @@ function resolveEffect(eff, caster, target) {
     case 'gain_heroism':
       caster.heroism += eff.value;
       addLog(`  +${eff.value} Heroism`, Colors.GOLD);
+      spawnTokenOnTarget(caster, eff.value, 'Heroism', Colors.GOLD);
       break;
     case 'summon_random': {
       // Summon 1 to value creatures
@@ -4555,25 +6816,59 @@ function resolveEffect(eff, caster, target) {
     case 'summon_thorb': {
       const thorb = new Creature({ name: 'Thorb', attack: 2, maxHp: 4, isCompanion: true });
       player.addCreature(thorb);
-      thorb.ready();
+      // Newly summoned creatures stay exhausted (Zzz) and ready next turn
       addLog(`  Thorb joins the fight!`, Colors.GREEN);
       break;
     }
     case 'summon_thorb_upgraded': {
       const thorb = new Creature({ name: 'Thorb', attack: 2, maxHp: 5, sentinel: true, isCompanion: true });
       player.addCreature(thorb);
-      thorb.ready();
       addLog(`  Thorb (Sentinel) joins the fight!`, Colors.GREEN);
       break;
     }
     case 'summon_tamed_rat': {
       const count = Math.floor(Math.random() * 2) + 1;
+      let lastRat;
       for (let i = 0; i < count; i++) {
-        const rat = new Creature({ name: 'Tamed Rat', attack: 1, maxHp: 1 });
-        player.addCreature(rat);
-        rat.ready();
-        addLog(`  Summoned Tamed Rat!`, Colors.GREEN);
+        lastRat = new Creature({ name: 'Tamed Rat', attack: 1, maxHp: 1 });
+        player.addCreature(lastRat);
       }
+      // Pass creature for hover preview in the log
+      addLog(`  ${count} Tamed Rat${count > 1 ? 's' : ''} summoned`, Colors.ORANGE);
+      // Add a hoverable entry for the creature
+      if (lastRat) {
+        const lastEntry = combatLog[combatLog.length - 1];
+        if (lastEntry) lastEntry.creature = lastRat;
+      }
+      break;
+    }
+    case 'summon_pet_slime': {
+      const slime = new Creature({ name: 'Pet Slime', attack: 1, maxHp: 1, unpreventable: true });
+      caster.addCreature(slime);
+      addLog(`  Pet Slime summoned!`, Colors.ORANGE);
+      const lastEntry = combatLog[combatLog.length - 1];
+      if (lastEntry) lastEntry.creature = slime;
+      break;
+    }
+    case 'summon_small_spider': {
+      const spider = new Creature({ name: 'Pet Spider', attack: 0, maxHp: 1, poisonAttack: true, isCompanion: true });
+      caster.addCreature(spider);
+      addLog(`  Pet Spider joins the fight!`, Colors.GREEN);
+      const lastEntry = combatLog[combatLog.length - 1];
+      if (lastEntry) lastEntry.creature = spider;
+      break;
+    }
+    case 'create_goodberries': {
+      // Create N Goodberry token cards directly into the player's hand (capped by MAX_HAND_SIZE)
+      const count = eff.value;
+      let added = 0;
+      for (let i = 0; i < count; i++) {
+        if (player.deck.hand.length >= MAX_HAND_SIZE) break;
+        const berry = createGoodberry();
+        player.deck.hand.push(berry);
+        added++;
+      }
+      addLog(`  ${added} Goodberry created in hand`, Colors.GREEN);
       break;
     }
     case 'recharge_extra':
@@ -4620,8 +6915,21 @@ function resolveEffect(eff, caster, target) {
       addLog(`  Ale buff: +1 Heroism/turn for ${eff.value} turns`, Colors.GOLD);
       break;
     }
+    case 'scry_pick': {
+      // Reveal top N cards from draw pile, player picks 1 to hand, rest recharge
+      const scryCount = eff.value || 2;
+      const revealed = [];
+      for (let i = 0; i < scryCount && player.deck.drawPile.length > 0; i++) {
+        revealed.push(player.deck.drawPile.pop());
+      }
+      if (revealed.length > 0) {
+        scryCards = revealed;
+        state = GameState.SCRY_SELECT;
+        showStyledToast(`Scry ${revealed.length}: pick 1 card to draw, the rest are recharged`, 'scry');
+      }
+      break;
+    }
     // Effects we acknowledge but don't fully implement yet
-    case 'scry_pick':
     case 'buff_allies_heroism':
     case 'cat_form':
     case 'bear_form':
@@ -4636,24 +6944,41 @@ function cardStaysInHand(card) {
   return (card.currentEffects || []).some(e => e.effectType === 'stays_in_hand');
 }
 
+// Remove a card from the hand without routing it to its destination yet — used for
+// effect-first plays (like Scraps where the card heals from discard before being discarded).
+function liftCardFromHand(handIndex) {
+  const card = player.deck.hand[handIndex];
+  player.deck.hand.splice(handIndex, 1);
+  return card;
+}
+
 function playCardSelf(handIndex) {
   const card = player.deck.hand[handIndex];
   const stays = cardStaysInHand(card);
   if (stays) {
     card.exhausted = true;
+    addLog(`You use ${card.name} (stays in hand)`, Colors.GREEN, card);
   } else {
-    player.deck.playCard(card);
+    // Lift the card OUT of hand BEFORE resolving effects so it can't interact with itself
+    // (e.g. Scraps must not heal itself back from the discard pile).
+    liftCardFromHand(handIndex);
+    addLog(`You play ${card.name}`, Colors.GREEN, card);
   }
-  addLog(stays ? `You use ${card.name} (stays in hand)` : `You play ${card.name}`, Colors.GREEN, card);
 
   for (const eff of card.currentEffects) {
     if (eff.effectType === 'stays_in_hand') continue;
     resolveEffect(eff, player, enemy);
   }
 
+  // Pay the cost AFTER effects resolve
+  if (!stays) player.deck.placeByCost(card);
+
   selectedCardIndex = -1;
-  state = GameState.COMBAT;
-  checkCombatEnd();
+  // Don't overwrite state if an effect (like scry_pick) changed it
+  if (state === GameState.COMBAT || state === GameState.TARGETING) {
+    state = GameState.COMBAT;
+    checkCombatEnd();
+  }
 }
 
 function playCardOnEnemy(handIndex) {
@@ -4661,16 +6986,28 @@ function playCardOnEnemy(handIndex) {
   const stays = cardStaysInHand(card);
   if (stays) {
     card.exhausted = true;
+    addLog(`You use ${card.name} (stays in hand)`, Colors.GREEN, card);
   } else {
-    player.deck.playCard(card);
+    liftCardFromHand(handIndex);
+    addLog(`You play ${card.name}`, Colors.GREEN, card);
   }
-  addLog(stays ? `You use ${card.name} (stays in hand)` : `You play ${card.name}`, Colors.GREEN, card);
 
-  for (const eff of card.currentEffects) {
+  // Use modal mode effects if a mode was chosen, otherwise use card's own effects
+  const effects = (modalCard && modalCard._chosenMode)
+    ? modalCard._chosenMode.effects
+    : card.currentEffects;
+  if (modalCard && modalCard._chosenMode) {
+    addLog(`  Mode: ${modalCard._chosenMode.description}`);
+  }
+  for (const eff of effects) {
     if (eff.effectType === 'stays_in_hand') continue;
     resolveEffect(eff, player, enemy);
   }
 
+  if (!stays) player.deck.placeByCost(card);
+
+  modalCard = null;
+  modalTarget = null;
   selectedCardIndex = -1;
   state = GameState.COMBAT;
   checkCombatEnd();
@@ -4681,17 +7018,19 @@ function playCardOnCreature(handIndex, creature) {
   const stays = cardStaysInHand(card);
   if (stays) {
     card.exhausted = true;
+    addLog(`You use ${card.name} on ${creature.name} (stays in hand)`, Colors.GREEN, card);
   } else {
-    player.deck.playCard(card);
+    liftCardFromHand(handIndex);
+    addLog(`You play ${card.name} on ${creature.name}`, Colors.GREEN, card);
   }
-  addLog(
-    stays
-      ? `You use ${card.name} on ${creature.name} (stays in hand)`
-      : `You play ${card.name} on ${creature.name}`,
-    Colors.GREEN, card,
-  );
 
-  for (const eff of card.currentEffects) {
+  const effects = (modalCard && modalCard._chosenMode)
+    ? modalCard._chosenMode.effects
+    : card.currentEffects;
+  if (modalCard && modalCard._chosenMode) {
+    addLog(`  Mode: ${modalCard._chosenMode.description}`);
+  }
+  for (const eff of effects) {
     if (eff.effectType === 'stays_in_hand') continue;
     if (eff.target === TargetType.SINGLE_ENEMY || eff.target === TargetType.RANDOM_ENEMY) {
       resolveEffect(eff, player, creature);
@@ -4700,6 +7039,10 @@ function playCardOnCreature(handIndex, creature) {
     }
   }
 
+  if (!stays) player.deck.placeByCost(card);
+
+  modalCard = null;
+  modalTarget = null;
   selectedCardIndex = -1;
   state = GameState.COMBAT;
   checkCombatEnd();
@@ -4708,29 +7051,57 @@ function playCardOnCreature(handIndex, creature) {
 function dealDamageToEnemy(amount, target) {
   if (target === 'all') {
     const [blocked, taken] = enemy.takeDamageWithDefense(amount);
+    if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
     addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
     for (const c of [...enemy.creatures]) {
       const actual = c.takeDamage(amount);
+      if (actual > 0) spawnDamageOnTarget(c, actual);
       addLog(`  ${actual} dmg to ${c.name}`, Colors.RED);
-      if (!c.isAlive) addLog(`  ${c.name} destroyed!`, Colors.GOLD);
+      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
     }
     countAndRemoveDeadCreatures();
   } else {
     const [blocked, taken] = enemy.takeDamageWithDefense(amount);
+    if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
     if (blocked > 0) addLog(`  (${blocked} blocked)`, Colors.BLUE);
     addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
   }
 }
 
 function healPlayer(amount) {
-  // Move cards from damage pile back to draw pile
+  // Heal = pop the top `amount` cards from the discard pile (most recently
+  // damaged cards first). In combat they go to the recharge pile (re-enter
+  // the deck at end of turn). Outside combat they are simply removed from
+  // the discard pile (the discard shrinks = HP restored for next combat).
+  // Each point of poison on the player consumes one point of healing first
+  // (clears 1 Poison stack instead of healing 1 card).
+  let remaining = amount;
+  let poisonCleared = 0;
+  const poison = player.getStatus('POISON') || 0;
+  if (poison > 0 && remaining > 0) {
+    const toClear = Math.min(poison, remaining);
+    player.removeStatus('POISON', toClear);
+    poisonCleared = toClear;
+    remaining -= toClear;
+    addLog(`  Healing purges ${toClear} Poison`, Colors.GREEN);
+    showStyledToast(`-${toClear} Poison (healed)`, 'scry', 2000);
+  }
   let healed = 0;
-  for (let i = 0; i < amount && player.deck.damagePile.length > 0; i++) {
-    const card = player.deck.damagePile.pop();
-    player.deck.addToDrawPile(card, 'random');
+  for (let i = 0; i < remaining && player.deck.discardPile.length > 0; i++) {
+    const card = player.deck.discardPile.pop();
+    if (player.deck.drawPile.length > 0 || player.deck.hand.length > 0) {
+      player.deck.addToRechargePile(card);
+    }
+    addLog(`  Healed: ${card.name}`, Colors.GREEN, card);
     healed++;
   }
-  if (healed > 0) addLog(`  Healed ${healed} HP`, Colors.GREEN);
+  if (healed > 0) {
+    spawnHealOnTarget(player, healed);
+    showStyledToast(`+${healed} Healed`, 'heal', 2000);
+  } else if (poisonCleared === 0 && amount > 0) {
+    // Nothing to heal
+    addLog(`  Nothing to heal.`, Colors.GRAY);
+  }
 }
 
 // --- End turn ---
@@ -4754,7 +7125,7 @@ function handlePowerClick(power) {
     powerRechargeCardsSelected = [];
     selectedCardIndex = -1;
     const verb = power.costIsDiscard ? 'discard' : 'recharge';
-    showStickyToast(`${power.name}: Click ${power.rechargeCost} card(s) to ${verb} (ESC to cancel)`);
+    showStyledToast(`${power.name}: Click ${power.rechargeCost} card(s) to ${verb} (ESC to cancel)`, 'recharge');
   } else if (powerHasChoices(power)) {
     enterPowerChoice(power);
   } else if (powerNeedsTargets(power)) {
@@ -4772,6 +7143,8 @@ function handlePowerRechargeClick(x, y) {
       const card = player.deck.hand[i];
       // Remove card from hand and recharge/discard it
       player.deck.hand.splice(i, 1);
+      // Remember pre-cost exhausted flag so cancelling restores it
+      card._preRechargeExhausted = !!card.exhausted;
       card.exhausted = false; // leaving hand clears stay-in-hand exhaust
       if (selectedPower.costIsDiscard) {
         player.deck.discardPile.push(card);
@@ -4796,7 +7169,7 @@ function handlePowerRechargeClick(x, y) {
         }
       } else {
         const verb = selectedPower.costIsDiscard ? 'discard' : 'recharge';
-        showStickyToast(`${selectedPower.name}: Click ${powerRechargeCardsNeeded} more card(s) to ${verb} (ESC to cancel)`);
+        showStyledToast(`${selectedPower.name}: Click ${powerRechargeCardsNeeded} more card(s) to ${verb} (ESC to cancel)`, 'recharge');
       }
       return;
     }
@@ -4814,6 +7187,9 @@ function cancelPowerRecharge() {
     if (rcIdx !== -1) player.deck.rechargePile.splice(rcIdx, 1);
     const discIdx = player.deck.discardPile.indexOf(card);
     if (discIdx !== -1) player.deck.discardPile.splice(discIdx, 1);
+    // Restore the pre-cost exhausted state
+    card.exhausted = !!card._preRechargeExhausted;
+    delete card._preRechargeExhausted;
     player.deck.hand.push(card);
   }
   powerRechargeMode = false;
@@ -4849,6 +7225,8 @@ function cancelPowerChoice() {
       if (rcIdx !== -1) player.deck.rechargePile.splice(rcIdx, 1);
       const discIdx = player.deck.discardPile.indexOf(card);
       if (discIdx !== -1) player.deck.discardPile.splice(discIdx, 1);
+      card.exhausted = !!card._preRechargeExhausted;
+      delete card._preRechargeExhausted;
       player.deck.hand.push(card);
     }
   }
@@ -4889,6 +7267,7 @@ function onPowerChoicePicked(choice) {
     addLog(`  Mode: Feline Form`);
     player.heroism += 1;
     addLog(`  +1 Heroism (H:${player.heroism})`, Colors.GOLD);
+    spawnTokenOnTarget(player, 1, 'Heroism', Colors.GOLD);
     const drawn = player.deck.draw(1, MAX_HAND_SIZE);
     for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
     selectedPower = null;
@@ -4905,6 +7284,7 @@ function onPowerChoicePicked(choice) {
     addLog(`  Mode: Bear Form`);
     player.shield += 1;
     addLog(`  +1 Shield (S:${player.shield})`, Colors.ALLY_BLUE);
+    spawnTokenOnTarget(player, 1, 'Shield', Colors.ALLY_BLUE);
     const drawn = player.deck.draw(1, MAX_HAND_SIZE);
     for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
     selectedPower = null;
@@ -4939,7 +7319,7 @@ function drawPowerChoiceOverlay() {
   const gap = 40;
   const totalW = powerChoices.length * cardW + (powerChoices.length - 1) * gap;
   const startX = Math.floor((SCREEN_WIDTH - totalW) / 2);
-  const cardY = 160;
+  const cardY = 200;
 
   powerChoiceRects = [];
   for (let i = 0; i < powerChoices.length; i++) {
@@ -4981,12 +7361,13 @@ function powerHasChoices(power) {
 
 function powerNeedsTargets(power) {
   // Powers that go straight to targeting after paying the cost
-  return power.id === 'cleave';
+  return power.id === 'cleave' || power.id === 'quick_strike';
 }
 
 function powerTargetCount(power) {
   if (power.id === 'cleave') return 2;
   if (power.id === 'elemental_infusion') return 1;
+  if (power.id === 'quick_strike') return 1;
   return 0;
 }
 
@@ -5007,6 +7388,8 @@ function cancelPowerTargeting() {
       if (rcIdx !== -1) player.deck.rechargePile.splice(rcIdx, 1);
       const discIdx = player.deck.discardPile.indexOf(card);
       if (discIdx !== -1) player.deck.discardPile.splice(discIdx, 1);
+      card.exhausted = !!card._preRechargeExhausted;
+      delete card._preRechargeExhausted;
       player.deck.hand.push(card);
     }
   }
@@ -5018,6 +7401,293 @@ function cancelPowerTargeting() {
   state = GameState.COMBAT;
   hideToast();
   addLog('Power cancelled.', Colors.GRAY);
+}
+
+// === Multi-target attacks (Wooden Axe etc.) ===
+function cardIsMultiTarget(card) {
+  return (card.currentEffects || []).some(e => e.effectType === 'multi_damage');
+}
+
+function getMultiTargetMax(card) {
+  for (const e of card.currentEffects || []) {
+    if (e.effectType === 'multi_damage') return e.maxTargets || 2;
+  }
+  return 2;
+}
+
+function enterMultiTargeting(handIndex) {
+  multiCardIndex = handIndex;
+  multiTargets = [];
+  const card = player.deck.hand[handIndex];
+  multiMaxTargets = getMultiTargetMax(card);
+  state = GameState.MULTI_TARGETING;
+  // The player must always click/drag at least one target to confirm — even if
+  // there's only one valid target, we DON'T auto-resolve on entry.
+  showStyledToast(`${card.name}: pick up to ${multiMaxTargets} targets, then Done (or Cancel)`, 'multi');
+}
+
+function cancelMultiTargeting() {
+  if (cardRechargedCards.length > 0) {
+    cancelCardRecharge();
+  }
+  multiTargets = [];
+  multiMaxTargets = 0;
+  multiCardIndex = -1;
+  selectedCardIndex = -1;
+  barrageMode = false;
+  state = GameState.COMBAT;
+  hideToast();
+}
+
+function getMultiDoneBtnRect() {
+  return { x: COMBAT_LEFT_W / 2 - 110, y: COMBAT_DIVIDER_Y + 35, w: 220, h: 44 };
+}
+
+function getMultiCancelBtnRect() {
+  return { x: COMBAT_LEFT_W / 2 - 110, y: COMBAT_DIVIDER_Y + 88, w: 220, h: 40 };
+}
+
+function drawMultiTargetingOverlay() {
+  // "Done (N/M)" button
+  const doneR = getMultiDoneBtnRect();
+  const canDone = multiTargets.length > 0;
+  const doneHov = canDone && hitTest(mouseX, mouseY, doneR);
+  ctx.fillStyle = canDone ? (doneHov ? '#3a8a3a' : '#1c5a1c') : '#444';
+  ctx.fillRect(doneR.x, doneR.y, doneR.w, doneR.h);
+  ctx.strokeStyle = canDone ? Colors.GREEN : '#777';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(doneR.x, doneR.y, doneR.w, doneR.h);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = 'bold 16px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`Done (${multiTargets.length}/${multiMaxTargets})`, doneR.x + doneR.w / 2, doneR.y + doneR.h / 2);
+
+  // "Cancel (Esc)" button
+  const cancelR = getMultiCancelBtnRect();
+  const cancelHov = hitTest(mouseX, mouseY, cancelR);
+  ctx.fillStyle = cancelHov ? '#642828' : '#3c1818';
+  ctx.fillRect(cancelR.x, cancelR.y, cancelR.w, cancelR.h);
+  ctx.strokeStyle = Colors.RED;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cancelR.x, cancelR.y, cancelR.w, cancelR.h);
+  ctx.fillStyle = Colors.RED;
+  ctx.fillText('Cancel (Esc)', cancelR.x + cancelR.w / 2, cancelR.y + cancelR.h / 2);
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+function handleMultiTargetingClick(x, y) {
+  // Done button
+  const doneR = getMultiDoneBtnRect();
+  if (hitTest(x, y, doneR) && multiTargets.length > 0) {
+    resolveMultiTargeting();
+    return;
+  }
+  // Cancel button
+  const cancelR = getMultiCancelBtnRect();
+  if (hitTest(x, y, cancelR)) {
+    cancelMultiTargeting();
+    return;
+  }
+
+  // Click enemy character
+  const enemyCardRect = getCharacterCardRect(false);
+  if (hitTest(x, y, enemyCardRect)) {
+    if (multiTargets.length < multiMaxTargets && !multiTargets.includes(enemy)) {
+      multiTargets.push(enemy);
+      // Auto-fire when max targets reached
+      if (multiTargets.length >= multiMaxTargets) {
+        resolveMultiTargeting();
+      } else {
+        checkMultiAutoFire();
+      }
+    }
+    return;
+  }
+  // Click enemy creature
+  const creatureRects = getEnemyCreatureRects();
+  for (let i = 0; i < creatureRects.length; i++) {
+    if (hitTest(x, y, creatureRects[i])) {
+      const c = enemy.creatures[i];
+      if (multiTargets.length < multiMaxTargets && !multiTargets.includes(c)) {
+        multiTargets.push(c);
+        if (multiTargets.length >= multiMaxTargets) {
+          resolveMultiTargeting();
+        } else {
+          checkMultiAutoFire();
+        }
+      }
+      return;
+    }
+  }
+  // Click elsewhere (non-target area) → cancel the whole attack
+  cancelMultiTargeting();
+}
+
+function getAvailableEnemyTargets() {
+  const t = [];
+  if (enemy && enemy.isAlive) t.push(enemy);
+  for (const c of enemy.creatures) {
+    if (c.isAlive) t.push(c);
+  }
+  return t;
+}
+
+function checkMultiAutoFire() {
+  // Never auto-fire — always let the player click Done to confirm.
+  // Only auto-resolve if there are literally no more valid targets AND we have at least 1.
+  const remainingValid = getAvailableEnemyTargets().filter(t => !multiTargets.includes(t));
+  if (remainingValid.length === 0 && multiTargets.length > 0) {
+    resolveMultiTargeting();
+    return;
+  }
+  const card = player.deck.hand[multiCardIndex];
+  if (multiTargets.length >= multiMaxTargets) {
+    showStyledToast(`${card.name}: ${multiTargets.length}/${multiMaxTargets} picked — click Done to confirm`, 'multi');
+  } else {
+    showStyledToast(`${card.name}: ${multiTargets.length}/${multiMaxTargets} picked, click more or press Done`, 'multi');
+  }
+}
+
+function resolveMultiTargeting() {
+  if (multiCardIndex < 0 || multiCardIndex >= player.deck.hand.length) {
+    cancelMultiTargeting();
+    return;
+  }
+  const card = player.deck.hand[multiCardIndex];
+  const targets = multiTargets.slice();
+  // Lift card from hand BEFORE damage
+  player.deck.hand.splice(multiCardIndex, 1);
+  addLog(`You play ${card.name}`, Colors.GREEN, card);
+
+  {
+    // Normal multi_damage (Wooden Axe etc.)
+    let dmg = 0;
+    for (const eff of card.currentEffects) {
+      if (eff.effectType === 'multi_damage') {
+        dmg = eff.value + player.heroism;
+        if (player.heroism > 0) {
+          addLog(`  (Heroism +${player.heroism})`, Colors.GOLD);
+          player.heroism = 0;
+        }
+        break;
+      }
+    }
+    let hitEnemy = false;
+    for (const t of targets) {
+      if (t === enemy) {
+        if (!hitEnemy) { enemyAutoPlayDefenses(dmg); hitEnemy = true; }
+        const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+        if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
+        const bs = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${enemy.name}: ${taken} dmg${bs}`, Colors.RED);
+      } else {
+        const actual = t.takeDamage(dmg);
+        if (actual > 0) spawnDamageOnTarget(t, actual);
+        const bs = Math.max(0, dmg - actual) > 0 ? ` (blocked ${dmg - actual})` : '';
+        addLog(`  ${t.name}: ${actual} dmg${bs}`, Colors.RED);
+        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+      }
+    }
+    attacksThisTurn++;
+  }
+  countAndRemoveDeadCreatures();
+
+  player.deck.placeByCost(card);
+
+  for (const n of pendingRechargeNames) addLog(`  Recharge: ${n}`);
+  pendingRechargeNames = [];
+  cardRechargedCards = [];
+
+  multiTargets = [];
+  multiMaxTargets = 0;
+  multiCardIndex = -1;
+  selectedCardIndex = -1;
+  barrageMode = false;
+  state = GameState.COMBAT;
+  hideToast();
+  checkCombatEnd();
+}
+
+// === Player ally manual attack ===
+function cancelAllyTargeting() {
+  selectedAlly = null;
+  state = GameState.COMBAT;
+  hideToast();
+}
+
+function handleAllyTargetingClick(x, y) {
+  if (!selectedAlly) { state = GameState.COMBAT; return; }
+  // Click enemy character → ally hits enemy
+  const enemyCardRect = getCharacterCardRect(false);
+  if (hitTest(x, y, enemyCardRect)) {
+    resolveAllyAttack(selectedAlly, enemy);
+    return;
+  }
+  // Click enemy creature → ally hits creature
+  const creatureRects = getEnemyCreatureRects();
+  for (let i = 0; i < creatureRects.length; i++) {
+    if (hitTest(x, y, creatureRects[i])) {
+      resolveAllyAttack(selectedAlly, enemy.creatures[i]);
+      return;
+    }
+  }
+  // Click elsewhere → cancel
+  cancelAllyTargeting();
+}
+
+function resolveAllyAttack(ally, target) {
+  const dmg = ally.attack;
+  addLog(`${ally.name} attacks`, Colors.GREEN, ally.sourceCard || null);
+  if (target === enemy) {
+    if (dmg > 0) enemyAutoPlayDefenses(dmg);
+    const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+    const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+    addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+    if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
+    maybeApplyAttackPoison(ally, enemy, taken);
+  } else {
+    const actual = target.takeDamage(dmg);
+    if (actual > 0) spawnDamageOnTarget(target, actual);
+    const blocked = Math.max(0, dmg - actual);
+    const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+    addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
+    maybeApplyAttackPoison(ally, target, actual);
+    if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); }
+    countAndRemoveDeadCreatures();
+  }
+  ally.exhaust();
+  selectedAlly = null;
+  state = GameState.COMBAT;
+  hideToast();
+  checkCombatEnd();
+}
+
+// Apply 1 Poison to the target if the attacker has poisonAttack.
+// Rule: If the attack was fully absorbed (0 damage), the poison doesn't land.
+// Exception: 0-attack poison creatures (Pet Spider) land poison unless the target has armor —
+// shields/block are pushed aside; only armor stops the fangs.
+function maybeApplyAttackPoison(attacker, target, damageDealt) {
+  if (!attacker || !attacker.poisonAttack) return;
+  let landed;
+  if ((attacker.attack || 0) > 0) {
+    landed = damageDealt > 0;
+  } else {
+    const armorVal = (target && (target.armor || target.baseArmor)) || 0;
+    landed = armorVal <= 0;
+  }
+  if (!landed) {
+    addLog(`  (Poison absorbed — no effect)`, Colors.GRAY);
+    return;
+  }
+  if (target instanceof Creature) {
+    target.poisonStacks = (target.poisonStacks || 0) + 1;
+  } else if (typeof target.applyStatus === 'function') {
+    target.applyStatus('POISON', 1);
+  }
+  addLog(`  +1 Poison on ${target.name}`, Colors.GREEN);
 }
 
 function handlePowerTargetingClick(x, y) {
@@ -5070,21 +7740,45 @@ function resolvePowerTargeting() {
   addLog(`Used power: ${power.name}`, Colors.GREEN, power);
 
   if (power.id === 'cleave') {
+    attacksThisTurn++;
     const dmg = 1 + player.heroism;
     if (player.heroism > 0) { addLog(`  (Heroism +${player.heroism})`, Colors.GOLD); player.heroism = 0; }
+    const unpreventable = consumeUnpreventableBuff(player);
+    let poisonApplied = false;
     for (const t of targets) {
+      let dmgLanded = 0;
       if (t === enemy) {
-        enemyAutoPlayDefenses();
-        const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
-        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
-        addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+        if (unpreventable) {
+          enemy.takeDamageFromDeck(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(t, dmg, Colors.ORANGE); triggerSplitPower(t); }
+          addLog(`  ${enemy.name}: ${dmg} true dmg`, Colors.ORANGE);
+          dmgLanded = dmg;
+        } else {
+          enemyAutoPlayDefenses(dmg);
+          const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+          if (taken > 0) { spawnDamageOnTarget(t, taken); triggerSplitPower(t); }
+          const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+          addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+          dmgLanded = taken;
+        }
       } else {
-        const actual = t.takeDamage(dmg);
-        const blocked = Math.max(0, dmg - actual);
-        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
-        addLog(`  ${t.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
-        if (!t.isAlive) { addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+        if (unpreventable) {
+          t.takeUnpreventableDamage(dmg);
+          if (dmg > 0) { spawnDamageOnTarget(t, dmg, Colors.ORANGE); triggerSplitPower(t); }
+          addLog(`  ${t.name}: ${dmg} true dmg`, Colors.ORANGE);
+          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+          dmgLanded = dmg;
+        } else {
+          const actual = t.takeDamage(dmg);
+          if (actual > 0) { spawnDamageOnTarget(t, actual); triggerSplitPower(t); }
+          const blocked = Math.max(0, dmg - actual);
+          const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+          addLog(`  ${t.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
+          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+          dmgLanded = actual;
+        }
       }
+      if (!poisonApplied) { consumePoisonBuff(player, t, dmgLanded); poisonApplied = true; }
     }
     countAndRemoveDeadCreatures();
   } else if (power.id === 'elemental_infusion') {
@@ -5093,24 +7787,69 @@ function resolvePowerTargeting() {
     const isIce = chosenPowerEffect === 'ice_token';
     if (isIce) {
       addLog(`  Mode: Ice`);
+      // Ice cancels fire first
       if (t === enemy) {
-        enemy.applyStatus('ICE', 1);
-        addLog(`  +1 Ice on ${enemy.name}`, Colors.ICE_BLUE);
+        const fire = enemy.getStatus('FIRE') || 0;
+        if (fire > 0) { enemy.removeStatus('FIRE', 1); addLog(`  Ice cancels 1 Fire on ${enemy.name}`, Colors.ICE_BLUE); }
+        else { enemy.applyStatus('ICE', 1); addLog(`  +1 Ice on ${enemy.name}`, Colors.ICE_BLUE); }
       } else {
-        t.iceStacks = (t.iceStacks || 0) + 1;
-        addLog(`  +1 Ice on ${t.name}`, Colors.ICE_BLUE);
+        if (t.fireStacks > 0) { t.fireStacks--; addLog(`  Ice cancels 1 Fire on ${t.name}`, Colors.ICE_BLUE); }
+        else { t.iceStacks = (t.iceStacks || 0) + 1; addLog(`  +1 Ice on ${t.name}`, Colors.ICE_BLUE); }
       }
     } else {
       addLog(`  Mode: Fire`);
+      // Fire cancels ice first
       if (t === enemy) {
-        enemy.applyStatus('FIRE', 1);
-        addLog(`  +1 Fire on ${enemy.name}`, Colors.RED);
+        const ice = enemy.getStatus('ICE') || 0;
+        if (ice > 0) { enemy.removeStatus('ICE', 1); addLog(`  Fire cancels 1 Ice on ${enemy.name}`, Colors.ORANGE); }
+        else { enemy.applyStatus('FIRE', 1); addLog(`  +1 Fire on ${enemy.name}`, Colors.RED); }
       } else {
-        t.fireStacks = (t.fireStacks || 0) + 1;
-        addLog(`  +1 Fire on ${t.name}`, Colors.RED);
+        if (t.iceStacks > 0) { t.iceStacks--; addLog(`  Fire cancels 1 Ice on ${t.name}`, Colors.ORANGE); }
+        else { t.fireStacks = (t.fireStacks || 0) + 1; addLog(`  +1 Fire on ${t.name}`, Colors.RED); }
       }
     }
     chosenPowerEffect = null;
+  } else if (power.id === 'quick_strike') {
+    // Quick Strike counts as an attack (so Sneak Attack can tally it, Split triggers, etc.)
+    attacksThisTurn++;
+    const dmg = 1 + player.heroism;
+    if (player.heroism > 0) { addLog(`  (Heroism +${player.heroism})`, Colors.GOLD); player.heroism = 0; }
+    const unpreventable = consumeUnpreventableBuff(player);
+    const t = targets[0];
+    if (t === enemy) {
+      if (unpreventable) {
+        enemy.takeDamageFromDeck(dmg);
+        if (dmg > 0) { spawnDamageOnTarget(t, dmg, Colors.ORANGE); triggerSplitPower(t); }
+        addLog(`  ${enemy.name}: ${dmg} true dmg`, Colors.ORANGE);
+        consumePoisonBuff(player, t, dmg);
+      } else {
+        enemyAutoPlayDefenses(dmg);
+        const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+        if (taken > 0) { spawnDamageOnTarget(t, taken); triggerSplitPower(t); }
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+        consumePoisonBuff(player, t, taken);
+      }
+    } else {
+      if (unpreventable) {
+        t.takeUnpreventableDamage(dmg);
+        if (dmg > 0) { spawnDamageOnTarget(t, dmg, Colors.ORANGE); triggerSplitPower(t); }
+        addLog(`  ${t.name}: ${dmg} true dmg`, Colors.ORANGE);
+        consumePoisonBuff(player, t, dmg);
+        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+      } else {
+        const actual = t.takeDamage(dmg);
+        if (actual > 0) { spawnDamageOnTarget(t, actual); triggerSplitPower(t); }
+        const blocked = Math.max(0, dmg - actual);
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${t.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
+        consumePoisonBuff(player, t, actual);
+        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+      }
+    }
+    countAndRemoveDeadCreatures();
+    const drawn = player.deck.draw(1, MAX_HAND_SIZE);
+    for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
   }
 
   selectedPower = null;
@@ -5144,15 +7883,21 @@ function executePower(power) {
     case 'aimed_shot': {
       player.heroism += 1;
       addLog(`  +1 Heroism (H:${player.heroism})`, Colors.GOLD);
+      spawnTokenOnTarget(player, 1, 'Heroism', Colors.GOLD);
       const drawn = player.deck.draw(1, MAX_HAND_SIZE);
       for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
     }
     case 'elemental_infusion': {
-      // Simplified: apply 1 fire to enemy
-      const stacks = 1;
-      enemy.applyStatus('FIRE', stacks);
-      addLog(`  Applied 1 Fire to ${enemy.name}`, Colors.RED);
+      // Apply 1 fire with ice cancellation
+      const ice = enemy.getStatus('ICE') || 0;
+      if (ice > 0) {
+        enemy.removeStatus('ICE', 1);
+        addLog(`  Fire cancels 1 Ice on ${enemy.name}`, Colors.ORANGE);
+      } else {
+        enemy.applyStatus('FIRE', 1);
+        addLog(`  +1 Fire on ${enemy.name}`, Colors.RED);
+      }
       break;
     }
     case 'quick_strike': {
@@ -5169,6 +7914,8 @@ function executePower(power) {
       player.heroism += 1;
       player.shield += 1;
       addLog(`  +1 Heroism, +1 Shield`, Colors.GOLD);
+      spawnTokenOnTarget(player, 1, 'Heroism', Colors.GOLD);
+      spawnTokenOnTarget(player, 1, 'Shield', Colors.ALLY_BLUE);
       const drawn = player.deck.draw(2, MAX_HAND_SIZE);
       for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
@@ -5177,6 +7924,7 @@ function executePower(power) {
       // Simplified: gain 1 heroism + draw 1 (cat form default)
       player.heroism += 1;
       addLog(`  Feline Form! +1 Heroism`, Colors.GOLD);
+      spawnTokenOnTarget(player, 1, 'Heroism', Colors.GOLD);
       const drawn = player.deck.draw(1, MAX_HAND_SIZE);
       for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
@@ -5224,7 +7972,7 @@ function autoMitigateDamage(dmg) {
 function startIncomingDamage(dmg, label = 'damage to you') {
   if (dmg <= 0) return;
   addLog(`  ${dmg} ${label}`, Colors.RED);
-  showStickyToast(`Incoming ${dmg} damage!`);
+  showStyledToast(`Incoming ${dmg} damage!`, 'damage');
   const remaining = autoMitigateDamage(dmg);
   if (remaining <= 0) {
     addLog(`  All damage absorbed!`);
@@ -5235,7 +7983,7 @@ function startIncomingDamage(dmg, label = 'damage to you') {
   // Phase 2: defending (if defense cards available)
   if (player.deck.hand.some(c => c.cardType === CardType.DEFENSE)) {
     state = GameState.DEFENDING;
-    showStickyToast(`Incoming ${remaining} damage. Click defense cards or pass.`);
+    showStyledToast(`Incoming ${remaining} damage. Play defense cards or pass.`, 'damage');
     return;
   }
   // No defenses → straight to take-damage choice
@@ -5259,9 +8007,9 @@ function enterTakeDamagePhase() {
   }
   state = GameState.DAMAGE_SOURCE;
   if (deckAvail === 0) {
-    showStickyToast(`Deck empty! Click ${pendingIncomingDamage} card(s) from hand to discard.`);
+    showStyledToast(`Deck empty! Discard ${pendingIncomingDamage} from hand.`, 'damage');
   } else {
-    showStickyToast(`Take ${pendingIncomingDamage} damage: click hand card to discard, or "Take from Deck"`);
+    showStyledToast(`${pendingIncomingDamage} damage — discard from hand or take from deck`, 'damage');
   }
 }
 
@@ -5292,8 +8040,8 @@ function handleDamageSourceClick(x, y) {
       pendingIncomingDamage--;
     }
     if (milled.length > 0) {
+      spawnDamageOnTarget(player, milled.length);
       addLog(`  Took ${milled.length} from deck:`);
-      // One sub-line per card so each is hoverable in the log
       for (const c of milled) addLog(`  Discarded: ${c.name}`, Colors.WHITE, c);
     }
     if (pendingIncomingDamage <= 0) finishIncomingDamage();
@@ -5308,6 +8056,7 @@ function handleDamageSourceClick(x, y) {
     player.deck.hand.splice(i, 1);
     card.exhausted = false;
     player.deck.discardPile.push(card);
+    spawnDamageOnTarget(player, 1);
     addLog(`  Discarded: ${card.name}`, Colors.WHITE, card);
     pendingIncomingDamage--;
     if (pendingIncomingDamage <= 0) finishIncomingDamage();
@@ -5317,22 +8066,37 @@ function handleDamageSourceClick(x, y) {
 }
 
 function getTakeFromDeckBtnRect() {
-  return { x: SCREEN_WIDTH / 2 - 110, y: COMBAT_DIVIDER_Y + 35, w: 220, h: 44 };
+  // Centered within the left card area (excluding the right log column)
+  return { x: COMBAT_LEFT_W / 2 - 110, y: COMBAT_DIVIDER_Y + 35, w: 220, h: 44 };
 }
 
 function drawDamageSourceOverlay() {
-  // Flashing red glow on hand cards to indicate they're clickable to discard
-  const pulse = (Math.sin(performance.now() / 200) + 1) / 2; // 0..1
-  const glowAlpha = 0.4 + 0.45 * pulse;
+  // Pulsing red warning on each hand card's visible portion. Clipped horizontally
+  // to the card's visible slice (no bleed onto neighbors) but padded vertically
+  // so the glow can extend above/below the card edges.
+  const pulse = (Math.sin(performance.now() / 150) + 1) / 2;
+  const glowAlpha = 0.7 + 0.3 * pulse;
   const handRects = getHandCardRects(player.deck.hand);
   for (let i = 0; i < handRects.length; i++) {
     const r = handRects[i];
+    const visR = getHandCardHoverRect(handRects, i);
+    const padLeft = (i === 0) ? 20 : 0;
+    const padRight = (i === handRects.length - 1) ? 20 : 0;
     ctx.save();
-    ctx.shadowColor = `rgba(255, 60, 60, ${glowAlpha})`;
-    ctx.shadowBlur = 18;
-    ctx.strokeStyle = `rgba(255, 60, 60, ${glowAlpha})`;
-    ctx.lineWidth = 4;
-    ctx.strokeRect(r.x - 2, r.y - 2, r.w + 4, r.h + 4);
+    ctx.beginPath();
+    ctx.rect(visR.x - padLeft, visR.y - 16, visR.w + padLeft + padRight, visR.h + 32);
+    ctx.clip();
+    // Outer soft red glow
+    ctx.shadowColor = `rgba(255, 70, 70, ${glowAlpha})`;
+    ctx.shadowBlur = 32;
+    ctx.strokeStyle = `rgba(255, 70, 70, ${glowAlpha * 0.9})`;
+    ctx.lineWidth = 7;
+    ctx.strokeRect(r.x - 3, r.y - 3, r.w + 6, r.h + 6);
+    // Bright inner line
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = `rgba(255, 210, 210, ${Math.min(1, glowAlpha + 0.15)})`;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.restore();
   }
 
@@ -5351,7 +8115,7 @@ function drawDamageSourceOverlay() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const label = deckEmpty
-    ? `Deck empty — discard ${pendingIncomingDamage} from hand`
+    ? `Discard ${pendingIncomingDamage} from hand`
     : `Take ${pendingIncomingDamage} from Deck`;
   ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
   ctx.textBaseline = 'alphabetic';
@@ -5363,9 +8127,8 @@ function endPlayerTurn() {
   if (powerRechargeMode) return; // can't end turn mid-recharge
   addLog('--- End of Your Turn ---', Colors.GRAY);
 
-  // Player ally attacks
-  processPlayerAllyAttacks();
-  if (checkCombatEnd()) return;
+  // Player allies do NOT auto-attack — the player must click them and pick a target.
+  // Unused allies remain ready and will simply re-ready at the start of next turn.
 
   // Process status effects on player
   processStatusEffects(player, 'You');
@@ -5392,19 +8155,22 @@ function endPlayerTurn() {
 
 // --- Status Effects ---
 function processStatusEffects(character, label) {
-  // Fire: deal damage equal to stacks, then reduce by 1
+  // Fire: deal damage equal to stacks (reduced by armor/shield), then reduce by 1
   const fire = character.getStatus('FIRE');
   if (fire > 0) {
-    character.takeDamageFromDeck(fire);
-    addLog(`  ${label} takes ${fire} Fire damage!`, Colors.RED);
+    const [blocked, taken] = character.takeDamageWithDefense(fire);
+    if (taken > 0) spawnDamageOnTarget(character, taken);
+    const bs = blocked > 0 ? ` (${blocked} absorbed)` : '';
+    addLog(`  ${label} takes ${taken} Fire damage!${bs}`, Colors.RED);
     character.removeStatus('FIRE', 1);
   }
-  // Poison: deal 1 unpreventable damage per stack
+  // Poison: deal damage equal to stacks (unpreventable). Stacks do NOT decay —
+  // they can only be removed by healing.
   const poison = character.getStatus('POISON');
   if (poison > 0) {
-    character.takeDamageFromDeck(1);
-    addLog(`  ${label} takes 1 Poison damage! (${poison} stacks)`, Colors.GREEN);
-    character.removeStatus('POISON', 1);
+    character.takeDamageFromDeck(poison);
+    spawnDamageOnTarget(character, poison);
+    addLog(`  ${label} takes ${poison} Poison damage!`, Colors.GREEN);
   }
   // Ice: reduces damage dealt by stacks, decays by 1 each turn
   const ice = character.getStatus('ICE');
@@ -5421,19 +8187,26 @@ function processStatusEffects(character, label) {
   // Process creature status effects
   for (const c of [...character.creatures]) {
     if (c.fireStacks > 0) {
-      c.takeUnpreventableDamage(c.fireStacks);
-      addLog(`  ${c.name} takes ${c.fireStacks} Fire damage!`, Colors.RED);
+      const fireDmg = c.fireStacks;
+      const actual = c.takeDamage(fireDmg); // goes through armor/shield
+      if (actual > 0) spawnDamageOnTarget(c, actual);
+      const absorbed = fireDmg - actual;
+      const bs = absorbed > 0 ? ` (${absorbed} absorbed)` : '';
+      addLog(`  ${c.name} takes ${actual} Fire damage!${bs}`, Colors.RED);
       c.fireStacks = Math.max(0, c.fireStacks - 1);
-      if (!c.isAlive) { addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
+      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
     }
     if (c.poisonStacks > 0) {
-      c.takeUnpreventableDamage(1);
-      addLog(`  ${c.name} takes 1 Poison damage!`, Colors.GREEN);
-      c.poisonStacks = Math.max(0, c.poisonStacks - 1);
-      if (!c.isAlive) { addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
+      const dmg = c.poisonStacks;
+      c.takeUnpreventableDamage(dmg);
+      spawnDamageOnTarget(c, dmg);
+      addLog(`  ${c.name} takes ${dmg} Poison damage!`, Colors.GREEN);
+      // Stacks persist — only healing removes Poison. Enemies/creatures never heal, so it's permanent for them.
+      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
     }
   }
-  character.removeDeadCreatures();
+  // Remove and count dead creatures (kill-count encounters rely on countAndRemoveDeadCreatures)
+  countAndRemoveDeadCreatures();
 }
 
 // Get damage modifier from ice/shock for a character
@@ -5451,17 +8224,37 @@ function getIncomingDamageModifier(character) {
 // --- Player Ally Attacks ---
 function processPlayerAllyAttacks() {
   for (const ally of player.creatures) {
-    if (!ally.isAlive || ally.exhausted || ally.attack <= 0) continue;
-    // Ally attacks a random enemy creature, or enemy if no creatures
+    if (!ally.isAlive || ally.exhausted) continue;
+    // Allow 0-attack allies if they have a poisonAttack (Pet Spider).
+    if ((ally.attack || 0) <= 0 && !ally.poisonAttack) continue;
     const targets = enemy.creatures.filter(c => c.isAlive);
     if (targets.length > 0) {
       const target = targets[Math.floor(Math.random() * targets.length)];
-      const actual = target.takeDamage(ally.attack);
-      addLog(`  ${ally.name} attacks ${target.name} for ${actual}!`, Colors.GREEN);
-      if (!target.isAlive) { addLog(`  ${target.name} destroyed!`, Colors.GOLD); }
+      if (ally.unpreventable) {
+        target.takeUnpreventableDamage(ally.attack);
+        if (ally.attack > 0) spawnDamageOnTarget(target, ally.attack);
+        addLog(`  ${ally.name} attacks ${target.name} for ${ally.attack} unpreventable!`, Colors.ORANGE);
+        maybeApplyAttackPoison(ally, target, ally.attack);
+      } else {
+        const actual = target.takeDamage(ally.attack);
+        if (actual > 0) spawnDamageOnTarget(target, actual);
+        addLog(`  ${ally.name} attacks ${target.name} for ${actual}!`, Colors.GREEN);
+        maybeApplyAttackPoison(ally, target, actual);
+      }
+      if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); }
     } else if (enemy.isAlive) {
-      const [blocked, taken] = enemy.takeDamageWithDefense(ally.attack);
-      addLog(`  ${ally.name} attacks ${enemy.name} for ${taken}!`, Colors.GREEN);
+      if (ally.unpreventable) {
+        enemy.takeDamageFromDeck(ally.attack);
+        if (ally.attack > 0) spawnDamageOnTarget(enemy, ally.attack);
+        addLog(`  ${ally.name} attacks ${enemy.name} for ${ally.attack} unpreventable!`, Colors.ORANGE);
+        triggerSplitPower(enemy);
+        maybeApplyAttackPoison(ally, enemy, ally.attack);
+      } else {
+        const [blocked, taken] = enemy.takeDamageWithDefense(ally.attack);
+        if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
+        addLog(`  ${ally.name} attacks ${enemy.name} for ${taken}!`, Colors.GREEN);
+        maybeApplyAttackPoison(ally, enemy, taken);
+      }
     }
     ally.exhaust();
   }
@@ -5470,6 +8263,103 @@ function processPlayerAllyAttacks() {
 
 // --- Enemy AI ---
 let enemyDamageAccumulator = 0; // total damage from enemy attacks this turn (cards + creatures)
+
+// Enemy attack arrow animation — shows an arrow from the enemy to the target
+// for ~800ms before the damage resolves. Pauses the enemy action queue.
+let enemyArrow = null; // { x1, y1, x2, y2, timer, sourceCreature }
+const ENEMY_ARROW_DURATION = 875; // ms
+
+// Enemy card showcase — displays the card the enemy is playing (runs alongside the arrow)
+let showcaseCard = null;
+let showcaseTimer = 0;
+let showcaseFadeIn = 0;
+const SHOWCASE_DURATION = 875; // same as arrow so they run together
+const SHOWCASE_FADE = 125;     // quick fade in/out
+
+// Pick a random target for an enemy attack. The player counts as 2 weights and
+// each living ally counts as 1, so a player with two allies has 50%/25%/25% odds.
+// Returns either the player Character or a Creature ally.
+// Get the screen center of a target for arrow drawing.
+function getTargetCenter(target) {
+  if (target === player) {
+    const r = getCharacterCardRect(true);
+    return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+  }
+  // Must be a player creature — find its rect
+  const allyRects = getPlayerCreatureRects();
+  const idx = player.creatures.indexOf(target);
+  if (idx !== -1 && allyRects[idx]) {
+    const r = allyRects[idx];
+    return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+  }
+  // Fallback to player card center
+  const r = getCharacterCardRect(true);
+  return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+}
+
+function getEnemyCenter() {
+  const r = getCharacterCardRect(false);
+  return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+}
+
+function pickEnemyAttackTarget() {
+  if (!player) return null;
+  const aliveAllies = (player.creatures || []).filter(a => a.isAlive);
+  const PLAYER_WEIGHT = 2;
+  const totalWeight = PLAYER_WEIGHT + aliveAllies.length;
+  let r = Math.random() * totalWeight;
+  for (const ally of aliveAllies) {
+    if (r < 1) return ally;
+    r -= 1;
+  }
+  return player;
+}
+
+// Apply N damage from an enemy attack to an ally creature immediately.
+// Logs the result and removes the creature if it dies.
+function applyDamageToAlly(ally, dmg) {
+  const actual = ally.takeDamage(dmg);
+  if (actual > 0) spawnDamageOnTarget(ally, actual);
+  const blocked = Math.max(0, dmg - actual);
+  const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+  addLog(`  ${ally.name}: ${actual} damage${blockedSuffix}`, Colors.RED);
+  if (!ally.isAlive) {
+    spawnDeathAnimation(ally);
+    addLog(`  ${ally.name} destroyed!`, Colors.GOLD);
+    player.removeDeadCreatures();
+  }
+}
+
+// Route incoming enemy damage to either the player (accumulated for the damage
+// flow) or to a randomly picked ally (applied immediately).
+// Also fires an attack arrow from the attacker to the target.
+// sourceCreature: if provided, arrow originates from this creature's rect.
+function routeEnemyDamage(dmg, sourceLabel, sourceCreature = null) {
+  if (dmg <= 0) return;
+  const target = pickEnemyAttackTarget();
+  // Arrow from attacker to target
+  let src;
+  if (sourceCreature) {
+    const creatureRects = getEnemyCreatureRects();
+    const ci = enemy.creatures.indexOf(sourceCreature);
+    if (ci !== -1 && creatureRects[ci]) {
+      const r = creatureRects[ci];
+      src = { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+    }
+  }
+  if (!src) src = getEnemyCenter();
+  const dst = getTargetCenter(target);
+  const arrowDur = sourceCreature ? 550 : ENEMY_ARROW_DURATION; // faster arrows for summons
+  enemyArrow = { x1: src.x, y1: src.y, x2: dst.x, y2: dst.y, timer: arrowDur, sourceCreature: sourceCreature || null };
+  screenFlashTimer = 150;
+
+  if (target === player) {
+    enemyDamageAccumulator += dmg;
+    addLog(`  ${dmg} damage incoming`, Colors.RED);
+  } else {
+    applyDamageToAlly(target, dmg);
+  }
+}
 let awaitingEnemyDamage = false; // true while the player is resolving enemy damage flow
 
 function startEnemyTurn() {
@@ -5484,40 +8374,146 @@ function startEnemyTurn() {
 
   // Process status effects on enemy at start of their turn
   processStatusEffects(enemy, enemy.name);
+  if (checkCombatEnd()) return;
 
-  // Plan enemy actions
+  // Plan enemy actions — respect recharge_extra costs
   enemyActions = [];
   const hand = [...enemy.deck.hand];
-  // Sort by priority descending
-  hand.sort((a, b) => b.priority - a.priority);
+  hand.sort((a, b) => (b.priority || 0) - (a.priority || 0));
 
+  // Track how many hand cards are available to pay recharge_extra costs.
+  // Each card played uses itself + any recharge_extra from the remaining pool.
+  let availableForCost = hand.length; // total hand cards
+  let hasAttackOrSummon = false;
   for (const card of hand) {
+    if (card.cardType === CardType.DEFENSE) continue; // defense cards are reactive, not queued
+    // Check recharge_extra cost
+    let extraCost = 0;
+    for (const eff of card.effects || []) {
+      if (eff.effectType === 'recharge_extra') extraCost += eff.value;
+    }
+    // Need: 1 (the card itself) + extraCost from remaining hand
+    if (availableForCost < 1 + extraCost) continue; // can't afford
+    availableForCost -= (1 + extraCost); // reserve cards
+
     if (card.cardType === CardType.ATTACK) {
       enemyActions.push({ type: 'play', card, action: 'attack' });
+      hasAttackOrSummon = true;
     } else if (card.cardType === CardType.CREATURE) {
       enemyActions.push({ type: 'play', card, action: 'summon' });
+      hasAttackOrSummon = true;
     }
-    // DEFENSE cards are not queued — they auto-play reactively when player attacks the enemy
   }
+
+  // Fallback: if no attack/summon was queued, try to use an active recharge-cost power
+  // (e.g. Big Bite for the Giant Rat). The enemy must have enough cards in hand
+  // (excluding any defense cards still needed for reactive defense) to pay the cost.
+  if (!hasAttackOrSummon) {
+    for (const power of (enemy.powers || [])) {
+      if (power.isPassive) continue;
+      if (power.exhausted) continue;
+      if (power.rechargeCost > 0 && enemy.deck.hand.length >= power.rechargeCost) {
+        enemyActions.push({ type: 'use_power', power });
+        break;
+      }
+    }
+  }
+
+  // Queue creature attacks (staggered via the action queue so arrows show per attack)
+  for (const c of enemy.creatures) {
+    if (c.isAlive && !c.exhausted && c.attack > 0) {
+      enemyActions.push({ type: 'creature_attack', creature: c });
+    }
+  }
+
   enemyActions.push({ type: 'end' });
 
   enemyActionIndex = 0;
-  enemyActionTimer = 500; // ms before first action
+  enemyActionTimer = 625; // ms before first action
 }
 
 function updateEnemyTurn(dt) {
   if (isPlayerTurn) return;
   if (enemyActionIndex >= enemyActions.length) return;
 
+  // Tick arrow + showcase in parallel — pause actions while either is active
+  const animating = !!(enemyArrow || showcaseTimer > 0);
+  if (enemyArrow) {
+    enemyArrow.timer -= dt;
+    if (enemyArrow.timer <= 0) enemyArrow = null;
+  }
+  if (showcaseTimer > 0) {
+    showcaseTimer -= dt;
+    showcaseFadeIn += dt;
+    if (showcaseTimer <= 0) { showcaseCard = null; showcaseTimer = 0; }
+  }
+  if (animating) return;
+
   enemyActionTimer -= dt;
   if (enemyActionTimer > 0) return;
 
   const action = enemyActions[enemyActionIndex];
   enemyActionIndex++;
-  enemyActionTimer = 600; // delay between actions
+
+  if (action.type === 'creature_attack') {
+    enemyActionTimer = 250; // faster for summons
+    const c = action.creature;
+    if (c.isAlive && !c.exhausted) {
+      addLog(`${c.name} attacks`, Colors.RED);
+      if (c.unpreventable) {
+        // Unpreventable: bypass defense flow, deal directly to deck/hand
+        const target = pickEnemyAttackTarget();
+        const src2 = (() => { const cr = getEnemyCreatureRects(); const ci = enemy.creatures.indexOf(c); return ci !== -1 && cr[ci] ? { x: cr[ci].x + cr[ci].w / 2, y: cr[ci].y + cr[ci].h / 2 } : getEnemyCenter(); })();
+        const dst2 = getTargetCenter(target);
+        enemyArrow = { x1: src2.x, y1: src2.y, x2: dst2.x, y2: dst2.y, timer: 550, sourceCreature: c };
+        screenFlashTimer = 150;
+        if (target === player) {
+          player.takeDamageFromDeck(c.attack);
+          spawnDamageOnTarget(player, c.attack, Colors.ORANGE);
+          addLog(`  ${c.attack} unpreventable damage!`, Colors.ORANGE);
+        } else {
+          target.takeUnpreventableDamage(c.attack);
+          spawnDamageOnTarget(target, c.attack, Colors.ORANGE);
+          addLog(`  ${target.name}: ${c.attack} unpreventable dmg`, Colors.ORANGE);
+          if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); player.removeDeadCreatures(); }
+        }
+      } else {
+        routeEnemyDamage(c.attack, c.name, c);
+      }
+      c.exhaust();
+    }
+    return;
+  }
+
+  enemyActionTimer = 375; // normal speed for monster cards/powers
 
   if (action.type === 'end') {
     finishEnemyTurn();
+    return;
+  }
+
+  if (action.type === 'use_power') {
+    const power = action.power;
+    if (!power || power.exhausted) return;
+    if (enemy.deck.hand.length < power.rechargeCost) return;
+    // Pay recharge cost: take cards off the top of hand and put them in the recharge pile
+    const recharged = [];
+    for (let i = 0; i < power.rechargeCost; i++) {
+      if (enemy.deck.hand.length === 0) break;
+      const c = enemy.deck.hand.shift();
+      enemy.deck.addToRechargePile(c);
+      recharged.push(c.name);
+    }
+    power.use();
+    addLog(`${enemy.name} uses ${power.name}`, Colors.RED, power);
+    if (recharged.length > 0) addLog(`  Recharge: ${recharged.join(', ')}`);
+    // Resolve effect — for chunky_bite (Big Bite), deal 3 damage to a chosen target
+    if (power.id === 'chunky_bite') {
+      let dmg = 3 + (enemy.rage || 0) + getDamageModifier(enemy);
+      dmg += getIncomingDamageModifier(player);
+      dmg = Math.max(0, dmg);
+      routeEnemyDamage(dmg, power.name);
+    }
     return;
   }
 
@@ -5525,7 +8521,31 @@ function updateEnemyTurn(dt) {
   // Check card is still in hand
   if (!enemy.deck.hand.includes(card)) return;
 
+  // Pay recharge_extra cost: recharge additional cards from hand
+  let extraCost = 0;
+  for (const eff of card.effects || []) {
+    if (eff.effectType === 'recharge_extra') extraCost += eff.value;
+  }
+  if (extraCost > 0 && enemy.deck.hand.length < 1 + extraCost) return; // can't afford now
+
+  // Show the card being played in the center of the screen
+  showcaseCard = card;
+  showcaseTimer = SHOWCASE_DURATION;
+  showcaseFadeIn = 0;
+
   enemy.deck.playCard(card);
+
+  // Pay extra recharge cost from remaining hand
+  if (extraCost > 0) {
+    const recharged = [];
+    for (let i = 0; i < extraCost; i++) {
+      if (enemy.deck.hand.length === 0) break;
+      const c = enemy.deck.hand.shift();
+      enemy.deck.addToRechargePile(c);
+      recharged.push(c.name);
+    }
+    if (recharged.length > 0) addLog(`  Recharge: ${recharged.join(', ')}`);
+  }
 
   if (action.action === 'attack') {
     addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
@@ -5535,13 +8555,13 @@ function updateEnemyTurn(dt) {
         dmg += getIncomingDamageModifier(player);
         dmg = Math.max(0, dmg);
         if (enemy.heroism > 0) enemy.heroism = 0;
-        // Accumulate damage; the full damage flow runs once at end of enemy turn
-        enemyDamageAccumulator += dmg;
-        addLog(`  ${dmg} damage incoming`, Colors.RED);
+        // Pick a target — player (accumulated) or an ally (immediate)
+        routeEnemyDamage(dmg, card.name);
       } else if (eff.effectType === 'unpreventable_damage') {
-        // Unpreventable damage still applies immediately (bypasses defense flow)
+        // Unpreventable damage bypasses defense flow
         player.takeDamageFromDeck(eff.value);
-        addLog(`  ${eff.value} true damage to you!`, Colors.RED);
+        spawnDamageOnTarget(player, eff.value, Colors.ORANGE);
+        addLog(`  ${eff.value} true damage to you!`, Colors.ORANGE);
       }
     }
   } else if (action.action === 'defend') {
@@ -5559,13 +8579,18 @@ function updateEnemyTurn(dt) {
         const count = Math.floor(Math.random() * eff.value) + 1;
         const isGuard = card.id === 'guards';
         const baseName = isGuard ? 'Kobold Guard' : 'Rat';
+        let lastCreature;
         for (let i = 0; i < count; i++) {
-          const creature = isGuard
+          lastCreature = isGuard
             ? new Creature({ name: 'Kobold Guard', attack: 2, maxHp: 1 })
             : new Creature({ name: 'Rat', attack: 1, maxHp: 1 });
-          enemy.addCreature(creature);
+          enemy.addCreature(lastCreature);
         }
         addLog(`  ${count} ${baseName}${count > 1 ? 's' : ''} summoned`, Colors.ORANGE);
+        if (lastCreature) {
+          const lastEntry = combatLog[combatLog.length - 1];
+          if (lastEntry) lastEntry.creature = lastCreature;
+        }
       }
     }
   }
@@ -5574,18 +8599,8 @@ function updateEnemyTurn(dt) {
 }
 
 function finishEnemyTurn() {
-  // Creature attacks — accumulate damage instead of applying immediately.
-  // Creatures summoned this turn are still exhausted (default for new Creatures)
-  // and skip the attack here. They'll ready at the start of the next enemy turn.
-  for (const c of enemy.creatures) {
-    if (c.isAlive && !c.exhausted) {
-      const dmg = c.attack;
-      addLog(`${c.name} attacks`, Colors.RED);
-      addLog(`  ${dmg} damage incoming`, Colors.RED);
-      enemyDamageAccumulator += dmg;
-      c.exhaust();
-    }
-  }
+  // Creature attacks are now queued as 'creature_attack' actions and resolved
+  // above — by the time we reach 'end', all creature attacks have already fired.
 
   // If any damage was accumulated, run the player damage flow once with the total.
   if (enemyDamageAccumulator > 0) {
@@ -5625,7 +8640,11 @@ function completePlayerTurnTransition() {
 
   // Process combat buffs at start of player turn
   const buffLogs = player.processCombatBuffs();
-  for (const log of buffLogs) addLog(log.text, log.color);
+  for (const log of buffLogs) {
+    addLog(log.text, log.color, log.card || null);
+    if (log.healed) spawnHealOnTarget(player, log.healed);
+    if (log.token) spawnTokenOnTarget(player, log.tokenAmount, log.token, log.tokenColor);
+  }
 
   // Turn-start perk effects
   applyPerksStartOfTurn();
@@ -5646,8 +8665,9 @@ function checkCombatEnd() {
     combatVictory();
     return true;
   }
-  // Normal victory
-  if (!enemy._invulnerable && !enemy.isAlive && enemy.creatures.filter(c => c.isAlive).length === 0) {
+  // Normal victory: enemy character is dead. Surviving minions don't matter
+  // (matches py game's check_enemy_defeated). Skipped if the boss is invulnerable.
+  if (!enemy._invulnerable && !enemy.isAlive) {
     addLog('VICTORY!', Colors.GOLD);
     combatVictory();
     return true;
@@ -5658,6 +8678,58 @@ function checkCombatEnd() {
     return true;
   }
   return false;
+}
+
+// Consume caster's poisonBuff (one attack) and apply 1 Poison stack per buff charge to target.
+// Must be called after damage has been dealt (to avoid applying poison to a dead target before the death log).
+// Check-and-consume the caster's Slime Jar buff before an attack resolves.
+// Returns true if the buff was active (meaning the attack must be applied as unpreventable).
+// Also strips the matching combatBuff from the caster.
+function consumeUnpreventableBuff(caster) {
+  if (!caster || !(caster.unpreventableBuff > 0)) return false;
+  caster.unpreventableBuff = 0;
+  if (Array.isArray(caster.combatBuffs)) {
+    caster.combatBuffs = caster.combatBuffs.filter(b => b.id !== 'slime_jar_buff');
+  }
+  addLog(`  Slime Jar! Attack is Unpreventable`, Colors.ORANGE);
+  return true;
+}
+
+function consumePoisonBuff(caster, target, damageDealt = null) {
+  if (!caster || !(caster.poisonBuff > 0)) return;
+  const stacks = caster.poisonBuff;
+  caster.poisonBuff = 0;
+  // Remove the visual buff badge (Vial of Poison) from the character
+  if (Array.isArray(caster.combatBuffs)) {
+    caster.combatBuffs = caster.combatBuffs.filter(b => b.id !== 'vial_poison');
+  }
+  if (!target) return;
+  // Poison doesn't land if the attack was fully absorbed by defenses.
+  if (damageDealt !== null && damageDealt <= 0) {
+    addLog(`  (Vial of Poison absorbed — no Poison applied)`, Colors.GRAY);
+    return;
+  }
+  if (target instanceof Creature) {
+    target.poisonStacks = (target.poisonStacks || 0) + stacks;
+  } else if (typeof target.applyStatus === 'function') {
+    target.applyStatus('POISON', stacks);
+  } else {
+    return;
+  }
+  addLog(`  (Vial of Poison) +${stacks} Poison on ${target.name}`, Colors.GREEN);
+}
+
+// Trigger split power: when a character with "split" power takes damage, spawn a 1/1 Slime
+function triggerSplitPower(character) {
+  if (!character.powers) return;
+  for (const power of character.powers) {
+    if (power.id === 'split') {
+      const slime = new Creature({ name: 'Slime', attack: 1, maxHp: 1, unpreventable: true });
+      character.addCreature(slime);
+      addLog(`  -> ${character.name} splits! Slime spawns!`, Colors.ORANGE);
+      break;
+    }
+  }
 }
 
 function countAndRemoveDeadCreatures() {
@@ -5689,9 +8761,21 @@ function combatVictory() {
     addLog(`  Grit: Healed ${gritHeal}!`, Colors.GREEN);
   }
   player.endCombatBuffCleanup();
-  player.deck.endCombat();
-  // Clear player creatures from combat
+  player.deck.endCombat(getPlayerHandSize(), MAX_HAND_SIZE);
+  // Ready all powers and clear creatures for next combat
+  player.readyPowers();
   player.creatures = [];
+  // Clear combat-only status effects
+  player.clearBlock();
+  player.shield = 0;
+  player.heroism = 0;
+  player.rage = 0;
+  player.poisonBuff = 0;
+  player.unpreventableBuff = 0;
+  // Reset per-combat attack counter so Sneak Attack starts fresh next fight
+  attacksThisTurn = 0;
+  // Clear exhausted flag on all hand cards (daggers etc.)
+  for (const c of player.deck.hand) c.exhausted = false;
   state = GameState.VICTORY;
 }
 
@@ -5819,88 +8903,204 @@ function drawPerkSelect() {
 // MODAL SELECT
 // ============================================================
 
-function getModalRects() {
+// Build a synthetic Card object representing a single mode of a modal card.
+// Uses the parent card's id (so the art lookup matches) and the mode's name+effects.
+function buildModeCard(parent, mode) {
+  const c = parent.copy();
+  c.id = parent.id;          // keep the same art
+  c.name = mode.description; // mode label as the card name
+  c.description = mode.description;
+  c.shortDesc = mode.description;
+  c.effects = mode.effects;
+  c.upgradeEffects = null;
+  c.modes = null;            // not modal anymore
+  return c;
+}
+
+let modalChoiceRects = [];
+let modalCancelRect = null;
+
+function getModalChoiceCardSize() {
+  return { w: 240, h: 336 };
+}
+
+function layoutModalChoiceRects() {
   if (!modalCard || !modalCard.modes) return [];
+  const { w: cw, h: ch } = getModalChoiceCardSize();
+  const gap = 40;
   const count = modalCard.modes.length;
-  const btnW = 400;
-  const btnH = 60;
-  const gap = 20;
-  const startY = SCREEN_HEIGHT / 2 - ((count * (btnH + gap)) / 2);
-  const startX = (SCREEN_WIDTH - btnW) / 2;
+  const totalW = count * cw + (count - 1) * gap;
+  const startX = Math.floor((SCREEN_WIDTH - totalW) / 2);
+  const cardY = 200;
   return modalCard.modes.map((m, i) => ({
-    x: startX, y: startY + i * (btnH + gap), w: btnW, h: btnH, mode: m, index: i,
+    x: startX + i * (cw + gap),
+    y: cardY,
+    w: cw,
+    h: ch,
+    mode: m,
+    index: i,
   }));
 }
 
 function handleModalSelectClick(x, y) {
-  const rects = getModalRects();
-  for (const r of rects) {
+  // Card choices
+  for (const r of modalChoiceRects) {
     if (hitTest(x, y, r)) {
-      // Play the card with the chosen mode's effects
+      const chosen = r.mode;
       const handIndex = player.deck.hand.indexOf(modalCard);
-      if (handIndex === -1) { state = GameState.COMBAT; return; }
-      player.deck.playCard(modalCard);
-      addLog(`You play ${modalCard.name}`, Colors.GREEN, modalCard);
-      addLog(`  Mode: ${r.mode.description}`);
-
-      // Check if mode needs a target
-      const needsT = r.mode.effects.some(e => e.target === TargetType.SINGLE_ENEMY);
-      if (needsT) {
-        // Use effects on enemy directly (simplified - no creature targeting for modals)
-        for (const eff of r.mode.effects) {
-          resolveEffect(eff, player, enemy);
-        }
-      } else {
-        for (const eff of r.mode.effects) {
-          resolveEffect(eff, player, enemy);
-        }
+      if (handIndex === -1) {
+        modalCard = null;
+        state = GameState.COMBAT;
+        return;
       }
+      // If the chosen mode needs a target, enter TARGETING instead of resolving now
+      const needsSingleTarget = chosen.effects.some(e =>
+        e.target === TargetType.SINGLE_ENEMY &&
+        (e.effectType === 'damage' || e.effectType === 'apply_poison' ||
+         e.effectType === 'armor_bonus_damage' || e.effectType === 'unpreventable_damage' ||
+         e.effectType === 'sneak_attack' || e.effectType === 'charge_attack')
+      );
+      if (needsSingleTarget) {
+        // Store mode on the card so the targeting handler knows which effects to use
+        modalCard._chosenMode = chosen;
+        selectedCardIndex = handIndex;
+        modalChoiceRects = [];
+        modalCancelRect = null;
+        state = GameState.TARGETING;
+        showStickyToast('Click an enemy target');
+        return;
+      }
+      // No target needed — resolve immediately
+      const card = modalCard;
+      player.deck.hand.splice(handIndex, 1);
+      addLog(`You play ${card.name}`, Colors.GREEN, card);
+      addLog(`  Mode: ${chosen.description}`);
+      for (const eff of chosen.effects) {
+        resolveEffect(eff, player, enemy);
+      }
+      player.deck.placeByCost(card);
 
       modalCard = null;
       modalTarget = null;
       selectedCardIndex = -1;
+      modalChoiceRects = [];
+      modalCancelRect = null;
       state = GameState.COMBAT;
       checkCombatEnd();
       return;
     }
   }
+  // Cancel button
+  if (modalCancelRect && hitTest(x, y, modalCancelRect)) {
+    cancelModalSelect();
+  }
+}
 
-  // Click elsewhere: cancel
+function cancelModalSelect() {
   modalCard = null;
   modalTarget = null;
   selectedCardIndex = -1;
+  modalChoiceRects = [];
+  modalCancelRect = null;
   state = GameState.COMBAT;
 }
 
-function drawModalOverlay() {
-  // Dim overlay
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+// === SCRY SELECT ===
+function handleScrySelectClick(x, y) {
+  if (scryCards.length === 0) return;
+  const rects = layoutScryCardRects();
+  for (let i = 0; i < rects.length; i++) {
+    if (hitTest(x, y, rects[i])) {
+      const picked = scryCards[i];
+      player.deck.hand.push(picked);
+      addLog(`  Draw: ${picked.name}`, Colors.BLUE, picked);
+      // Recharge the rest
+      for (let j = 0; j < scryCards.length; j++) {
+        if (j !== i) {
+          player.deck.addToRechargePile(scryCards[j]);
+          addLog(`  Recharged: ${scryCards[j].name}`, Colors.GRAY, scryCards[j]);
+        }
+      }
+      scryCards = [];
+      hideToast();
+      state = GameState.COMBAT;
+      return;
+    }
+  }
+}
+
+function layoutScryCardRects() {
+  const cardW = 240, cardH = 336, gap = 40;
+  const totalW = scryCards.length * cardW + (scryCards.length - 1) * gap;
+  const startX = Math.floor((SCREEN_WIDTH - totalW) / 2);
+  const y = 200; // same as modal/wrath/feral form
+  return scryCards.map((_, i) => ({
+    x: startX + i * (cardW + gap), y, w: cardW, h: cardH,
+  }));
+}
+
+function drawScryOverlay() {
+  if (scryCards.length === 0) return;
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
   ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-  ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 28px serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(`${modalCard.name} - Choose a Mode`, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 100);
-
-  const rects = getModalRects();
-  for (const r of rects) {
+  const rects = layoutScryCardRects();
+  for (let i = 0; i < scryCards.length; i++) {
+    const r = rects[i];
     const hov = hitTest(mouseX, mouseY, r);
-    ctx.fillStyle = hov ? '#4a3a6e' : '#2a1a4e';
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = hov ? Colors.GOLD : Colors.GRAY;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.fillStyle = hov ? Colors.GOLD : Colors.WHITE;
-    ctx.font = '18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(r.mode.description, r.x + r.w / 2, r.y + r.h / 2);
-    ctx.textBaseline = 'alphabetic';
+    if (hov) {
+      ctx.strokeStyle = Colors.GOLD;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
+    }
+    drawCard(scryCards[i], r.x, r.y, r.w, r.h, false, false, 'full');
+  }
+}
+
+function drawModalOverlay() {
+  if (!modalCard || !modalCard.modes) return;
+
+  // Dark overlay (matches POWER_CHOICE)
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Title
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 32px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${modalCard.name}: Choose an effect`, SCREEN_WIDTH / 2, 110);
+
+  // Compute and draw the mode choice cards (full-size, side by side)
+  modalChoiceRects = layoutModalChoiceRects();
+  for (const r of modalChoiceRects) {
+    const hov = hitTest(mouseX, mouseY, r);
+    if (hov) {
+      ctx.strokeStyle = Colors.GOLD;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
+    }
+    const synth = buildModeCard(modalCard, r.mode);
+    drawCard(synth, r.x, r.y, r.w, r.h, false, false, 'full');
   }
 
-  ctx.fillStyle = Colors.GRAY;
-  ctx.font = '14px sans-serif';
-  ctx.fillText('ESC to cancel', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 120);
+  // Cancel (Esc) button — red, below
+  const cw = 220, ch = 50;
+  const cx = Math.floor((SCREEN_WIDTH - cw) / 2);
+  const firstRect = modalChoiceRects[0];
+  const cy = (firstRect ? firstRect.y + firstRect.h : 500) + 30;
+  modalCancelRect = { x: cx, y: cy, w: cw, h: ch };
+  const cancelHov = hitTest(mouseX, mouseY, modalCancelRect);
+  ctx.fillStyle = cancelHov ? '#642828' : '#3c1818';
+  ctx.fillRect(cx, cy, cw, ch);
+  ctx.strokeStyle = Colors.RED;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx, cy, cw, ch);
+  ctx.fillStyle = Colors.RED;
+  ctx.font = 'bold 22px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Cancel (Esc)', cx + cw / 2, cy + ch / 2);
+  ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
 }
 
@@ -6084,7 +9284,7 @@ function drawShop() {
 
 // === Inventory layout (3 sections: Deck | Backpack | Character) ===
 const INV_TOP_Y = 95;
-const INV_BOTTOM_Y = SCREEN_HEIGHT - 10;
+const INV_BOTTOM_Y = SCREEN_HEIGHT;
 const INV_CHAR_W = 280;
 
 function getInvSections() {
@@ -6099,32 +9299,74 @@ function getInvSections() {
   };
 }
 
-function getDeckCardRects() {
-  const s = getInvSections();
+// Categorize a card into a filter type
+function getCardFilterType(card) {
+  const sub = (card.subtype || '').toLowerCase();
+  const type = (card.cardType || '').toUpperCase();
+  if (sub === 'relic') return 'Relics';
+  if (type === 'CREATURE' || sub === 'ally' || sub === 'companion') return 'Allies';
+  if (type === 'ABILITY' || sub === 'ability') return 'Abilities';
+  if (sub.includes('armor') || sub === 'shield' || sub === 'clothing') return 'Armor';
+  if (sub === 'item' || sub === 'potion' || sub === 'food' || sub === 'scroll') return 'Items';
+  if (sub.includes('martial') || sub === 'weapon' || sub === 'simple' || sub.includes('2h') || sub === 'staff' || sub === 'wand' || sub === 'ranged') return 'Weapons';
+  if (type === 'ATTACK') return 'Weapons';
+  if (type === 'DEFENSE') return 'Armor';
+  return 'Items';
+}
+
+// Filter cards by active filter set
+function filterCards(cards, filters) {
+  if (filters.has('All')) return cards;
+  return cards.filter((c, i) => filters.has(getCardFilterType(c)));
+}
+
+// Group cards by name for stacking display. Returns [{card, count, indices}]
+function groupCardsByName(cards) {
+  const groups = [];
+  const seen = {};
+  for (let i = 0; i < cards.length; i++) {
+    const name = cards[i].name;
+    if (seen[name] !== undefined) {
+      groups[seen[name]].count++;
+      groups[seen[name]].indices.push(i);
+    } else {
+      seen[name] = groups.length;
+      groups.push({ card: cards[i], count: 1, indices: [i] });
+    }
+  }
+  return groups;
+}
+
+function getStackedCardRects(section, groups, scrollY) {
   const cardW = 96, cardH = 134, gap = 10, cols = 4;
-  const startX = s.deck.x + 20;
-  const startY = s.deck.y + 50 - inventoryScrollY;
-  return player.deck.masterDeck.map((_, i) => ({
+  const startX = section.x + 20;
+  const startY = section.y + 50 - scrollY;
+  return groups.map((g, i) => ({
     x: startX + (i % cols) * (cardW + gap),
     y: startY + Math.floor(i / cols) * (cardH + 12),
-    w: cardW, h: cardH, index: i,
+    w: cardW, h: cardH, group: g,
   }));
+}
+
+function getDeckCardRects() {
+  const s = getInvSections();
+  const filtered = filterCards(player.deck.masterDeck, invDeckFilters);
+  const groups = groupCardsByName(filtered);
+  return getStackedCardRects(s.deck, groups, inventoryScrollY);
 }
 
 function getBackpackCardRects() {
   const s = getInvSections();
-  const cardW = 96, cardH = 134, gap = 10, cols = 4;
-  const startX = s.backpack.x + 20;
-  const startY = s.backpack.y + 50 - inventoryScrollY;
-  return backpack.map((_, i) => ({
-    x: startX + (i % cols) * (cardW + gap),
-    y: startY + Math.floor(i / cols) * (cardH + 12),
-    w: cardW, h: cardH, index: i,
-  }));
+  let filtered = filterCards(backpack, invBpFilters);
+  if (invBpEquipFilter) filtered = filtered.filter(c => canClassEquip(c));
+  const groups = groupCardsByName(filtered);
+  return getStackedCardRects(s.backpack, groups, inventoryScrollY);
 }
 
 function exitInventory() {
   if (restMode) {
+    // Rebalance: merge everything back, heal all damage, shuffle, draw fresh hand
+    player.deck.rebalance(getPlayerHandSize(), MAX_HAND_SIZE);
     restMode = false;
     if (currentEncounter && !currentEncounter.isComplete) {
       currentEncounter.advancePhase();
@@ -6138,38 +9380,128 @@ function exitInventory() {
 }
 
 function handleInventoryClick(x, y) {
+  const sections = getInvSections();
+
+  // Click portrait to show full character splash
+  if (characterSplashCharacter) {
+    characterSplashCharacter = null;
+    return;
+  }
+  const charCardRect = { x: sections.character.x + 12, y: sections.character.y + 50, w: 160, h: Math.round(160 * (COMBAT_CHAR_H / COMBAT_CHAR_W)) };
+  if (hitTest(x, y, charCardRect)) {
+    characterSplashCharacter = player;
+    characterSplashIsPlayer = true;
+    return;
+  }
+
+  // Filter tab clicks (always available, not just rest mode)
+  if (handleFilterTabClick(sections.deck, invDeckFilters, x, y)) return;
+  if (handleFilterTabClick(sections.backpack, invBpFilters, x, y, true)) return;
+
   // Equip/unequip only allowed in rest mode
   if (!restMode) return;
 
-  const sections = getInvSections();
-
-  // Click backpack cards to equip (add to deck)
+  // Click backpack cards to equip (move one from the stack to deck)
   const bpRects = getBackpackCardRects();
   for (const r of bpRects) {
     if (r.y + r.h < sections.backpack.y || r.y > sections.backpack.y + sections.backpack.h - 60) continue;
     if (hitTest(x, y, r)) {
-      const card = backpack[r.index];
-      backpack.splice(r.index, 1);
+      const idx = r.group.indices[0]; // take first card from the stack
+      const card = backpack.splice(idx, 1)[0];
       player.deck.addCard(card);
       addLog(`Equipped: ${card.name}`, Colors.GREEN);
       return;
     }
   }
 
-  // Click deck cards to unequip (move to backpack)
+  // Click deck cards to unequip (move one from the stack to backpack)
   const deckRects = getDeckCardRects();
   for (const r of deckRects) {
     if (r.y + r.h < sections.deck.y || r.y > sections.deck.y + sections.deck.h - 60) continue;
     if (hitTest(x, y, r)) {
-      const card = player.deck.masterDeck[r.index];
       if (player.deck.masterDeck.length > 5) {
-        player.deck.masterDeck.splice(r.index, 1);
+        const idx = r.group.indices[0];
+        const card = player.deck.masterDeck.splice(idx, 1)[0];
         backpack.push(card);
         addLog(`Unequipped: ${card.name}`, Colors.GRAY);
       }
       return;
     }
   }
+}
+
+function drawFilterTabs(section, filters, showEquipFilter = false) {
+  const tabY = section.y + 30;
+  const tabH = 18;
+  ctx.font = '10px sans-serif';
+  let tx = section.x + 6;
+  for (const type of INV_FILTER_TYPES) {
+    const tw = ctx.measureText(type).width + 10;
+    const active = filters.has(type);
+    const hov = hitTest(mouseX, mouseY, { x: tx, y: tabY, w: tw, h: tabH });
+    ctx.fillStyle = active ? (hov ? 'rgba(255,215,0,0.3)' : 'rgba(255,215,0,0.15)') : (hov ? 'rgba(255,255,255,0.1)' : 'transparent');
+    ctx.fillRect(tx, tabY, tw, tabH);
+    ctx.fillStyle = active ? Colors.GOLD : '#777';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(type, tx + tw / 2, tabY + tabH / 2);
+    tx += tw + 2;
+  }
+  // Equip? filter (backpack only, after a small gap)
+  if (showEquipFilter) {
+    tx += 6;
+    const label = 'Equip?';
+    const tw = ctx.measureText(label).width + 10;
+    const active = invBpEquipFilter;
+    const hov = hitTest(mouseX, mouseY, { x: tx, y: tabY, w: tw, h: tabH });
+    ctx.fillStyle = active ? (hov ? 'rgba(100,200,100,0.35)' : 'rgba(100,200,100,0.2)') : (hov ? 'rgba(255,255,255,0.1)' : 'transparent');
+    ctx.fillRect(tx, tabY, tw, tabH);
+    ctx.fillStyle = active ? Colors.GREEN : '#777';
+    ctx.fillText(label, tx + tw / 2, tabY + tabH / 2);
+  }
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+}
+
+function handleFilterTabClick(section, filters, x, y, hasEquipFilter = false) {
+  const tabY = section.y + 30;
+  const tabH = 18;
+  ctx.font = '10px sans-serif';
+  let tx = section.x + 6;
+  for (const type of INV_FILTER_TYPES) {
+    const tw = ctx.measureText(type).width + 10;
+    if (hitTest(x, y, { x: tx, y: tabY, w: tw, h: tabH })) {
+      if (type === 'All') {
+        if (filters.has('All')) {
+          filters.clear();
+        } else {
+          for (const t of INV_FILTER_TYPES) filters.add(t);
+        }
+      } else {
+        filters.delete('All');
+        if (filters.has(type)) filters.delete(type);
+        else filters.add(type);
+        if (INV_FILTER_TYPES.slice(1).every(t => filters.has(t))) {
+          filters.add('All');
+        }
+      }
+      inventoryScrollY = 0;
+      return true;
+    }
+    tx += tw + 2;
+  }
+  // Equip? button
+  if (hasEquipFilter) {
+    tx += 6;
+    const label = 'Equip?';
+    const tw = ctx.measureText(label).width + 10;
+    if (hitTest(x, y, { x: tx, y: tabY, w: tw, h: tabH })) {
+      invBpEquipFilter = !invBpEquipFilter;
+      inventoryScrollY = 0;
+      return true;
+    }
+  }
+  return false;
 }
 
 function drawInventory() {
@@ -6234,69 +9566,77 @@ function drawInventory() {
   ctx.fillText(`Cards in Backpack (${backpack.length})`, sections.backpack.x + sections.backpack.w / 2, sections.backpack.y + 25);
   ctx.fillText('Character', sections.character.x + sections.character.w / 2, sections.character.y + 25);
 
-  if (restMode) {
-    ctx.fillStyle = '#bbb';
-    ctx.font = '11px sans-serif';
-    ctx.fillText('click to unequip', sections.deck.x + sections.deck.w / 2, sections.deck.y + 42);
-    ctx.fillText('click to equip', sections.backpack.x + sections.backpack.w / 2, sections.backpack.y + 42);
-  }
+  // Filter tabs for equipped cards
+  drawFilterTabs(sections.deck, invDeckFilters);
+  drawFilterTabs(sections.backpack, invBpFilters, true);
 
   // Track hovered card for the full-card cursor preview
   hoveredCardPreview = null;
   hoveredPowerPreview = null;
 
-  // --- Deck cards (with clipping for scroll) ---
-  const deckClipY = sections.deck.y + 50;
-  const deckClipH = sections.deck.h - 60;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(sections.deck.x + 4, deckClipY, sections.deck.w - 8, deckClipH);
-  ctx.clip();
-  const deckRects = getDeckCardRects();
-  for (let i = 0; i < player.deck.masterDeck.length; i++) {
-    const r = deckRects[i];
-    if (r.y + r.h < deckClipY || r.y > deckClipY + deckClipH) continue;
-    const card = player.deck.masterDeck[i];
-    const hov = hitTest(mouseX, mouseY, r);
-    drawCard(card, r.x, r.y, r.w, r.h, false, hov);
-    if (hov && r.y >= deckClipY && r.y + r.h <= deckClipY + deckClipH) {
-      hoveredCardPreview = card;
+  // --- Draw a stacked card section with scrollbar ---
+  function drawCardSection(section, rects, label) {
+    const clipY = section.y + 50;
+    const clipH = section.h - 60;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(section.x + 4, clipY, section.w - 8, clipH);
+    ctx.clip();
+    for (const r of rects) {
+      if (r.y + r.h < clipY || r.y > clipY + clipH) continue;
+      const hov = hitTest(mouseX, mouseY, r);
+      drawCard(r.group.card, r.x, r.y, r.w, r.h, false, hov);
+      // Stack count badge
+      if (r.group.count > 1) {
+        const bx = r.x + r.w - 24, by = r.y + 2;
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.fillRect(bx, by, 24, 20);
+        ctx.strokeStyle = Colors.GOLD;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx, by, 24, 20);
+        ctx.fillStyle = Colors.GOLD;
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`x${r.group.count}`, bx + 12, by + 15);
+        ctx.textAlign = 'left';
+      }
+      if (hov && r.y >= clipY && r.y + r.h <= clipY + clipH) {
+        hoveredCardPreview = r.group.card;
+      }
+    }
+    ctx.restore();
+    // Scrollbar
+    if (rects.length > 0) {
+      const lastR = rects[rects.length - 1];
+      const contentH = (lastR.y + lastR.h + inventoryScrollY) - (section.y + 50);
+      if (contentH > clipH) {
+        const sbX = section.x + section.w - 10;
+        const sbH = Math.max(20, clipH * (clipH / contentH));
+        const sbY = clipY + (inventoryScrollY / (contentH - clipH)) * (clipH - sbH);
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
+        ctx.fillRect(sbX, clipY, 6, clipH);
+        ctx.fillStyle = 'rgba(255,215,0,0.5)';
+        ctx.fillRect(sbX, sbY, 6, sbH);
+      }
     }
   }
-  ctx.restore();
 
-  // --- Backpack cards (with clipping) ---
-  const bpClipY = sections.backpack.y + 50;
-  const bpClipH = sections.backpack.h - 60;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(sections.backpack.x + 4, bpClipY, sections.backpack.w - 8, bpClipH);
-  ctx.clip();
+  const deckRects = getDeckCardRects();
+  drawCardSection(sections.deck, deckRects, 'deck');
+
   const bpRects = getBackpackCardRects();
-  for (let i = 0; i < backpack.length; i++) {
-    const r = bpRects[i];
-    if (r.y + r.h < bpClipY || r.y > bpClipY + bpClipH) continue;
-    const card = backpack[i];
-    const hov = hitTest(mouseX, mouseY, r);
-    drawCard(card, r.x, r.y, r.w, r.h, false, hov);
-    if (hov && r.y >= bpClipY && r.y + r.h <= bpClipY + bpClipH) {
-      hoveredCardPreview = card;
-    }
-  }
-  ctx.restore();
+  drawCardSection(sections.backpack, bpRects, 'backpack');
 
   // --- Character section: portrait + class info ---
   drawInventoryCharacter(sections.character);
 
   if (restMode) {
-    // Rest mode: keep the Done button at the bottom of the character section
     const doneBtnW = sections.character.w - 40;
-    const doneBtnH = 56;
+    const doneBtnH = 50;
     const doneBtnX = sections.character.x + 20;
-    const doneBtnY = sections.character.y + sections.character.h - doneBtnH - 16;
+    const doneBtnY = sections.character.y + sections.character.h - doneBtnH - 12;
     drawStyledButton(doneBtnX, doneBtnY, doneBtnW, doneBtnH, 'Done', exitInventory, 'large', 22);
   } else {
-    // Normal mode: close hint at the bottom of the character section
     ctx.fillStyle = Colors.GOLD;
     ctx.font = '14px Georgia, serif';
     ctx.textAlign = 'center';
@@ -6306,58 +9646,113 @@ function drawInventory() {
 
   // Full card hover preview (follows cursor, same as combat)
   drawHoverPreview();
+
+  // Character splash overlay (click portrait to show)
+  if (characterSplashCharacter) drawCharacterSplash();
 }
 
 function drawInventoryCharacter(rect) {
-  // Class portrait
-  const portraitW = rect.w - 40;
-  const portraitH = 280;
-  const portraitX = rect.x + 20;
-  const portraitY = rect.y + 60;
+  // Character card sized to leave room for a power card to its right (same ratio as combat).
+  const cardW = 160;
+  const cardH = Math.round(cardW * (COMBAT_CHAR_H / COMBAT_CHAR_W)); // ~218
+  const cardX = rect.x + 12;
+  const cardY = rect.y + 50;
+
+  // Portrait art fills the card
   const portraitArtId = `${selectedClass.toLowerCase()}_class`;
   const portrait = getCardArt(portraitArtId);
+  const hasArt = !!portrait;
 
-  if (portrait) {
+  if (hasArt) {
     const imgAspect = portrait.width / portrait.height;
-    const cardAspect = portraitW / portraitH;
+    const cardAspect = cardW / cardH;
     let sx = 0, sy = 0, sw = portrait.width, sh = portrait.height;
     if (imgAspect > cardAspect) { sw = portrait.height * cardAspect; sx = (portrait.width - sw) / 2; }
     else { sh = portrait.width / cardAspect; sy = (portrait.height - sh) / 2; }
-    ctx.drawImage(portrait, sx, sy, sw, sh, portraitX, portraitY, portraitW, portraitH);
-    ctx.strokeStyle = Colors.GOLD;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(portraitX, portraitY, portraitW, portraitH);
+    ctx.drawImage(portrait, sx, sy, sw, sh, cardX, cardY, cardW, cardH);
+  } else {
+    ctx.fillStyle = '#1a3a4e';
+    ctx.fillRect(cardX, cardY, cardW, cardH);
   }
 
-  // Character info below portrait
-  const infoY = portraitY + portraitH + 16;
-  ctx.fillStyle = Colors.GOLD;
-  ctx.font = 'bold 22px Georgia, serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(selectedClass, rect.x + rect.w / 2, infoY);
+  // White border
+  ctx.strokeStyle = Colors.WHITE;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(cardX, cardY, cardW, cardH);
 
+  // Dark overlay for readability
+  if (hasArt) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.47)';
+    ctx.fillRect(cardX + 3, cardY + 3, cardW - 6, cardH - 6);
+  }
+
+  // Character name + level at top
   ctx.fillStyle = Colors.WHITE;
-  ctx.font = '14px sans-serif';
-  ctx.fillText(`Level ${player.level}`, rect.x + rect.w / 2, infoY + 22);
+  ctx.font = 'bold 16px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${selectedClass} (${player.level || 1})`, cardX + cardW / 2, cardY + 22);
 
-  // HP info
-  const hp = (player.deck.drawPile?.length || 0) + (player.deck.hand?.length || 0) +
-             (player.deck.rechargePile?.length || 0) + player.deck.masterDeck.length;
-  const totalHp = player.deck.masterDeck.length + (player.deck.damagePile?.length || 0);
-  ctx.fillStyle = '#aef';
-  ctx.fillText(`HP: ${player.deck.masterDeck.length} / ${totalHp}`, rect.x + rect.w / 2, infoY + 42);
+  // Card counts
+  const infoTop = cardY + 44;
+  const totalCards = player.deck.masterDeck.length;
+  const handCount = player.deck.hand.length;
+  const dmgCount = player.deck.discardPile.length;
+  const deckCount = totalCards - handCount - dmgCount;
 
-  // Perks
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = Colors.WHITE;
+  ctx.fillText(`Hand: ${handCount}`, cardX + cardW / 2, infoTop);
+  ctx.fillText(`Deck: ${deckCount}`, cardX + cardW / 2, infoTop + 18);
+  ctx.fillStyle = dmgCount > 0 ? '#e88' : '#aaa';
+  ctx.fillText(`Discard: ${dmgCount}`, cardX + cardW / 2, infoTop + 36);
+
+  // HP bar at bottom of card
+  const hp = totalCards - dmgCount;
+  const maxHp = totalCards;
+  const barX = cardX + 8, barW = cardW - 16, barH = 18;
+  const barY = cardY + cardH - barH - 8;
+  ctx.fillStyle = '#222';
+  ctx.fillRect(barX, barY, barW, barH);
+  const hpPct = maxHp > 0 ? hp / maxHp : 0;
+  ctx.fillStyle = hpPct > 0.5 ? Colors.GREEN : (hpPct > 0.25 ? Colors.GOLD : Colors.RED);
+  ctx.fillRect(barX, barY, barW * hpPct, barH);
+  ctx.strokeStyle = Colors.WHITE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX, barY, barW, barH);
+  ctx.fillStyle = Colors.WHITE;
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`HP: ${hp}/${maxHp}`, barX + barW / 2, barY + 13);
+
+  // Power card to the right of the character card (same ratio as combat)
+  if (player.powers && player.powers.length > 0) {
+    const pwrW = Math.round(cardW * (COMBAT_POWER_W / COMBAT_CHAR_W)); // ~76
+    const pwrH = Math.round(pwrW * (COMBAT_POWER_H / COMBAT_POWER_W)); // ~101
+    const pwrX = cardX + cardW + 8;
+    const pwrY = cardY;
+    for (let i = 0; i < player.powers.length; i++) {
+      const power = player.powers[i];
+      const wasExhausted = power.exhausted;
+      power.exhausted = false; // don't show Zzz in inventory
+      const py = pwrY + i * (pwrH + 6);
+      drawPowerCard(power, { x: pwrX, y: py, w: pwrW, h: pwrH }, false);
+      power.exhausted = wasExhausted;
+    }
+  }
+
+  // Perks section (below the character card)
+  let nextY = cardY + cardH + 12;
   if (player.perks && player.perks.length > 0) {
     ctx.fillStyle = Colors.GOLD;
-    ctx.font = 'bold 14px Georgia, serif';
-    ctx.fillText('Perks', rect.x + rect.w / 2, infoY + 72);
+    ctx.font = 'bold 13px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Perks', cardX + cardW / 2, nextY);
+    nextY += 16;
     ctx.fillStyle = '#ddd';
     ctx.font = '12px sans-serif';
-    let py = infoY + 92;
     for (const perk of player.perks.slice(0, 5)) {
-      ctx.fillText(`• ${perk.name}`, rect.x + rect.w / 2, py);
-      py += 16;
+      ctx.fillText(`• ${perk.name}`, cardX + cardW / 2, nextY);
+      nextY += 15;
     }
   }
   ctx.textAlign = 'left';
@@ -6373,7 +9768,7 @@ const SL_BOX_H = 800;
 const SL_BOX_X = (SCREEN_WIDTH - SL_BOX_W) / 2;
 const SL_BOX_Y = (SCREEN_HEIGHT - SL_BOX_H) / 2;
 // Slot row dimensions (tighter for fitting more)
-const SL_SLOT_H = 44;
+const SL_SLOT_H = 52;
 const SL_SLOT_GAP = 6;
 const SL_LIST_VISIBLE_ROWS = 10;
 
@@ -6390,6 +9785,16 @@ function refreshLoadEntries() {
       loadEntries.push({ slot, info: getSaveInfo(slot), hasData: hasSave(slot), isAuto: true, displayNum: i });
     }
   }
+  // Sort: saves with data first (newest by timestamp), then empty slots
+  loadEntries.sort((a, b) => {
+    if (a.hasData !== b.hasData) return a.hasData ? -1 : 1;
+    if (a.hasData && b.hasData) {
+      const ta = a.info?.timestamp || 0;
+      const tb = b.info?.timestamp || 0;
+      return tb - ta; // newest first
+    }
+    return a.displayNum - b.displayNum;
+  });
 }
 
 function getSaveSlotRects() {
@@ -6599,25 +10004,30 @@ function drawSlotEntry(rect, info, displayNum, isAuto, selected, canClick) {
   ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
   ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const midY = rect.y + rect.h / 2;
   if (info) {
     const badge = isAuto ? '[Auto] ' : '';
-    // Single line: "[Auto] Slot 1   Paladin Lv1 • 12 cards • 0 gold"
+    // All on one line: "[Auto] Slot 1 — Paladin Lv1 • 12 cards • 0 gold              date"
     ctx.fillStyle = Colors.WHITE;
-    ctx.font = 'bold 14px Georgia, serif';
-    ctx.fillText(`${badge}Slot ${displayNum}`, rect.x + 14, rect.y + 18);
+    ctx.font = 'bold 18px Georgia, serif';
+    const slotLabel = `${badge}Slot ${displayNum}`;
+    ctx.fillText(slotLabel, rect.x + 14, midY);
+    const slotW = ctx.measureText(slotLabel).width;
     ctx.fillStyle = '#bbb';
-    ctx.font = '12px sans-serif';
-    ctx.fillText(`${info.class} Lv${info.level} • ${info.deckSize} cards • ${info.gold} gold`, rect.x + 14, rect.y + 34);
+    ctx.font = '15px sans-serif';
+    ctx.fillText(`— ${info.class} Lv${info.level} • ${info.deckSize} cards • ${info.gold} gold`, rect.x + 14 + slotW + 4, midY);
     // Date on the right
     ctx.fillStyle = '#888';
-    ctx.font = '11px sans-serif';
+    ctx.font = '13px sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(info.date, rect.x + rect.w - 14, rect.y + 28);
+    ctx.fillText(info.date, rect.x + rect.w - 14, midY);
   } else {
     ctx.fillStyle = '#777';
-    ctx.font = 'italic 13px sans-serif';
-    ctx.fillText(`Slot ${displayNum}: -- Empty --`, rect.x + 14, rect.y + 26);
+    ctx.font = 'italic 16px sans-serif';
+    ctx.fillText(`Slot ${displayNum}: -- Empty --`, rect.x + 14, midY);
   }
+  ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
 }
 
@@ -6821,6 +10231,15 @@ function restoreFromSave(data) {
       player.deck.addCard(creator());
     }
   }
+  // Restore persistent piles (hand + discard survive between combats)
+  for (const cardId of (data.hand || [])) {
+    const creator = CARD_REGISTRY[cardId];
+    if (creator) player.deck.hand.push(creator());
+  }
+  for (const cardId of (data.discardPile || [])) {
+    const creator = CARD_REGISTRY[cardId];
+    if (creator) player.deck.discardPile.push(creator());
+  }
 
   // Add class power
   const power = getClassPower(selectedClass);
@@ -6879,6 +10298,8 @@ function restoreFromSave(data) {
     if (node) {
       node.isDone = nodeState.isDone;
       node.isLocked = nodeState.isLocked;
+      if (typeof nodeState.canRevisit === 'boolean') node.canRevisit = nodeState.canRevisit;
+      if (Array.isArray(nodeState.exhaustedChoices)) node.exhaustedChoices = nodeState.exhaustedChoices.slice();
     }
   }
 }
@@ -6931,11 +10352,16 @@ function draw() {
     case GameState.DAMAGE_SOURCE:
     case GameState.POWER_TARGETING:
     case GameState.POWER_CHOICE:
+    case GameState.ALLY_TARGETING:
+    case GameState.MULTI_TARGETING:
+    case GameState.SCRY_SELECT:
       drawCombat();
       if (state === GameState.MODAL_SELECT) drawModalOverlay();
       if (state === GameState.DEFENDING) drawDefendingOverlay();
       if (state === GameState.DAMAGE_SOURCE) drawDamageSourceOverlay();
       if (state === GameState.POWER_CHOICE) drawPowerChoiceOverlay();
+      if (state === GameState.MULTI_TARGETING) drawMultiTargetingOverlay();
+      if (state === GameState.SCRY_SELECT) drawScryOverlay();
       break;
     case GameState.PERK_SELECT:
       drawPerkSelect();
@@ -7009,11 +10435,13 @@ const HELP_CONTENT = [
     { text: 'Heroism: bonus damage added to your next attack, then consumed.', color: '#ffd700' },
     { text: 'Rage: permanent bonus damage to all your attacks for this combat.', color: '#dc4040' },
     { text: 'Block: absorbs damage from defense cards. Clears at end of turn.', color: '#ffffff' },
+    { text: 'Scry N: look at the top N cards of your deck, pick 1 to draw, recharge the rest.', color: '#7ec8ff' },
+    { text: 'Heal N: restore up to N cards from discard. Poison stacks are cleared first (1 heal = 1 Poison removed); the rest heals cards.', color: '#7cff9c' },
   ]},
   { title: 'Status Effects', items: [
     { text: 'Fire: deals damage equal to stacks at start of turn, decays by 1.', color: '#dc8c28' },
     { text: 'Ice: reduces damage dealt by stacks, decays by 1 per turn.', color: '#78c8ff' },
-    { text: 'Poison: deals 1 unpreventable damage per turn, decays by 1.', color: '#3cc83c' },
+    { text: 'Poison: deals damage equal to stacks each turn. Only removed by healing.', color: '#3cc83c' },
     { text: 'Shock: -1 damage dealt and +1 damage taken per stack, decays by 1.', color: '#ffe650' },
   ]},
   { title: 'Allies & Summons', items: [
@@ -7383,32 +10811,168 @@ function drawTitleCard() {
 // DAMAGE NUMBER ANIMATIONS
 // ============================================================
 
+// Floats spawned within ~150 ms of each other get auto-staggered in time so
+// multi-effect cards (Battle Fury = +1 Heroism + +1 Shield) don't overlap.
+// Each float reserves an upcoming "slot" in this shared timeline.
+let _floatNextSlotAt = 0;
+const FLOAT_SLOT_MS = 180;
+
+// Spawn a damage number at a specific position
 function spawnDamageNumber(x, y, text, color = Colors.RED) {
+  const now = performance.now();
+  const delay = Math.max(0, _floatNextSlotAt - now);
+  _floatNextSlotAt = now + delay + FLOAT_SLOT_MS;
   damageNumbers.push({
-    x: x + (Math.random() - 0.5) * 30,
+    x: x + (Math.random() - 0.5) * 20,
     y,
     text,
     color,
-    timer: 1200, // ms lifetime
-    vy: -1.5, // float upward
+    timer: 1500,
+    vy: -3.0,
+    delay, // ms to wait before showing/animating
   });
+}
+
+// Spawn a damage number anchored to the bottom of a target's card rect
+function spawnDamageOnTarget(target, amount, color = Colors.RED) {
+  let rect;
+  if (target === player) {
+    rect = getCharacterCardRect(true);
+  } else if (target === enemy) {
+    rect = getCharacterCardRect(false);
+  } else {
+    // It's a creature — find its rect
+    const playerIdx = player.creatures.indexOf(target);
+    if (playerIdx !== -1) {
+      const rects = getPlayerCreatureRects();
+      rect = rects[playerIdx];
+    } else {
+      const enemyIdx = enemy.creatures.indexOf(target);
+      if (enemyIdx !== -1) {
+        const rects = getEnemyCreatureRects();
+        rect = rects[enemyIdx];
+      }
+    }
+  }
+  if (rect) {
+    spawnDamageNumber(rect.x + rect.w / 2, rect.y + rect.h - 10, `-${amount}`, color);
+  }
+}
+
+// Spawn a token gain/apply float (e.g. "+2", "+1") above the target.
+// Color carries the meaning — label param kept for backwards compat but ignored.
+function spawnTokenOnTarget(target, amount, _label, color) {
+  let rect;
+  if (target === player) rect = getCharacterCardRect(true);
+  else if (target === enemy) rect = getCharacterCardRect(false);
+  else {
+    const pi = player.creatures.indexOf(target);
+    if (pi !== -1) rect = getPlayerCreatureRects()[pi];
+    else {
+      const ei = enemy.creatures.indexOf(target);
+      if (ei !== -1) rect = getEnemyCreatureRects()[ei];
+    }
+  }
+  if (!rect) return;
+  spawnDamageNumber(rect.x + rect.w / 2, rect.y + rect.h - 10, `+${amount}`, color);
+}
+
+// Float-only colors that intentionally differ from icon palettes so distinct
+// effects don't visually collide (e.g. Block vs. Ice both used ICE_BLUE before).
+const HEAL_GREEN = '#7cff9c';
+const BLOCK_BLUE = '#cfe8ff';
+function spawnHealOnTarget(target, amount) {
+  let rect;
+  if (target === player) {
+    rect = getCharacterCardRect(true);
+  } else if (target === enemy) {
+    rect = getCharacterCardRect(false);
+  } else {
+    const pi = player.creatures.indexOf(target);
+    if (pi !== -1) rect = getPlayerCreatureRects()[pi];
+    else {
+      const ei = enemy.creatures.indexOf(target);
+      if (ei !== -1) rect = getEnemyCreatureRects()[ei];
+    }
+  }
+  if (rect) {
+    spawnDamageNumber(rect.x + rect.w / 2, rect.y + rect.h - 10, `+${amount}`, HEAL_GREEN);
+  }
+}
+
+// Death animation for creatures
+let dyingCreatures = []; // { rect, timer, name }
+const DEATH_ANIM_DURATION = 900;
+
+function spawnDeathAnimation(creature) {
+  // Find the creature's rect before it's removed
+  let rect;
+  const playerIdx = player.creatures.indexOf(creature);
+  if (playerIdx !== -1) {
+    const rects = getPlayerCreatureRects();
+    rect = rects[playerIdx];
+  } else {
+    const enemyIdx = enemy.creatures.indexOf(creature);
+    if (enemyIdx !== -1) {
+      const rects = getEnemyCreatureRects();
+      rect = rects[enemyIdx];
+    }
+  }
+  if (rect) {
+    dyingCreatures.push({
+      x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+      timer: DEATH_ANIM_DURATION,
+      name: creature.name,
+    });
+  }
 }
 
 function updateDamageNumbers(dt) {
   for (const dn of damageNumbers) {
+    if (dn.delay && dn.delay > 0) {
+      dn.delay -= dt;
+      continue; // still waiting — don't fade or drift yet
+    }
     dn.timer -= dt;
     dn.y += dn.vy * (dt / 16);
   }
   damageNumbers = damageNumbers.filter(dn => dn.timer > 0);
+  // Update death animations
+  for (const da of dyingCreatures) da.timer -= dt;
+  dyingCreatures = dyingCreatures.filter(da => da.timer > 0);
 }
 
 function drawDamageNumbers() {
-  for (const dn of damageNumbers) {
-    const alpha = Math.min(1, dn.timer / 400);
+  // Draw death animations first (behind damage numbers)
+  for (const da of dyingCreatures) {
+    const progress = 1 - da.timer / DEATH_ANIM_DURATION; // 0→1
+    const alpha = 1 - progress;
+    const shake = (1 - progress) * 6;
+    const sx = Math.round((Math.random() - 0.5) * shake * 2);
+    const sy = Math.round((Math.random() - 0.5) * shake * 2);
+    const scale = 1 - progress * 0.3; // shrink to 70%
+    const cx = da.x + da.w / 2, cy = da.y + da.h / 2;
+    ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = dn.color;
-    ctx.font = 'bold 20px sans-serif';
+    ctx.translate(cx + sx, cy + sy);
+    ctx.scale(scale, scale);
+    // Red flash overlay
+    ctx.fillStyle = `rgba(255, 40, 40, ${alpha * 0.6})`;
+    ctx.fillRect(-da.w / 2, -da.h / 2, da.w, da.h);
+    ctx.restore();
+  }
+
+  // Draw floating damage numbers (skip ones still waiting for their stagger slot)
+  for (const dn of damageNumbers) {
+    if (dn.delay && dn.delay > 0) continue;
+    const alpha = Math.min(1, dn.timer / 500);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 28px Georgia, serif';
     ctx.textAlign = 'center';
+    // Shadow for readability
+    ctx.fillText(dn.text, dn.x + 2, dn.y + 2);
+    ctx.fillStyle = dn.color;
     ctx.fillText(dn.text, dn.x, dn.y);
   }
   ctx.globalAlpha = 1;
@@ -7419,48 +10983,77 @@ function drawDamageNumbers() {
 // FOG OF WAR
 // ============================================================
 
+// Offscreen canvas for fog of war compositing
+let fogCanvas = null;
+let fogCtx = null;
+
 function drawFogOfWar(currentArea) {
   if (!currentMap) return;
   const currentNode = currentMap.getCurrentNode();
   if (!currentNode) return;
 
-  // Only apply fog to dark maps
-  const darkMaps = ['cave', 'filibaf_forest', 'obsidian_wastes', 'flood_temple', 'flood_temple_boss_wing'];
-  if (!darkMaps.includes(currentArea)) return;
+  // Fog applies to all non-outdoor areas (matching Python game)
+  const outdoorAreas = new Set(['mountain_path', 'plains', 'arriving_city', 'qualibaf', 'north_qualibaf', 'tharnag', 'grand_hall', 'grand_staircase', 'throne_room', 'artisan_hall', 'personal_quarters', 'volcano']);
+  if (outdoorAreas.has(currentArea)) return;
 
-  // Create fog overlay
-  ctx.fillStyle = 'rgba(0,0,0,0.85)';
-  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  // Create offscreen fog canvas if needed
+  if (!fogCanvas) {
+    fogCanvas = document.createElement('canvas');
+    fogCanvas.width = SCREEN_WIDTH;
+    fogCanvas.height = SCREEN_HEIGHT;
+    fogCtx = fogCanvas.getContext('2d');
+  }
 
-  // Reveal around current node
-  const [cx, cy] = currentNode.position;
-  drawRevealCircle(cx, cy, 360, 1);
+  // Count nodes in this area to pick fog scale (matches Python game)
+  const areaNodeCount = Object.values(currentMap.nodes).filter(n => n.mapArea === currentArea).length;
+  const fogScale = areaNodeCount <= 5 ? 1.4 : 1.0;
 
-  // Dim reveal on visited nodes
+  // Fill fog with near-opaque black
+  fogCtx.clearRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  fogCtx.fillStyle = 'rgba(0,0,0,1)';
+  fogCtx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  // Punch holes using destination-out on the fog canvas
+  fogCtx.globalCompositeOperation = 'destination-out';
+
+  const { scale: mapScale, toScreen } = getMapTransform(currentArea);
   const accessible = currentMap.getAccessibleNodes().map(n => n.id);
   for (const [id, node] of Object.entries(currentMap.nodes)) {
     if (node.mapArea !== currentArea) continue;
-    if (id === currentMap.currentNodeId) continue;
-    const [nx, ny] = node.position;
-    if (visitedNodes.has(id)) {
-      drawRevealCircle(nx, ny, 240, 0.6);
+    const { x: nx, y: ny } = toScreen(node.position);
+
+    let revealSize;
+    if (id === currentMap.currentNodeId) {
+      revealSize = Math.round(220 * fogScale * mapScale);
+    } else if (visitedNodes.has(id)) {
+      revealSize = Math.round(160 * fogScale * mapScale);
     } else if (accessible.includes(id)) {
-      drawRevealCircle(nx, ny, 120, 0.3);
+      revealSize = Math.round(80 * fogScale * mapScale);
+    } else {
+      continue;
     }
+
+    // Dim outer glow (1.4x, softly reveals surroundings)
+    const dimSize = Math.round(revealSize * 1.4);
+    drawFogHole(fogCtx, nx, ny, dimSize, 0.3);
+    // Bright inner reveal
+    drawFogHole(fogCtx, nx, ny, revealSize, 1);
   }
+
+  fogCtx.globalCompositeOperation = 'source-over';
+
+  // Blit fog onto main canvas
+  ctx.drawImage(fogCanvas, 0, 0);
 }
 
-function drawRevealCircle(x, y, radius, intensity) {
-  // Use destination-out compositing to punch holes in the fog
-  ctx.save();
-  ctx.globalCompositeOperation = 'destination-out';
-  const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+function drawFogHole(fCtx, x, y, radius, intensity) {
+  const gradient = fCtx.createRadialGradient(x, y, 0, x, y, radius);
   gradient.addColorStop(0, `rgba(0,0,0,${intensity})`);
-  gradient.addColorStop(0.7, `rgba(0,0,0,${intensity * 0.5})`);
+  gradient.addColorStop(0.4, `rgba(0,0,0,${intensity * 0.7})`);
+  gradient.addColorStop(0.7, `rgba(0,0,0,${intensity * 0.2})`);
   gradient.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-  ctx.restore();
+  fCtx.fillStyle = gradient;
+  fCtx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
 }
 
 // ============================================================
@@ -7491,7 +11084,13 @@ function gameLoop(timestamp) {
   // Update damage numbers
   updateDamageNumbers(dt);
 
+  // Update screen flash timer
+  if (screenFlashTimer > 0) screenFlashTimer = Math.max(0, screenFlashTimer - dt);
+
   draw();
+
+  // Draw screen flash (red overlay for damage events)
+  drawScreenFlash();
 
   // Draw toast message (transient on-screen yellow message)
   if (toastTimer > 0 && toastMessage) drawToast();

@@ -25,8 +25,9 @@ export function saveGame(state) {
     gold: state.gold,
     // Player deck (master deck card IDs)
     masterDeck: state.player.deck.masterDeck.map(c => c.id),
-    // Damage pile size (tracks permanent HP loss)
-    damagePileSize: state.player.deck.damagePile.length,
+    // Persistent piles (survive between combats)
+    hand: state.player.deck.hand.map(c => c.id),
+    discardPile: state.player.deck.discardPile.map(c => c.id),
     // Map state
     mapId: state.currentMap.id,
     currentNodeId: state.currentMap.currentNodeId,
@@ -45,6 +46,8 @@ export function saveGame(state) {
     data.nodeStates[id] = {
       isDone: node.isDone,
       isLocked: node.isLocked,
+      canRevisit: node.canRevisit,
+      exhaustedChoices: Array.isArray(node.exhaustedChoices) ? node.exhaustedChoices.slice() : [],
     };
   }
 

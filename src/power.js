@@ -64,7 +64,7 @@ export function createCleave() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Deal 1 Damage to up to 2 Creatures.',
     rechargeCost: 1,
-    shortDesc: '1 Dmg x2',
+    shortDesc: 'R1->1 Dmg x2',
   });
 }
 
@@ -75,7 +75,7 @@ export function createAimedShot() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Gain 1 Heroism, Draw 1.',
     rechargeCost: 1,
-    shortDesc: '+1 Heroism\nDraw 1',
+    shortDesc: 'R1->+1 Heroism\nDraw 1',
   });
 }
 
@@ -86,7 +86,7 @@ export function createElementalInfusion() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Apply 1 Fire or 1 Ice to target.',
     rechargeCost: 1,
-    shortDesc: '+1 Fire/Ice',
+    shortDesc: 'R1->1 Fire/Ice',
     choices: [createFireToken(), createIceToken()],
   });
 }
@@ -98,7 +98,7 @@ export function createQuickStrike() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Deal 1 Damage, Draw 1.',
     rechargeCost: 1,
-    shortDesc: '1 Dmg\nDraw 1',
+    shortDesc: 'R1->1 Dmg\nDraw 1',
   });
 }
 
@@ -110,7 +110,7 @@ export function createBattleFury() {
     effectDescription: 'Gain 1 Heroism, 1 Shield, Draw 2.',
     rechargeCost: 1,
     costIsDiscard: true,
-    shortDesc: '+1 Heroism\n+1 Shield, Draw 2',
+    shortDesc: 'D1->+1 Heroism\n+1 Shield, Draw 2',
   });
 }
 
@@ -121,7 +121,7 @@ export function createFeralForm() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Gain 1 Heroism or 1 Shield. Draw 1.',
     rechargeCost: 1,
-    shortDesc: '+1 Heroism or\n+1 Shield, Draw 1',
+    shortDesc: 'R1->+1 H or\n+1 S, Draw 1',
     choices: [createCatFormToken(), createBearFormToken()],
   });
 }
@@ -131,12 +131,11 @@ export function createFeralForm() {
 export function createChunkyBite() {
   return new Power({
     id: 'chunky_bite',
-    name: 'Chunky Bite',
-    costDescription: 'Passive',
-    effectDescription: 'Bites deal +1 damage.',
-    rechargeCost: 0,
-    isPassive: true,
-    shortDesc: 'Bite +1',
+    name: 'Big Bite',
+    costDescription: 'Recharge 2 Cards',
+    effectDescription: 'Deal 3 Damage.',
+    rechargeCost: 2,
+    shortDesc: 'R2->3 Dmg',
   });
 }
 
@@ -164,16 +163,18 @@ export function createSplit() {
   });
 }
 
-export function createArmorPower() {
-  return new Power({
+export function createArmorPower(level = 1) {
+  const p = new Power({
     id: 'armor',
-    name: 'Armor',
+    name: `Armor: ${level}`,
     costDescription: 'Passive',
-    effectDescription: '+1 Armor.',
+    effectDescription: `Reduce incoming damage by ${level}.`,
     rechargeCost: 0,
     isPassive: true,
-    shortDesc: '+1 Armor',
+    shortDesc: `Block ${level}`,
   });
+  p.armorLevel = level;
+  return p;
 }
 
 export function getClassPower(className) {

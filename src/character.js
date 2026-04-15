@@ -64,6 +64,8 @@ export class Character {
     this.shield = 0;
     this.rage = 0;
     this.ignite = 0;
+    this.poisonBuff = 0;
+    this.unpreventableBuff = 0;
     this.level = 1;
     this.perks = [];
   }
@@ -71,7 +73,7 @@ export class Character {
   get armor() {
     let a = this.baseArmor;
     for (const p of this.powers) {
-      if (p.id === 'armor_power') a += p.rechargeeCost;
+      if (p.id === 'armor' && !p.exhausted) a += (p.armorLevel || 1);
     }
     return a;
   }
@@ -137,11 +139,27 @@ export class Character {
 
   takeDamageFromDeck(amount) {
     if (!this.deck) return 0;
+    if (amount <= 0) return 0;
+    // Outside combat, ensure there's a draw pile for non-combat damage events.
+    if (!this.deck.drawPile.length && !this.deck.hand.length && !this.deck.rechargePile.length) {
+      this.deck.initializeForAdventure();
+    }
     let taken = 0;
     for (let i = 0; i < amount; i++) {
+      // Draw pile first, then recharge pile (via damageFromDrawPile).
       const card = this.deck.damageFromDrawPile();
-      if (card) taken++;
-      else break;
+      if (card) { taken++; continue; }
+      // No more cards in deck — pull from hand instead (random card).
+      if (this.deck.hand.length > 0) {
+        const idx = Math.floor(Math.random() * this.deck.hand.length);
+        const handCard = this.deck.hand.splice(idx, 1)[0];
+        handCard.exhausted = false;
+        this.deck.discardPile.push(handCard);
+        taken++;
+        continue;
+      }
+      // No cards anywhere — character is dead
+      break;
     }
     return taken;
   }
@@ -239,11 +257,11 @@ export class Character {
         switch (buff.effectType) {
           case 'gain_heroism':
             this.heroism += buff.effectValue;
-            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Heroism`, color: '#ffd700' });
+            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Heroism`, color: '#ffd700', token: 'Heroism', tokenAmount: buff.effectValue, tokenColor: '#ffd700' });
             break;
           case 'gain_shield':
             this.shield += buff.effectValue;
-            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Shield`, color: '#64b4dc' });
+            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Shield`, color: '#64b4dc', token: 'Shield', tokenAmount: buff.effectValue, tokenColor: '#64b4dc' });
             break;
           case 'draw_card':
             if (this.deck) {
@@ -252,10 +270,10 @@ export class Character {
             }
             break;
           case 'heal':
-            if (this.deck && this.deck.damagePile.length > 0) {
-              const card = this.deck.damagePile.pop();
-              this.deck.addToDrawPile(card, 'random');
-              logs.push({ text: `  ${buff.name}: Healed 1`, color: '#3cc83c' });
+            if (this.deck && this.deck.discardPile.length > 0) {
+              const card = this.deck.discardPile.pop();
+              this.deck.addToRechargePile(card);
+              logs.push({ text: `  ${buff.name}: Healed 1 (${card.name})`, color: '#3cc83c', card, healed: 1 });
             }
             break;
         }

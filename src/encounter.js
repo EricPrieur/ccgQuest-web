@@ -19,11 +19,21 @@ export class EncounterText {
 }
 
 export class EncounterChoice {
-  constructor(text, resultText = '', effectType = '', effectValue = 0) {
+  constructor(text, resultText = '', effectType = '', effectValue = 0, options = {}) {
     this.text = text;
     this.resultText = resultText;
     this.effectType = effectType;
     this.effectValue = effectValue;
+    // If true, after resolving this choice return to the same choice screen
+    // instead of advancing the encounter. The choice becomes grayed out (Done).
+    this.returnToChoices = options.returnToChoices || false;
+    // If true, choosing this option completes the encounter and returns to the map.
+    this.completesEncounter = options.completesEncounter || false;
+    // If true, deactivate the map node after this choice is used.
+    this.deactivatesNode = options.deactivatesNode || false;
+    // If true, this choice can be picked multiple times (doesn't exhaust on use).
+    this.repeatable = options.repeatable || false;
+    this.exhausted = false; // set true after use (grayed out)
   }
 }
 
@@ -135,12 +145,14 @@ export function createLockedDoorEncounter() {
         new EncounterChoice(
           'Try to pick the lock with the sharp rock',
           'You scrape and prod at the mechanism, but without proper tools it\'s hopeless. The rock slips, and you slice your finger on the rusted metal. Blood drips onto the cold stone floor.',
-          'damage', 1
+          'damage', 1,
+          { returnToChoices: true, deactivatesNode: true }
         ),
         new EncounterChoice(
           'Step back and wait',
           'You take a deep breath and step away from the door. Patience. There will be another way. There has to be.',
-          '', 0
+          '', 0,
+          { completesEncounter: true }
         ),
       ],
     }),
@@ -242,6 +254,7 @@ export function createDeadEndEncounter() {
     new EncounterPhaseData({
       phaseType: EncounterPhase.LOOT,
       lootGoldDice: [1, 6],
+      lootCards: ['slime_loot'],
     }),
   ]);
 }
@@ -259,13 +272,15 @@ export function createTightOpeningEncounter() {
       choices: [
         new EncounterChoice(
           'Try to squeeze through',
-          'You turn sideways and inch through the gap, stone scraping against your ribs. For a terrifying moment you\'re stuck — then you pop free on the other side.',
-          'try_squeeze', 1
+          '',
+          'try_squeeze', 1,
+          { returnToChoices: true, repeatable: true }
         ),
         new EncounterChoice(
-          'Leave',
+          'Leave for now',
           'You back away from the gap. No sense getting stuck in the dark.',
-          '', 0
+          '', 0,
+          { completesEncounter: true }
         ),
       ],
     }),
@@ -287,13 +302,15 @@ export function createLostShrineEncounter() {
       choices: [
         new EncounterChoice(
           'Pray at the Shrine',
-          'You kneel before the altar and bow your head. Warmth floods through you, soothing your aches and steadying your nerves. The light brightens for an instant, then fades.',
-          'pray_shrine', 1
+          'You kneel before the altar and bow your head. Warmth floods through you, and the altar bestows a lost technique — a gift from whoever once tended this place.',
+          'shrine_ability_card', 1,
+          { completesEncounter: true }
         ),
         new EncounterChoice(
           'Leave for now',
           'You step away from the shrine, its golden glow fading behind you as you return to the tunnels.',
-          '', 0
+          '', 0,
+          { completesEncounter: true }
         ),
       ],
     }),
@@ -324,6 +341,7 @@ export function createSewerJunctionEncounter() {
     new EncounterPhaseData({
       phaseType: EncounterPhase.LOOT,
       lootGoldDice: [1, 6],
+      lootCards: ['slime_loot'],
     }),
   ]);
 }
@@ -343,17 +361,20 @@ export function createAbandonedCampEncounter() {
         new EncounterChoice(
           'Take a short rest',
           'You sink onto the bedroll and close your eyes, just for a moment. When you wake, you feel a little stronger.',
-          'short_rest', 5
+          'short_rest', 5,
+          { returnToChoices: true }
         ),
         new EncounterChoice(
           'Search the camp',
           'You rummage through the supplies, checking every pocket and fold. There might be something useful hidden here.',
-          'search_camp', 1
+          'search_camp', 1,
+          { returnToChoices: true }
         ),
         new EncounterChoice(
-          'Leave it alone',
-          'You leave the camp undisturbed. Whoever left these things behind may yet return for them.',
-          '', 0
+          'Leave',
+          'You leave the camp. Whoever left these things behind may yet return for them.',
+          '', 0,
+          { completesEncounter: true }
         ),
       ],
     }),

@@ -103,7 +103,7 @@ export function createWoodenAxe() {
     subtype: 'martial',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
-    effects: [new CardEffect('multi_damage', 2, TargetType.SINGLE_ENEMY)],
+    effects: [new CardEffect('multi_damage', 2, TargetType.SINGLE_ENEMY, 2)],
   });
 }
 
@@ -189,8 +189,8 @@ export function createSmallPouch() {
   return new Card({
     id: 'small_pouch',
     name: 'Small Pouch',
-    description: 'Recharge -> Look at top 2 cards, pick one, recharge the other.',
-    shortDesc: 'R->Scry 2, Pick 1',
+    description: 'Recharge -> Scry 2.',
+    shortDesc: 'R->Scry 2',
     subtype: 'item',
     cardType: CardType.ITEM,
     costType: CostType.RECHARGE,
@@ -273,8 +273,8 @@ export function createMagicMissiles() {
     id: 'magic_missiles',
     name: 'Magic Missiles',
     description:
-      'Recharge -> Deal 1 Damage, Draw a card. Additionally Recharge another card to deal 1 extra damage twice.',
-    shortDesc: 'R->1 Dmg, Draw 1. R1->x3',
+      'Recharge -> Deal 1 Damage, Draw 1.\nOptional: Recharge 1 more -> 3 shots of 1 damage each.',
+    shortDesc: 'R->1 Dmg, Draw 1\nOpt R+1->3x1 Dmg',
     subtype: 'ability',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
@@ -326,12 +326,12 @@ export function createSneakAttack() {
   return new Card({
     id: 'sneak_attack',
     name: 'Sneak Attack',
-    description: 'Recharge -> Deal X Damage.\nX = # of attacks this turn.',
+    description: 'Recharge -> Deal X Damage.\nX = # of attacks this turn (counts itself).',
     shortDesc: 'R->X Dmg\nX = # attacks',
     subtype: 'ability',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
-    effects: [new CardEffect('sneak_attack_damage', 0, TargetType.SINGLE_ENEMY)],
+    effects: [new CardEffect('sneak_attack', 0, TargetType.SINGLE_ENEMY)],
     characterClass: ['rogue', 'druid'],
     tier: 1,
   });
@@ -339,10 +339,11 @@ export function createSneakAttack() {
 
 function createSmallSpiderCreature() {
   return new Creature({
-    name: 'Small Spider',
+    name: 'Pet Spider',
     attack: 0,
     maxHp: 1,
     poisonAttack: true,
+    isCompanion: true,
   });
 }
 
@@ -377,6 +378,21 @@ export function createHeroicStrike() {
     costType: CostType.RECHARGE,
     effects: [new CardEffect('gain_heroism', 3, TargetType.SELF)],
     characterClass: ['paladin', 'warrior'],
+    tier: 1,
+  });
+}
+
+export function createCharge() {
+  return new Card({
+    id: 'charge',
+    name: 'Charge',
+    description: 'Recharge -> Deal 2 Damage. Draw 1 if first attack this turn.',
+    shortDesc: 'R->2 Dmg\nDraw 1 if 1st atk',
+    subtype: 'ability',
+    cardType: CardType.ABILITY,
+    costType: CostType.RECHARGE,
+    effects: [new CardEffect('charge_attack', 2, TargetType.SINGLE_ENEMY)],
+    characterClass: ['warrior'],
     tier: 1,
   });
 }
@@ -416,7 +432,7 @@ export function createShieldBash() {
     id: 'shield_bash',
     name: 'Shield Bash',
     description: 'Recharge -> Gain 1 Shield, Deal damage = Shield.',
-    shortDesc: 'R->+1 Shld, Dmg=Shld',
+    shortDesc: 'R->+1 Shield\nDmg=Shield',
     subtype: 'ability',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
@@ -565,12 +581,15 @@ export function createRegrowth() {
   return new Card({
     id: 'regrowth',
     name: 'Regrowth',
-    description: 'Recharge -> Gain 1 Regen.\n(Heal at start of turn)',
-    shortDesc: 'R->Regen 1',
+    description: 'Recharge -> Heal 1. Heal 1 at start of turn for 4 turns.',
+    shortDesc: 'R->Heal 1\n+Regen 4t',
     subtype: 'ability',
     cardType: CardType.ABILITY,
     costType: CostType.RECHARGE,
-    effects: [new CardEffect('regen', 1, TargetType.SELF)],
+    effects: [
+      new CardEffect('heal', 1, TargetType.SELF),
+      new CardEffect('regen_buff', 4, TargetType.SELF),
+    ],
     characterClass: ['druid'],
     tier: 1,
   });
@@ -721,6 +740,14 @@ export function createFlashHeal() {
   });
 }
 
+function createTamedRatCreature() {
+  return new Creature({
+    name: 'Tamed Rat',
+    attack: 1,
+    maxHp: 1,
+  });
+}
+
 export function createTamedRat() {
   return new Card({
     id: 'tamed_rat',
@@ -733,6 +760,7 @@ export function createTamedRat() {
     effects: [new CardEffect('summon_tamed_rat', 1, TargetType.SUMMON)],
     characterClass: ['ranger'],
     tier: 1,
+    previewCreature: createTamedRatCreature(),
   });
 }
 
@@ -757,7 +785,7 @@ export function getRogueAbilityChoices() {
 }
 
 export function getWarriorAbilityChoices() {
-  return [createHeroicStrike(), createGreaterCleave(), createRecklessStrike(), createShieldBash()];
+  return [createHeroicStrike(), createCharge(), createRecklessStrike(), createShieldBash()];
 }
 
 export function getDruidAbilityChoices() {
@@ -869,6 +897,74 @@ export function createSlimeAppendage() {
   });
 }
 
+// === Slime Loot Cards ===
+
+export function createPartiallyDigestedBone() {
+  return new Card({
+    id: 'partially_digested_bone',
+    name: 'Partially Digested Bone',
+    description: 'Recharge -> Deal 2 Unpreventable Damage.',
+    shortDesc: 'R->2 True Dmg',
+    subtype: 'martial',
+    cardType: CardType.ATTACK,
+    costType: CostType.RECHARGE,
+    effects: [new CardEffect('unpreventable_damage', 2, TargetType.SINGLE_ENEMY)],
+    rarity: 'uncommon',
+  });
+}
+
+export function createCorrodedArmor() {
+  return new Card({
+    id: 'corroded_armor',
+    name: 'Corroded Armor',
+    description: 'Discard -> Block 6 Damage.',
+    shortDesc: 'D->Block 6',
+    subtype: 'heavy_armor',
+    cardType: CardType.DEFENSE,
+    costType: CostType.DISCARD,
+    effects: [new CardEffect('block', 6, TargetType.SELF)],
+  });
+}
+
+function createPetSlimeCreature() {
+  return new Creature({
+    name: 'Pet Slime',
+    attack: 1,
+    maxHp: 1,
+    unpreventable: true,
+    description: 'Deals Unpreventable Damage',
+  });
+}
+
+export function createPetSlimeCard() {
+  return new Card({
+    id: 'pet_slime',
+    name: 'Pet Slime',
+    description: 'Recharge -> Summon a Pet Slime to the battle!',
+    shortDesc: 'R->Summon Slime',
+    subtype: 'ally',
+    cardType: CardType.CREATURE,
+    costType: CostType.RECHARGE,
+    effects: [new CardEffect('summon_pet_slime', 1, TargetType.SUMMON)],
+    rarity: 'rare',
+    previewCreature: createPetSlimeCreature(),
+  });
+}
+
+export function createSlimeJar() {
+  return new Card({
+    id: 'slime_jar',
+    name: 'Slime Jar',
+    description: 'Recharge -> Your next attack is Unpreventable.',
+    shortDesc: 'R->Unpreventable',
+    subtype: 'item',
+    cardType: CardType.ITEM,
+    costType: CostType.RECHARGE,
+    effects: [new CardEffect('grant_unpreventable_buff', 1, TargetType.SELF)],
+    rarity: 'uncommon',
+  });
+}
+
 // ============================================================
 // Enemy Cards - Kobold Warden
 // ============================================================
@@ -970,15 +1066,74 @@ export function createBoneClub() {
   return new Card({
     id: 'bone_club',
     name: 'Bone Club',
-    description: 'Recharge +1 -> Deal 4 damage (+2 vs Armor).',
-    shortDesc: 'R+1->4 Dmg (+2 Armor)',
+    description: 'Recharge +1 Card -> Deal 4 damage (+2 vs Armor/Shield).',
+    shortDesc: 'R+1->4 Dmg\n(+2 Armor)',
     subtype: 'martial_2h',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
     effects: [
-      new CardEffect('damage', 4, TargetType.SINGLE_ENEMY),
+      new CardEffect('armor_bonus_damage', 46, TargetType.SINGLE_ENEMY), // 4 base, 6 vs armor/shield
       new CardEffect('recharge_extra', 1, TargetType.SELF),
     ],
+  });
+}
+
+export function createBoneMace() {
+  return new Card({
+    id: 'bone_mace',
+    name: 'Bone Mace',
+    description: 'Recharge -> Deal 3 damage (+2 vs Armor/Shield).',
+    shortDesc: 'R->3 Dmg (+2 Arm)',
+    subtype: 'martial',
+    cardType: CardType.ATTACK,
+    costType: CostType.RECHARGE,
+    effects: [
+      new CardEffect('armor_bonus_damage', 35, TargetType.SINGLE_ENEMY),
+    ],
+    rarity: 'uncommon',
+  });
+}
+
+export function createBadRations() {
+  return new Card({
+    id: 'bad_rations',
+    name: 'Bad Rations',
+    description: 'Banish + Recharge 1 -> Heal 4, discard 1 card from deck.',
+    shortDesc: 'B+R1->Heal 4,\n-1 deck',
+    subtype: 'item',
+    cardType: CardType.ITEM,
+    costType: CostType.BANISH,
+    effects: [
+      new CardEffect('heal', 4, TargetType.SELF),
+      new CardEffect('discard_deck', 1, TargetType.SELF),
+      new CardEffect('recharge_extra', 1, TargetType.SELF),
+    ],
+  });
+}
+
+export function createSturdyBoots() {
+  return new Card({
+    id: 'sturdy_boots',
+    name: 'Sturdy Boots',
+    description: 'Attack: 1 Dmg + Draw.\nDefense: Block 1 + Draw.',
+    shortDesc: 'R->1 Dmg/Block,\nDraw',
+    subtype: 'light_armor',
+    cardType: CardType.ATTACK,
+    costType: CostType.RECHARGE,
+    effects: [
+      new CardEffect('damage', 1, TargetType.SINGLE_ENEMY),
+      new CardEffect('draw', 1, TargetType.SELF),
+    ],
+    modes: [
+      new CardMode({
+        description: 'Block 1 Damage, Draw a card',
+        effects: [
+          new CardEffect('block', 1, TargetType.SELF),
+          new CardEffect('draw', 1, TargetType.SELF),
+        ],
+      }),
+    ],
+    rarity: 'uncommon',
   });
 }
 
@@ -993,6 +1148,7 @@ export function createTorch() {
     costType: CostType.DISCARD,
     effects: [
       new CardEffect('apply_fire_all', 1, TargetType.ALL_ENEMIES),
+      new CardEffect('scry_pick', 3, TargetType.SELF),
     ],
     rarity: 'uncommon',
   });
@@ -1034,16 +1190,15 @@ export function createSharpRock() {
   return new Card({
     id: 'sharp_rock',
     name: 'Sharp Rock',
-    description: 'Recharge +1 -> Deal 4 damage.',
-    shortDesc: 'R+1->4 Dmg',
-    subtype: 'weapon',
+    description: 'Recharge -> Deal 1 Damage, Draw 1.',
+    shortDesc: 'R->1 Dmg, Draw 1',
+    subtype: 'simple',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
     effects: [
-      new CardEffect('damage', 4, TargetType.SINGLE_ENEMY),
-      new CardEffect('recharge_extra', 1, TargetType.SELF),
+      new CardEffect('damage', 1, TargetType.SINGLE_ENEMY),
+      new CardEffect('draw', 1, TargetType.SELF),
     ],
-    rarity: 'uncommon',
   });
 }
 

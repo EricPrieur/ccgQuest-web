@@ -35,6 +35,10 @@ export class Creature {
     this.currentHp = currentHp !== null ? currentHp : maxHp;
 
     this.exhausted = true;
+    // justSummoned: true on the turn this creature arrives. Cleared when the
+    // owner's ready() fires at the start of their next turn. Lets the UI tell
+    // the player "can't attack the turn it's summoned" instead of "already attacked".
+    this.justSummoned = true;
     this.owner = null;
     this.unpreventable = unpreventable;
 
@@ -100,6 +104,7 @@ export class Creature {
 
   ready() {
     this.exhausted = false;
+    this.justSummoned = false;
   }
 
   exhaust() {
