@@ -121,7 +121,10 @@ export function createFeralForm() {
     costDescription: 'Recharge 1 Card',
     effectDescription: 'Gain 1 Heroism or 1 Shield. Draw 1.',
     rechargeCost: 1,
-    shortDesc: 'R1->+1 H or\n+1 S, Draw 1',
+    // Uses keyword names ("Heroism", "Shield", "Draw") so the inline icon
+    // tokenizer substitutes them with their icons on the small power card.
+    // Forced to 2 lines so the small card's frame doesn't overlap the text.
+    shortDesc: 'R1->Heroism\nor Shield, Draw',
     choices: [createCatFormToken(), createBearFormToken()],
   });
 }
@@ -144,10 +147,10 @@ export function createDireFury() {
     id: 'dire_fury',
     name: 'Dire Fury',
     costDescription: 'Passive',
-    effectDescription: 'Gains rage on damage.',
+    effectDescription: 'End of Turn: Gain 1 Rage.',
     rechargeCost: 0,
     isPassive: true,
-    shortDesc: '+Rage on hit',
+    shortDesc: 'End of Turn:\n+1 Rage',
   });
 }
 
@@ -175,6 +178,18 @@ export function createArmorPower(level = 1) {
   });
   p.armorLevel = level;
   return p;
+}
+
+export function createKoboldBackup() {
+  return new Power({
+    id: 'kobold_backup',
+    name: 'Kobold Backup',
+    costDescription: 'Passive',
+    effectDescription: 'Start of Turn: Summon 1 Kobold Guard.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Summon Guard',
+  });
 }
 
 export function getClassPower(className) {

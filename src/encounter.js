@@ -402,7 +402,7 @@ export function createUpwardPassageEncounter() {
         new EncounterChoice(
           'Stay down',
           'You back away from the opening. Better to find another route than walk into a Kobold kitchen.',
-          '', 0
+          'upward_stay_down', 0
         ),
       ],
     }),
@@ -413,10 +413,11 @@ export function createKitchenEncounter() {
   return new Encounter('kitchen', 'The Kitchen', 'A busy Kobold kitchen', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
+      // Intro text matches the Python game verbatim.
       texts: [
-        new EncounterText('You emerge into a large, warm kitchen carved from the rock. A fire roars in a stone hearth, and bubbling pots line every surface. The air is thick with steam and the smell of roasting meat.'),
-        new EncounterText('A hulking reptilian cook stands with its back to you, stirring an enormous cauldron. It wears a stained apron and mutters to itself as it works, tasting from a long-handled ladle.'),
-        new EncounterText('Copper pots, cleavers, and utensils hang from hooks on the walls. A doorway to the north leads deeper into the warren. The cook hasn\'t noticed you yet.'),
+        new EncounterText('You are in the corner of a large stone kitchen, tucked behind crates in a private area near the grate you climbed through. Copper pots hang from hooks on the ceiling. A massive fireplace dominates one wall, its flames casting dancing shadows across the room.'),
+        new EncounterText('There is a small reptilian creature... cooking? And singing. Scaled green skin, a long snout, and small horns curling back from its brow. It wears a stained apron and hums tunelessly as it chops what appears to be a very large chicken. Tables in disarray surround it, covered with discarded food scraps and strange ingredients.'),
+        new EncounterText('The creature hasn\'t noticed you yet. A doorway leads out of the kitchen on the far side. What do you do?', '!'),
       ],
     }),
     new EncounterPhaseData({
@@ -424,23 +425,23 @@ export function createKitchenEncounter() {
       choices: [
         new EncounterChoice(
           'Attack the Cook',
-          'You grab a heavy pot from the counter and bring it crashing down. The cook whirls around with a roar, brandishing its ladle like a weapon!',
+          'You lunge at the creature! It shrieks in terror, grabs a heavy pot and hurls it at your head. The pot connects with a painful CLANG before the cook scrambles away through a back passage, screaming continuously in its strange language. The kitchen is yours, but your head is ringing. You make your way through the doorway.',
           'kitchen_attack', 1
         ),
         new EncounterChoice(
-          'Try to talk',
-          'You clear your throat. The cook spins around, eyes wide. It stares at you for a long moment, then tilts its head curiously.',
+          'Try to talk to the Cook',
+          'You clear your throat softly. The creature spins around, eyes wide, cleaver raised — then slowly lowers it as you raise your hands. You try humming along with its song. The creature\'s eyes light up. It seems appeased and no longer sees you as a threat. It points to the table where a big chicken leg sits, still warm, and motions for you to take it and eat.',
           'kitchen_talk', 1
         ),
         new EncounterChoice(
-          'Try to sneak out',
-          'You drop to a crouch and edge along the wall toward the northern doorway, keeping the cook\'s broad back between you and discovery.',
+          'Try to sneak out of the kitchen',
+          'You crouch low and creep along the wall, keeping to the shadows. The cook continues humming and chopping, completely distracted by its work. You slip through the doorway on the far side without being noticed.',
           'kitchen_sneak', 1
         ),
         new EncounterChoice(
           'Leave',
-          'You lower yourself back through the trapdoor and return to the tunnels below.',
-          '', 0
+          'You quietly back away and return the way you came.',
+          'kitchen_leave', 0
         ),
       ],
     }),
@@ -458,30 +459,97 @@ export function createPrisonEntranceEncounter() {
       ],
     }),
     new EncounterPhaseData({
+      phaseType: EncounterPhase.CHOICE,
+      choicePrompt: 'The guards bar the way. What do you do?',
+      choices: [
+        new EncounterChoice(
+          'Attack the Guards',
+          'You charge, weapon raised.',
+          'prison_fight', 0,
+        ),
+        // Snatch result text is filled in by resolvePrisonSnatch at click
+        // time, based on whether the roll succeeds or fails.
+        new EncounterChoice(
+          'Try to snatch a weapon from the barrel',
+          '',
+          'prison_snatch', 0,
+        ),
+      ],
+    }),
+    new EncounterPhaseData({
       phaseType: EncounterPhase.COMBAT,
       enemyId: 'prison_guards',
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The warden collapses with a groan. You snatch the whip from its belt and the key ring from the floor. Among the confiscated weapons you find your own gear — battered but serviceable. You obtained the Warden\'s Whip and a Prison Key!', '!'),
+        new EncounterText('The warden collapses with a groan. You snatch the whip from its belt and the key ring from the floor. You obtained the Warden\'s Whip and a Prison Key!', '!'),
       ],
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.LOOT,
       lootGoldDice: [2, 6],
-      lootCards: ['wardens_whip'],
+      // Two drops: the guaranteed Warden's Whip + one roll from the
+      // prison-warden loot table (matches PY's
+      // `lootCards=["wardens_whip", "prison_warden_loot"]`).
+      lootCards: ['wardens_whip', 'prison_warden_loot'],
+    }),
+    // Post-combat barrel choice — resolved via `loot_barrel` effect. Skipped
+    // entirely if the barrel was already looted via the sneak/talk pre-fight
+    // snatch (see prison_snatch handler in main.js).
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.CHOICE,
+      choicePrompt: 'A barrel of confiscated gear sits by the door.',
+      choices: [
+        // Rummage result text is filled in by resolveLootBarrel at click time.
+        new EncounterChoice(
+          'Rummage through the gear barrel',
+          '',
+          'loot_barrel', 0,
+          { completesEncounter: true },
+        ),
+        new EncounterChoice(
+          'Leave it',
+          'You step past the barrel and continue on.',
+          '', 0,
+          { completesEncounter: true },
+        ),
+      ],
     }),
   ]);
 }
 
-export function createLeavePrisonEncounter() {
+// Leave Prison — two variants depending on whether Thorb has been rescued
+// (mirrors the Python game's `create_leave_prison_encounter(thorb_rescued)`).
+// The flag is derived at instantiation time from `corner_cell.isDone` by
+// the ENCOUNTER_REGISTRY wrapper below.
+export function createLeavePrisonEncounter(thorbRescued = false) {
+  if (!thorbRescued) {
+    // Blocked exit: TEXT-only, no choice. Clicking through the last text
+    // auto-returns to the map. The node IS marked done (standard encounter
+    // completion flow), but `leave_prison` is set to canRevisit=true on
+    // the map node so clicking it re-runs the encounter — which re-checks
+    // thorbRescued each time, so after you free Thorb the normal flow runs.
+    return new Encounter('leave_prison', 'Prison Exit', 'A door leading outside', [
+      new EncounterPhaseData({
+        phaseType: EncounterPhase.TEXT,
+        texts: [
+          new EncounterText('You stand before the heavy wooden door. Through the gap, you can see daylight streaming in. Freedom is right there.'),
+          new EncounterText('But as you reach for the lock, you hear it — faint, echoing from deeper in the prison. Shouting. The clash of metal. Someone is fighting for their life down there.'),
+          new EncounterText('You recognize that voice. Gruff, stubborn, unmistakably dwarven. One of your companions from the caravan is still alive in these cells.', '!'),
+          new EncounterText('You pocket the key. There\'s no way you\'re leaving someone behind in this place. Not when you can still do something about it.'),
+        ],
+      }),
+    ]);
+  }
+
+  // Thorb rescued — normal exit flow leading into the chapter-end transition.
   return new Encounter('leave_prison', 'Prison Exit', 'A door leading outside', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('A sturdy wooden door stands at the end of the corridor, daylight leaking around its edges. A keyhole gleams in the lock.'),
-        new EncounterText('Beyond this door lies freedom — open sky, fresh air, and the road to Qualibaf. But there may still be prisoners left behind.'),
+        new EncounterText('You stand before the heavy wooden door. Through the gap, you can see daylight streaming in. The Prison Key feels heavy in your hand.'),
+        new EncounterText('Beyond this door lies freedom — but also the unknown. You\'ve survived the prison, but what awaits outside?', '!'),
       ],
     }),
     new EncounterPhaseData({
@@ -489,12 +557,12 @@ export function createLeavePrisonEncounter() {
       choices: [
         new EncounterChoice(
           'Use the Prison Key and leave',
-          'You slide the key into the lock and turn. The mechanism clicks, and the door swings open. Blinding sunlight floods the corridor.',
+          'The key turns with a satisfying click. The door groans open, and warm sunlight floods in. You step outside, breathing fresh air for the first time in what feels like an eternity.',
           'leave_prison', 1
         ),
         new EncounterChoice(
           'Not yet',
-          'You pocket the key. There are still cells to check and people who might need your help.',
+          'You pocket the key. There might still be things to do here.',
           '', 0
         ),
       ],
@@ -523,7 +591,7 @@ export function createPrisonWingEncounter() {
         new EncounterChoice(
           'Turn back',
           'You hesitate. Whatever is happening down there, it sounds dangerous. You retreat to the main corridor.',
-          '', 0
+          'prison_wing_turn_back', 0
         ),
       ],
     }),
@@ -548,8 +616,10 @@ export function createCornerCellEncounter() {
       phaseType: EncounterPhase.TEXT,
       texts: [
         new EncounterText('The dire rat lets out a hideous shriek and collapses, twitching once before going still.'),
-        new EncounterText('The dwarf dusts off his hands and fixes you with a gap-toothed grin. "Name\'s Thorb. I\'d buy ye an ale if we weren\'t stuck in this blasted hole. Ye got me out of a tight spot — I won\'t forget it."'),
-        new EncounterText('Thorb cracks his knuckles and squares his shoulders. "Right then. Wherever ye\'re headed, I\'m comin\' with ye. Lead on!"'),
+        new EncounterText('The dwarf dusts off his hands and fixes you with a gap-toothed grin.'),
+        new EncounterText('"Name\'s Thorb. I\'d buy ye an ale if we weren\'t stuck in this blasted hole. Ye got me out of a tight spot — I won\'t forget it."', 'Thorb'),
+        new EncounterText('"Right then. Wherever ye\'re headed, I\'m comin\' with ye. Lead on!"', 'Thorb'),
+        new EncounterText('Thorb joins your party! He\'ll fight alongside you in future battles.', '!'),
       ],
     }),
     new EncounterPhaseData({
@@ -565,20 +635,32 @@ export function createCornerCellEncounter() {
 // ============================================================
 
 export function createMountainCampEncounter() {
-  return new Encounter('mountain_camp', 'Chapter 2: Mountain Path', 'Freedom at last', [
+  return new Encounter('mountain_camp', 'Mountain Camp', 'Chapter 2: The Mountain Path', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('You emerge from the prison into crisp mountain air. The sky stretches wide above you, impossibly blue after days of darkness underground.'),
-        new EncounterText('Your companions gather around a small campfire nestled between weathered boulders. The warmth of the flames and the scent of pine needles feel like a dream after the damp cells and foul sewers.'),
-        new EncounterText('For the first time since your capture, you feel truly free. The mountain path stretches ahead, winding through the peaks toward the plains below.'),
+        new EncounterText('You wake to grey dawn, body aching from cold stone. The campfire has burned to embers. You\'re free of the prison, but the mountains stretch endlessly in every direction.'),
+        new EncounterText('"Oi. Get up. We\'ve got company," Thorb growls, already on his feet with his weapon drawn. He nods toward the trail below.', 'Thorb'),
+        new EncounterText('A Kobold patrol picks its way along the rocks - pale-scaled, shields bearing the sigil of the White Claw clan. One stops, sniffing the air. It turns toward your camp, eyes narrowing. They\'ve spotted you.', '!'),
       ],
     }),
     new EncounterPhaseData({
-      phaseType: EncounterPhase.LOOT,
-      lootGold: 10,
+      phaseType: EncounterPhase.COMBAT,
+      enemyId: 'kobold_patrol',
     }),
-  ]);
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.LOOT,
+      lootGoldDice: [2, 6],
+      lootCards: ['kobold_patrol_loot'],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText('The last Kobold falls. You catch your breath among the bodies. The White Claw clan - they control these mountain passes.'),
+        new EncounterText('"We can\'t take the main road down," Thorb mutters, wiping his blade. "These wretches\'ll have scouts everywhere. Give me a moment - I know these mountains. I\'ll find us a way through."', 'Thorb'),
+      ],
+    }),
+  ], true);
 }
 
 export function createMountainPassEncounter() {

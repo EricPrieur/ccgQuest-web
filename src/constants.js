@@ -51,6 +51,7 @@ export const GameState = Object.freeze({
   FORGE_ARMOR: 'FORGE_ARMOR',
   GAME_OVER: 'GAME_OVER',
   VICTORY: 'VICTORY',
+  CODEX: 'CODEX',
 });
 
 // === Card Enums ===
@@ -138,6 +139,7 @@ export const SUBTYPE_COLORS = Object.freeze({
   staff: '#b43c3c',         // Red
   ability: '#8c3c8c',       // Purple
   item: '#808080',          // Grey
-  allies: '#645038',        // Brown
+  ally: '#64b4dc',          // Ally blue (matches in-combat ally tint)
+  allies: '#64b4dc',        // Ally blue
   relic: '#c0c0dc',         // Silver
 });

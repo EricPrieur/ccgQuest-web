@@ -9,6 +9,7 @@ export class Creature {
     currentHp = null,
     unpreventable = false,
     armor = 0,
+    shield = 0,
     poisonAttack = false,
     fireAttack = 0,
     iceAttack = 0,
@@ -43,7 +44,7 @@ export class Creature {
     this.unpreventable = unpreventable;
 
     this.armor = armor;
-    this.shield = 0;
+    this.shield = shield;
     this.heroism = 0;
     this.rage = 0;
     this.ignite = 0;

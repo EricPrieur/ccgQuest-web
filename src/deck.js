@@ -129,10 +129,16 @@ export class Deck {
 
   draw(count = 1, maxHandSize = 10) {
     const drawn = [];
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     for (let i = 0; i < count; i++) {
       if (this.hand.length >= maxHandSize) break;
       if (this.drawPile.length === 0) break;
       const card = this.drawPile.pop();
+      // Tag for draw animation: each card staggers 80 ms so they visually
+      // arrive one-by-one from the deck. The renderer in main.js checks
+      // _drawAnimStart and lerps the card from the deck origin to its hand
+      // position over DRAW_ANIM_DURATION.
+      card._drawAnimStart = now + drawn.length * 80;
       this.hand.push(card);
       drawn.push(card);
     }

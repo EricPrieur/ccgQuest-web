@@ -8,6 +8,7 @@ export class MapNode {
     connections = [], position = [0, 0], mapArea = '',
     isLocked = false, canRevisit = false, unlocks = [],
     hiddenName = '', hiddenDescription = '',
+    passthroughTo = '',
   }) {
     this.id = id;
     this.name = name;
@@ -22,6 +23,10 @@ export class MapNode {
     this.unlocks = unlocks;
     this.hiddenName = hiddenName;
     this.hiddenDescription = hiddenDescription;
+    // When the node is done and clicked, auto-move to this node id instead
+    // of retriggering the encounter (e.g. the kitchen shunts back to the
+    // sewer passage once you've resolved it).
+    this.passthroughTo = passthroughTo;
     // Keys of encounter choices that have been permanently exhausted on this node.
     // Used for repeat-visit encounters (Abandoned Camp: one rest, one search).
     this.exhaustedChoices = [];
@@ -106,12 +111,24 @@ export function createPrisonCellMap() {
     { id: 'lost_shrine', name: 'Lost Shrine', description: 'A forgotten shrine glowing with faint golden light.', encounterId: 'lost_shrine', connections: ['tight_opening'], position: [1320, 220], mapArea: 'sewers', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'Something glows faintly beyond the gap.' },
     { id: 'sewer_junction', name: 'Sewer Junction', description: 'A junction where passages branch.', encounterId: 'sewer_junction', connections: ['splash_point', 'deeper_sewer', 'less_deep_sewer'], position: [500, 420], mapArea: 'sewers', isLocked: true, unlocks: ['deeper_sewer', 'less_deep_sewer'], hiddenName: 'Deeper Sewer', hiddenDescription: 'The tunnel descends deeper into darkness.' },
     { id: 'deeper_sewer', name: 'Abandoned Camp', description: 'An old campsite left behind by adventurers.', encounterId: 'abandoned_camp', connections: ['sewer_junction'], position: [728, 420], mapArea: 'sewers', isLocked: true, canRevisit: true, hiddenName: 'Dark Passage', hiddenDescription: 'A passage descending into total darkness.' },
-    { id: 'less_deep_sewer', name: 'Upward Passage', description: 'The tunnel slopes upward. Light from above.', encounterId: 'upward_passage', connections: ['sewer_junction', 'kitchen'], position: [200, 420], mapArea: 'sewers', isLocked: true, canRevisit: true, hiddenName: 'Upward Passage', hiddenDescription: 'A passage that seems to lead upward.' },
-    { id: 'kitchen', name: 'Kitchen', description: 'A warm kitchen where a reptilian cook works.', encounterId: 'kitchen', connections: ['less_deep_sewer', 'prison_entrance'], position: [180, 350], mapArea: 'upper_prison', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'You sense warmth and the smell of cooking from above.' },
-    { id: 'prison_entrance', name: 'Prison Entrance', description: 'The main entrance to the prison complex.', encounterId: 'prison_entrance', connections: ['kitchen', 'leave_prison', 'prison_wing'], position: [580, 350], mapArea: 'upper_prison', isLocked: true, canRevisit: true, unlocks: ['leave_prison', 'prison_wing'], hiddenName: 'Passage Beyond', hiddenDescription: 'A corridor leading somewhere beyond the kitchen.' },
+    // Upward Passage: dialog only fires the first time. After that, the node
+    // is a silent move-through and `passthroughTo: 'kitchen'` means clicking
+    // it while already standing on it shortcuts straight up to the Kitchen.
+    { id: 'less_deep_sewer', name: 'Upward Passage', description: 'The tunnel slopes upward. Light from above.', encounterId: 'upward_passage', connections: ['sewer_junction', 'kitchen'], position: [200, 420], mapArea: 'sewers', isLocked: true, canRevisit: false, passthroughTo: 'kitchen', hiddenName: 'Upward Passage', hiddenDescription: 'A passage that seems to lead upward.' },
+    // Kitchen: one-shot encounter. Once the player has made their choice
+    // (attack / talk / sneak), the node is "done" but still clickable — it
+    // auto-routes the player back down to the sewer via `passthroughTo`.
+    { id: 'kitchen', name: 'Kitchen', description: 'A warm kitchen where a reptilian cook works.', encounterId: 'kitchen', connections: ['less_deep_sewer', 'prison_entrance'], position: [180, 350], mapArea: 'upper_prison', isLocked: true, canRevisit: false, passthroughTo: 'less_deep_sewer', hiddenName: '???', hiddenDescription: 'You sense warmth and the smell of cooking from above.' },
+    // Prison Entrance: one-shot (no revisit) — the warden is defeated once.
+    { id: 'prison_entrance', name: 'Prison Entrance', description: 'The main entrance to the prison complex.', encounterId: 'prison_entrance', connections: ['kitchen', 'leave_prison', 'prison_wing'], position: [580, 350], mapArea: 'upper_prison', isLocked: true, canRevisit: false, unlocks: ['leave_prison', 'prison_wing'], hiddenName: 'Passage Beyond', hiddenDescription: 'A corridor leading somewhere beyond the kitchen.' },
     { id: 'leave_prison', name: 'Leave the Prison', description: 'A heavy door leading outside. Daylight through the gap.', encounterId: 'leave_prison', connections: ['prison_entrance'], position: [550, 150], mapArea: 'upper_prison', isLocked: true, canRevisit: true, hiddenName: 'Heavy Door', hiddenDescription: 'A heavy door. It seems important.' },
-    { id: 'prison_wing', name: 'Prison Wing', description: 'A corridor lined with prison cells.', encounterId: 'prison_wing', connections: ['prison_entrance', 'corner_cell'], position: [1000, 450], mapArea: 'upper_prison', isLocked: true, canRevisit: true, hiddenName: 'Locked Door', hiddenDescription: 'A locked iron door. You hear sounds from beyond.' },
-    { id: 'corner_cell', name: 'Corner Cell', description: 'A cell at the far corner. Someone is fighting inside.', encounterId: 'corner_cell', connections: ['prison_wing'], position: [1100, 220], mapArea: 'upper_prison', isLocked: true, hiddenName: '???', hiddenDescription: 'Something is at the end of the corridor.' },
+    // Prison Wing: one-shot — the investigate choice unlocks corner_cell and
+    // the node is done. Clicking it again moves silently.
+    { id: 'prison_wing', name: 'Prison Wing', description: 'A corridor lined with prison cells.', encounterId: 'prison_wing', connections: ['prison_entrance', 'corner_cell'], position: [1000, 450], mapArea: 'upper_prison', isLocked: true, canRevisit: false, hiddenName: 'Locked Door', hiddenDescription: 'A locked iron door. You hear sounds from beyond.' },
+    // Corner Cell: one-shot — fight the Dire Rat, get Thorb card. Once done
+    // it's just a silent node; leave_prison reads `corner_cell.isDone` as the
+    // thorb-rescued flag.
+    { id: 'corner_cell', name: 'Corner Cell', description: 'A cell at the far corner. Someone is fighting inside.', encounterId: 'corner_cell', connections: ['prison_wing'], position: [1100, 220], mapArea: 'upper_prison', isLocked: true, canRevisit: false, hiddenName: '???', hiddenDescription: 'Something is at the end of the corridor.' },
   ];
 
   for (const data of nodes) {
@@ -129,8 +146,8 @@ export function createMountainPathMap() {
   };
 
   const nodes = [
-    { id: 'mountain_camp', name: 'Mountain Camp', description: 'A sheltered campsite on the mountainside.', encounterId: 'mountain_camp', connections: ['mountain_pass'], position: [512, 150], mapArea: 'mountain_path' },
-    { id: 'mountain_pass', name: 'Mountain Pass', description: 'A narrow pass through the peaks.', encounterId: 'mountain_pass', connections: ['mountain_camp', 'calm_stream'], position: [780, 200], mapArea: 'mountain_path', isLocked: true },
+    { id: 'mountain_camp', name: 'Mountain Camp', description: 'A sheltered campsite on the mountainside.', encounterId: 'mountain_camp', connections: ['mountain_pass'], position: [512, 150], mapArea: 'mountain_path', unlocks: ['mountain_pass'] },
+    { id: 'mountain_pass', name: 'Mountain Pass', description: 'A narrow pass through the peaks.', encounterId: 'mountain_pass', connections: ['mountain_camp', 'calm_stream'], position: [780, 200], mapArea: 'mountain_path', isLocked: true, hiddenName: '???', hiddenDescription: 'A path deeper into the mountains.' },
     { id: 'calm_stream', name: 'Calm Stream', description: 'A peaceful mountain stream.', encounterId: 'calm_stream', connections: ['mountain_pass', 'general_zhost'], position: [700, 310], mapArea: 'mountain_path', isLocked: true },
     { id: 'general_zhost', name: 'River Crossing', description: 'A wide river crossing.', encounterId: 'general_zhost', connections: ['calm_stream', 'calm_grove'], position: [780, 500], mapArea: 'mountain_path', isLocked: true, hiddenName: '???' },
     { id: 'calm_grove', name: 'Calm Grove', description: 'A sheltered grove of ancient trees.', encounterId: 'calm_grove', connections: ['general_zhost', 'to_the_plains'], position: [400, 450], mapArea: 'mountain_path', isLocked: true, canRevisit: true },

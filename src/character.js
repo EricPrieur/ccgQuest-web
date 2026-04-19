@@ -68,6 +68,9 @@ export class Character {
     this.unpreventableBuff = 0;
     this.level = 1;
     this.perks = [];
+    // Level-up deck-limit bonuses: { weapon: N, armor: N, ... }
+    // Each key can hold up to +3 total across all level-ups.
+    this.deckLimitBonuses = {};
   }
 
   get armor() {
@@ -310,10 +313,16 @@ export class Character {
 // Perk Creators
 // ============================================================
 
+// All perk descriptions follow the "Trigger: Effect." convention so the
+// in-game text line reads the same as the overlay badge. Triggers used:
+//   Combat Start, Combat End, Turn Start, Turn End.
+
+// ----- Common (repeatable) -----
+
 export function createToughPerk() {
   return new Perk({
     id: 'tough', name: 'Tough',
-    description: '+1 Shield at start of each combat.',
+    description: 'Combat Start: +1 Shield.',
     imageId: 'tough_perk', effectType: 'combat_start_shield', effectValue: 1,
   });
 }
@@ -321,53 +330,195 @@ export function createToughPerk() {
 export function createPreparedPerk() {
   return new Perk({
     id: 'prepared', name: 'Prepared',
-    description: '+1 Heroism at start of each combat.',
+    description: 'Combat Start: +1 Heroism.',
     imageId: 'prepared_perk', effectType: 'combat_start_heroism', effectValue: 1,
+  });
+}
+
+export function createFlashOfGeniusPerk() {
+  return new Perk({
+    id: 'flash_of_genius', name: 'Flash of Genius',
+    description: 'Combat Start: You may recharge a card to draw.',
+    imageId: 'flash_of_genius_perk', effectType: 'combat_start_flash', effectValue: 1,
   });
 }
 
 export function createGritPerk() {
   return new Perk({
     id: 'grit', name: 'Grit',
-    description: 'Heal 1 at end of each combat.',
+    description: 'Combat End: Heal 1.',
     imageId: 'grit_perk', effectType: 'combat_end_heal', effectValue: 1,
   });
 }
 
+export function createLuckyFindPerk() {
+  return new Perk({
+    id: 'lucky_find', name: 'Lucky Find',
+    // Triggers at loot time (combat-end gold award) — not combat start.
+    // Uses the "Loot" trigger (yellow badge).
+    description: 'Loot: When gaining gold, gain an extra 1d6.',
+    imageId: 'lucky_find_perk', effectType: 'loot_bonus_gold', effectValue: 1,
+  });
+}
+
+// ----- Uncommon (unique) -----
+
 export function createArsenalPerk() {
   return new Perk({
     id: 'arsenal', name: 'Arsenal',
-    description: 'Draw 1 at start of turn if no weapon in hand.',
+    description: 'Turn Start: If no weapon in hand, draw 1.',
     imageId: 'arsenal_perk', effectType: 'turn_start_no_weapon_draw', effectValue: 1,
+    unique: true,
   });
 }
 
 export function createTalentedPerk() {
   return new Perk({
     id: 'talented', name: 'Talented',
-    description: 'Draw 1 at start of turn if no ability in hand.',
+    description: 'Turn Start: If no ability in hand, draw 1.',
     imageId: 'talented_perk', effectType: 'turn_start_no_ability_draw', effectValue: 1,
+    unique: true,
   });
 }
 
 export function createFirstStrikePerk() {
   return new Perk({
     id: 'first_strike', name: 'First Strike',
-    description: 'Deal 1 unpreventable damage to random enemy at combat start.',
+    description: 'Combat Start: Deal 1 unpreventable damage to a random enemy.',
     imageId: 'first_strike_perk', effectType: 'combat_start_first_strike', effectValue: 1,
     unique: true,
   });
 }
 
-export function getPerkChoices(existingPerks = [], count = 2) {
-  const allPerks = [
-    createToughPerk(), createPreparedPerk(), createGritPerk(),
-    createArsenalPerk(), createTalentedPerk(), createFirstStrikePerk(),
-  ];
-  // Filter out unique perks already owned
+export function createSecondWindPerk() {
+  return new Perk({
+    id: 'second_wind', name: 'Second Wind',
+    description: 'Turn Start: If you took 4+ damage last turn, Heal 1.',
+    imageId: 'second_wind_perk', effectType: 'turn_start_second_wind', effectValue: 1,
+    unique: true,
+  });
+}
+
+export function createAmbushPerk() {
+  return new Perk({
+    id: 'ambush', name: 'Ambush',
+    description: 'Combat Start: Your first attack this combat is unpreventable.',
+    imageId: 'ambush_perk', effectType: 'combat_first_unpreventable', effectValue: 1,
+    unique: true,
+  });
+}
+
+export function createArmoredPerk() {
+  return new Perk({
+    id: 'armored', name: 'Armored',
+    description: 'Turn End: If no armor in hand, draw 1.',
+    imageId: 'armored_perk', effectType: 'turn_end_no_armor_draw', effectValue: 1,
+    unique: true,
+  });
+}
+
+export function createPowerSurgePerk() {
+  return new Perk({
+    id: 'power_surge', name: 'Power Surge',
+    // Uses the "Combat" trigger (not "Combat Start") — the effect fires
+    // when the player *first applies a debuff* during combat, not at the
+    // opening bell. Shorter label reflects that gate.
+    description: 'Combat: Your first debuff also hits a random enemy.',
+    imageId: 'power_surge_perk', effectType: 'combat_first_debuff_spread', effectValue: 1,
+    unique: true,
+  });
+}
+
+export function createBalancedPerk() {
+  return new Perk({
+    id: 'balanced', name: 'Balanced',
+    description: 'Turn Start: If 1 Weapon, 1 Armor and 1 Ability in hand, draw 1.',
+    imageId: 'balanced_perk', effectType: 'turn_start_balanced_draw', effectValue: 1,
+    unique: true,
+  });
+}
+
+// Druid-flavored unique: tops up a Goodberry in hand on combat start,
+// mirroring the Druid's starter ally-food card. Uses the Druid-themed
+// "Harvest" art.
+export function createHarvestPerk() {
+  return new Perk({
+    id: 'harvest', name: 'Harvest',
+    description: 'Combat Start: Add a Goodberry to your hand.',
+    imageId: 'harvest_perk', effectType: 'combat_start_goodberry', effectValue: 1,
+    unique: true,
+  });
+}
+
+// Per-class perk weights at each level-up tier. Mirrors PY's
+// `CLASS_PERK_WEIGHTS` dict. Tier 2 is currently empty (reserved for
+// future expansion) — falls back to tier 1 if empty for a class.
+export const CLASS_PERK_WEIGHTS = {
+  1: {
+    Warrior: { tough: 0.5,  prepared: 0.5,  flash_of_genius: 0.25, grit: 1.0,  arsenal: 0.5,  second_wind: 0.25, lucky_find: 0.5 },
+    Rogue:   { tough: 0.5,  prepared: 1.0,  flash_of_genius: 0.5,  grit: 0.25, arsenal: 0.5,  ambush: 0.25,      lucky_find: 0.5 },
+    Wizard:  { tough: 0.5,  prepared: 0.5,  flash_of_genius: 1.0,  grit: 0.25, talented: 0.5, power_surge: 0.25, lucky_find: 0.5 },
+    Ranger:  { tough: 0.5,  prepared: 1.0,  flash_of_genius: 0.25, grit: 0.5,  arsenal: 0.5,  first_strike: 0.25, lucky_find: 0.5 },
+    Paladin: { tough: 1.0,  prepared: 0.5,  flash_of_genius: 0.25, grit: 0.5,  arsenal: 0.5,  armored: 0.25,     lucky_find: 0.5 },
+    Druid:   { tough: 0.75, prepared: 0.75, flash_of_genius: 0.25, grit: 0.5,  balanced: 0.5, harvest: 0.25,     lucky_find: 0.5 },
+  },
+  2: {
+    // Tier 2 rolls currently empty; getPerkChoices falls back to tier 1.
+  },
+};
+
+// id → creator map. Lets getPerkChoices look up a creator by string id
+// (the weights tables only reference ids, not functions).
+export const PERK_REGISTRY = {
+  tough:           createToughPerk,
+  prepared:        createPreparedPerk,
+  flash_of_genius: createFlashOfGeniusPerk,
+  grit:            createGritPerk,
+  lucky_find:      createLuckyFindPerk,
+  arsenal:         createArsenalPerk,
+  talented:        createTalentedPerk,
+  second_wind:     createSecondWindPerk,
+  ambush:          createAmbushPerk,
+  first_strike:    createFirstStrikePerk,
+  armored:         createArmoredPerk,
+  power_surge:     createPowerSurgePerk,
+  balanced:        createBalancedPerk,
+  harvest:         createHarvestPerk,
+};
+
+// Pick `count` unique perks via weighted random without replacement from
+// the class + tier pool. Falls back to tier 1 when the requested tier is
+// empty for this class. Filters out unique perks the player already owns.
+export function getPerkChoices(existingPerks = [], count = 2, characterClass = '', tier = 1) {
+  let weights = (CLASS_PERK_WEIGHTS[tier] || {})[characterClass];
+  if (!weights && tier > 1) weights = (CLASS_PERK_WEIGHTS[1] || {})[characterClass];
+  if (!weights) {
+    // Unknown class — fall back to "all perks equal weight" so the flow
+    // never breaks (matches the old pre-class behavior).
+    weights = {};
+    for (const id of Object.keys(PERK_REGISTRY)) weights[id] = 1.0;
+  }
   const ownedUniqueIds = new Set(existingPerks.filter(p => p.unique).map(p => p.id));
-  const available = allPerks.filter(p => !p.unique || !ownedUniqueIds.has(p.id));
-  // Shuffle and pick
-  const shuffled = available.sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, Math.min(count, shuffled.length));
+  let ids = Object.keys(weights).filter(id => {
+    const creator = PERK_REGISTRY[id];
+    if (!creator) return false;
+    const sample = creator();
+    return !sample.unique || !ownedUniqueIds.has(id);
+  });
+  let w = ids.map(id => weights[id]);
+  const chosen = [];
+  for (let k = 0; k < Math.min(count, ids.length); k++) {
+    const total = w.reduce((s, v) => s + v, 0);
+    if (total <= 0) break;
+    let roll = Math.random() * total;
+    let picked = 0;
+    for (let j = 0; j < ids.length; j++) {
+      roll -= w[j];
+      if (roll <= 0) { picked = j; break; }
+    }
+    chosen.push(PERK_REGISTRY[ids[picked]]());
+    ids.splice(picked, 1);
+    w.splice(picked, 1);
+  }
+  return chosen;
 }

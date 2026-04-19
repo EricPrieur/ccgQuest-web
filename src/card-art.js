@@ -307,6 +307,26 @@ export const CARD_ART_MAP = {
   huffer: 'HufferCompanion.jpg',
   treant: 'Treant.jpg',
   magma_mephit: 'MagmaMephit.jpg',
+
+  // === Perks (rendered as pseudo-cards in the codex / PERK_SELECT) ===
+  // Keyed by the perk's id so drawCard(perkPseudoCard) picks the right art.
+  tough:           'ToughPerk.jpg',
+  prepared:        'PreparedPerk.jpg',
+  flash_of_genius: 'FlashOfGeniusPerk.jpg',
+  grit:            'GritPerk.jpg',
+  arsenal:         'ArsenalPerk.jpg',
+  talented:        'TalentedPerk.jpg',
+  second_wind:     'SecondWindPerk.jpg',
+  ambush:          'AmbushPerk.jpg',
+  first_strike:    'FirstStrikePerk.jpg',
+  armored:         'ArmoredPerk.jpg',
+  power_surge:     'PowerSurgePerk.jpg',
+  balanced:        'BalanceDruidPerk.jpg',
+  lucky_find:      'LuckyFindPerk.png',
+  harvest:         'HarvestDruidSpec.png',
+
+  // === Enemy Encounter Portraits ===
+  kobold_patrol:   'KoboldPatrolEncounter.jpg',
 };
 
 export const POWER_ART_MAP = {
@@ -328,6 +348,7 @@ export const POWER_ART_MAP = {
   obsidian_body: 'ObsidianSlime.jpg',
   lava_floor: 'MagmaFloor.jpg',
   vanish: 'Vanish.jpg',
+  kobold_backup: 'KoboldGuard.jpg',
 };
 
 // Lazy-loading image cache

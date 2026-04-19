@@ -17,10 +17,11 @@ function slotKey(slot) {
   return `${SAVE_KEY}_${slot}`;
 }
 
-export function saveGame(state) {
+export function saveGame(state, saveName = '') {
   const data = {
     version: 1,
     timestamp: Date.now(),
+    saveName: saveName,
     selectedClass: state.selectedClass,
     gold: state.gold,
     // Player deck (master deck card IDs)
@@ -35,8 +36,14 @@ export function saveGame(state) {
     // Player progression
     level: state.player.level || 1,
     perks: (state.player.perks || []).map(p => p.id),
+    deckLimitBonuses: state.player.deckLimitBonuses || {},
     // Backpack
     backpack: (state.backpack || []).map(c => c.id),
+    // Story flags that drive later encounters (kitchen choice gates the
+    // prison barrel snatch chance; barrel-looted flag skips the post-combat
+    // rummage phase).
+    kitchenChoiceMade: state.kitchenChoiceMade || null,
+    prisonBarrelLooted: !!state.prisonBarrelLooted,
     // Node states
     nodeStates: {},
   };
@@ -54,8 +61,8 @@ export function saveGame(state) {
   return data;
 }
 
-export function saveToSlot(state, slot = 'manual_1') {
-  const data = saveGame(state);
+export function saveToSlot(state, slot = 'manual_1', saveName = '') {
+  const data = saveGame(state, saveName);
   try {
     localStorage.setItem(slotKey(slot), JSON.stringify(data));
     return true;
@@ -116,6 +123,7 @@ export function getSaveInfo(slot = 'manual_1') {
     level: data.level || 1,
     timestamp: data.timestamp,
     date: new Date(data.timestamp).toLocaleString(),
+    saveName: data.saveName || '',
   };
 }
 
