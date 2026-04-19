@@ -241,6 +241,7 @@ let encounterTextOverflow = 0; // how much the text overflows the box (set durin
 // Debug mode (toggle with backtick `)
 let debugMode = false;
 let runFast = false; // doubles map movement speed
+let optionsReturnState = null; // state to return to from options screen
 let previousState = null; // state before help/ingame menu
 let saveLoadReturnState = null; // state to return to from save/load screens
 let helpScrollY = 0;
@@ -1020,6 +1021,9 @@ function handleClick(x, y) {
     case GameState.INGAME_MENU:
       handleIngameMenuClick(x, y);
       break;
+    case GameState.OPTIONS_SCREEN:
+      handleOptionsClick(x, y);
+      break;
     case GameState.TITLE_CARD:
       dismissTitleCard();
       break;
@@ -1201,6 +1205,8 @@ function handleKeyDown(key, event) {
     } else if (state === GameState.INGAME_MENU) {
       // Close the menu (resume)
       state = previousState || GameState.MAP;
+    } else if (state === GameState.OPTIONS_SCREEN) {
+      state = optionsReturnState || GameState.MENU;
     } else if (state === GameState.SAVE_GAME || state === GameState.LOAD_GAME) {
       cancelSaveEditing(); // drop any in-progress name edit
       state = saveLoadReturnState || (player ? GameState.MAP : GameState.MENU);
@@ -1378,23 +1384,13 @@ function drawMenu() {
     menuButtons.pop();
   }
 
-  // "Run Fast" toggle (bottom-left)
-  const rfLabel = runFast ? '✓ Run Fast' : 'Run Fast';
-  const rfW = 130, rfH = 36;
-  const rfX = 20, rfY = SCREEN_HEIGHT - rfH - 20;
-  const rfHov = hitTest(mouseX, mouseY, { x: rfX, y: rfY, w: rfW, h: rfH });
-  ctx.fillStyle = rfHov ? 'rgba(80,80,100,0.85)' : 'rgba(40,40,55,0.8)';
-  ctx.fillRect(rfX, rfY, rfW, rfH);
-  ctx.strokeStyle = runFast ? Colors.GREEN : '#666';
-  ctx.lineWidth = runFast ? 2 : 1;
-  ctx.strokeRect(rfX, rfY, rfW, rfH);
-  ctx.fillStyle = runFast ? Colors.GREEN : '#ccc';
-  ctx.font = 'bold 14px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(rfLabel, rfX + rfW / 2, rfY + rfH / 2);
-  ctx.textBaseline = 'alphabetic';
-  menuButtons.push({ x: rfX, y: rfY, w: rfW, h: rfH, action: () => { runFast = !runFast; } });
+  // Options button (bottom-left)
+  const optW = 200, optH = 50;
+  const optX = 20, optY = SCREEN_HEIGHT - optH - 20;
+  drawStyledButton(optX, optY, optW, optH, 'Options', () => {
+    optionsReturnState = GameState.MENU;
+    state = GameState.OPTIONS_SCREEN;
+  }, 'large', 18);
 
   // Help icon button (bottom-right, same icon as combat H button)
   const helpRect = { x: SCREEN_WIDTH - 52, y: SCREEN_HEIGHT - 52, w: 36, h: 36 };
@@ -12383,6 +12379,9 @@ function draw() {
     case GameState.INGAME_MENU:
       drawIngameMenu();
       break;
+    case GameState.OPTIONS_SCREEN:
+      drawOptionsScreen();
+      break;
     case GameState.TITLE_CARD:
       drawTitleCard();
       break;
@@ -12586,35 +12585,106 @@ function drawHelpScreen() {
 }
 
 // ============================================================
+// OPTIONS SCREEN
+// ============================================================
+
+function handleOptionsClick(x, y) {
+  const boxW = 440, boxH = 300;
+  const boxX = (SCREEN_WIDTH - boxW) / 2, boxY = (SCREEN_HEIGHT - boxH) / 2;
+  const btnW = 280, btnH = 50;
+  const btnX = boxX + (boxW - btnW) / 2;
+
+  // Run Fast toggle
+  const rfY = boxY + 100;
+  if (hitTest(x, y, { x: btnX, y: rfY, w: btnW, h: btnH })) {
+    runFast = !runFast;
+    return;
+  }
+  // Back button
+  const backY = boxY + boxH - btnH - 20;
+  if (hitTest(x, y, { x: btnX, y: backY, w: btnW, h: btnH })) {
+    state = optionsReturnState || GameState.MENU;
+    return;
+  }
+}
+
+function drawOptionsScreen() {
+  // Draw underlying state for context
+  if (optionsReturnState === GameState.INGAME_MENU) {
+    drawIngameMenu();
+  } else if (optionsReturnState === GameState.MENU) {
+    drawMenu();
+  }
+  // Darken
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  // Clear any button rects from underlying draws
+  menuButtons.length = 0;
+
+  const boxW = 440, boxH = 300;
+  const boxX = (SCREEN_WIDTH - boxW) / 2, boxY = (SCREEN_HEIGHT - boxH) / 2;
+  ctx.fillStyle = 'rgba(45, 45, 55, 0.95)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = Colors.GOLD;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  // Title
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 34px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Options', SCREEN_WIDTH / 2, boxY + 50);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  const btnW = 280, btnH = 50;
+  const btnX = boxX + (boxW - btnW) / 2;
+
+  // Run Fast toggle
+  const rfY = boxY + 100;
+  const rfLabel = runFast ? '✓ Run Fast' : 'Run Fast';
+  drawStyledButton(btnX, rfY, btnW, btnH, rfLabel, null, 'large', 20);
+  menuButtons.pop();
+  if (runFast) {
+    ctx.strokeStyle = Colors.GREEN;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(btnX + 1, rfY + 1, btnW - 2, btnH - 2);
+  }
+
+  // Back button
+  const backY = boxY + boxH - btnH - 20;
+  drawStyledButton(btnX, backY, btnW, btnH, '< Back', null, 'large', 20);
+  menuButtons.pop();
+
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
 // IN-GAME MENU
 // ============================================================
 
-let _ingameMenuOptionRects = []; // option toggles below the main buttons
-
 function getIngameMenuBtnRects() {
-  const btnW = 280, btnH = 56, gap = 16;
+  const btnW = 280, btnH = 56, gap = 12;
   const items = [
     { label: 'Resume', action: 'resume' },
     { label: 'Save Game', action: 'save', enabled: previousState === GameState.MAP },
     { label: 'Load Game', action: 'load' },
+    { label: 'Options', action: 'options' },
     { label: 'Main Menu', action: 'quit' },
   ];
   const totalH = items.length * (btnH + gap) - gap;
   const startX = (SCREEN_WIDTH - btnW) / 2;
-  const startY = (SCREEN_HEIGHT - totalH) / 2 + 30;
+  const startY = (SCREEN_HEIGHT - totalH) / 2 + 20;
   return items.map((item, i) => ({
     x: startX, y: startY + i * (btnH + gap), w: btnW, h: btnH, ...item,
   }));
 }
 
 function handleIngameMenuClick(x, y) {
-  // Option toggles (below the main buttons)
-  for (const opt of _ingameMenuOptionRects) {
-    if (hitTest(x, y, opt)) {
-      if (opt.action === 'toggle_run_fast') runFast = !runFast;
-      return;
-    }
-  }
   for (const btn of getIngameMenuBtnRects()) {
     if (!hitTest(x, y, btn)) continue;
     if (btn.action === 'resume') {
@@ -12628,6 +12698,9 @@ function handleIngameMenuClick(x, y) {
       loadSelectedIndex = -1;
       refreshLoadEntries();
       state = GameState.LOAD_GAME;
+    } else if (btn.action === 'options') {
+      optionsReturnState = state; // remember we came from INGAME_MENU
+      state = GameState.OPTIONS_SCREEN;
     } else if (btn.action === 'help') {
       helpScrollY = 0;
       state = GameState.HELP_SCREEN;
@@ -12664,7 +12737,7 @@ function drawIngameMenu() {
   ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
   // Menu box (grey with gold border, matches load screen)
-  const boxW = 440, boxH = 420;
+  const boxW = 440, boxH = 460;
   const boxX = (SCREEN_WIDTH - boxW) / 2, boxY = (SCREEN_HEIGHT - boxH) / 2;
   ctx.fillStyle = 'rgba(45, 45, 55, 0.95)';
   ctx.fillRect(boxX, boxY, boxW, boxH);
@@ -12700,34 +12773,6 @@ function drawIngameMenu() {
     // Click is handled by handleIngameMenuClick using getIngameMenuBtnRects directly
     menuButtons.pop();
   }
-
-  // --- Options section below the buttons ---
-  const optY = boxY + boxH - 70;
-  ctx.strokeStyle = '#666';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(boxX + 30, optY - 10);
-  ctx.lineTo(boxX + boxW - 30, optY - 10);
-  ctx.stroke();
-
-  // Run Fast toggle
-  const rfLabel = runFast ? '✓ Run Fast' : '  Run Fast';
-  const rfW = 160, rfH = 32;
-  const rfX = boxX + (boxW - rfW) / 2, rfY = optY;
-  const rfHov = hitTest(mouseX, mouseY, { x: rfX, y: rfY, w: rfW, h: rfH });
-  ctx.fillStyle = rfHov ? 'rgba(80,80,100,0.85)' : 'rgba(40,40,55,0.8)';
-  ctx.fillRect(rfX, rfY, rfW, rfH);
-  ctx.strokeStyle = runFast ? Colors.GREEN : '#666';
-  ctx.lineWidth = runFast ? 2 : 1;
-  ctx.strokeRect(rfX, rfY, rfW, rfH);
-  ctx.fillStyle = runFast ? Colors.GREEN : '#ccc';
-  ctx.font = 'bold 14px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(rfLabel, rfX + rfW / 2, rfY + rfH / 2);
-  ctx.textBaseline = 'alphabetic';
-  // Store rect for click handling (reuses the ingame menu click handler)
-  _ingameMenuOptionRects = [{ x: rfX, y: rfY, w: rfW, h: rfH, action: 'toggle_run_fast' }];
 
   ctx.textAlign = 'left';
 }
