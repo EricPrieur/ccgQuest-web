@@ -389,3 +389,34 @@ export function getPowerArt(powerId) {
   img.src = `${BASE}assets/Cards/${filename}`;
   return null;
 }
+
+/**
+ * Eagerly preload ALL card art + power art into the image cache.
+ * Returns a Promise that resolves when every image has either loaded
+ * or failed (so the caller can await it during the loading screen).
+ * After this runs, getCardArt / getPowerArt never return null for a
+ * known id — no more purple-flash on first draw.
+ */
+export function preloadAllArt() {
+  const promises = [];
+  for (const [id, filename] of Object.entries(CARD_ART_MAP)) {
+    if (imageCache[id]) continue;
+    promises.push(new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => { imageCache[id] = img; resolve(); };
+      img.onerror = () => resolve();
+      img.src = `${BASE}assets/Cards/${filename}`;
+    }));
+  }
+  for (const [id, filename] of Object.entries(POWER_ART_MAP)) {
+    const key = `power_${id}`;
+    if (imageCache[key]) continue;
+    promises.push(new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => { imageCache[key] = img; resolve(); };
+      img.onerror = () => resolve();
+      img.src = `${BASE}assets/Cards/${filename}`;
+    }));
+  }
+  return Promise.all(promises);
+}

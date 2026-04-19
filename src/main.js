@@ -62,7 +62,7 @@ import {
 } from './cards.js';
 import { createPrisonCellMap, createMountainPathMap, createPlainsMap, createCaveMap, createRuinsBasinMap, createNorthQualibafMap, createFilibafForestMap, createTharnagMap, createVolcanoMap, createObsidianWastesMap, createTharnagInteriorMap, createEntryCorridorMap, createGateAreaMap, createHallOfAncestorsMap, createMonumentAlleyMap, createTombOfAncestorMap, createGrandStairsMap, createDwarvenThroneRoomMap, createMapRoomMap, createDeeperTunnelsMap, createArtisanDistrictMap } from './map.js';
 import { ENCOUNTER_REGISTRY, EncounterPhase } from './encounter.js';
-import { getCardArt, POWER_ART_MAP } from './card-art.js';
+import { getCardArt, POWER_ART_MAP, preloadAllArt } from './card-art.js';
 import {
   Power, getClassPower,
   createCleave, createAimedShot, createElementalInfusion,
@@ -240,6 +240,7 @@ let encounterTextOverflow = 0; // how much the text overflows the box (set durin
 
 // Debug mode (toggle with backtick `)
 let debugMode = false;
+let runFast = false; // doubles map movement speed
 let previousState = null; // state before help/ingame menu
 let saveLoadReturnState = null; // state to return to from save/load screens
 let helpScrollY = 0;
@@ -628,6 +629,12 @@ async function loadAssets() {
     loadImage('lucky_find_perk',      `${BASE}assets/Cards/LuckyFindPerk.png`),
     loadImage('harvest_perk',         `${BASE}assets/Cards/HarvestDruidSpec.png`),
   ]);
+  // Eagerly preload ALL card + power art so getCardArt never returns null
+  // for a known id. Without this, the first draw of each card shows a
+  // colored fallback rectangle for ~200ms while the image lazy-loads.
+  // This runs in parallel after the critical UI assets above are ready,
+  // so the menu appears immediately and card art streams in behind it.
+  preloadAllArt(); // fire-and-forget — non-blocking
   assetsLoaded = true;
 }
 
@@ -1371,6 +1378,24 @@ function drawMenu() {
     menuButtons.pop();
   }
 
+  // "Run Fast" toggle (bottom-left)
+  const rfLabel = runFast ? '✓ Run Fast' : 'Run Fast';
+  const rfW = 130, rfH = 36;
+  const rfX = 20, rfY = SCREEN_HEIGHT - rfH - 20;
+  const rfHov = hitTest(mouseX, mouseY, { x: rfX, y: rfY, w: rfW, h: rfH });
+  ctx.fillStyle = rfHov ? 'rgba(80,80,100,0.85)' : 'rgba(40,40,55,0.8)';
+  ctx.fillRect(rfX, rfY, rfW, rfH);
+  ctx.strokeStyle = runFast ? Colors.GREEN : '#666';
+  ctx.lineWidth = runFast ? 2 : 1;
+  ctx.strokeRect(rfX, rfY, rfW, rfH);
+  ctx.fillStyle = runFast ? Colors.GREEN : '#ccc';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(rfLabel, rfX + rfW / 2, rfY + rfH / 2);
+  ctx.textBaseline = 'alphabetic';
+  menuButtons.push({ x: rfX, y: rfY, w: rfW, h: rfH, action: () => { runFast = !runFast; } });
+
   // Help icon button (bottom-right, same icon as combat H button)
   const helpRect = { x: SCREEN_WIDTH - 52, y: SCREEN_HEIGHT - 52, w: 36, h: 36 };
   drawIconButton(helpRect, 'icon_help', () => {
@@ -1963,7 +1988,8 @@ function moveToMapNode(node) {
   const [cx, cy] = current.position;
   const [nx, ny] = node.position;
   const dist = Math.sqrt((nx - cx) ** 2 + (ny - cy) ** 2);
-  const duration = Math.max(300, Math.min(1200, dist * 1.8));
+  const speedMul = runFast ? 0.5 : 1;
+  const duration = Math.max(150, Math.min(1200, dist * 1.8 * speedMul));
 
   if (node.isDone && !node.canRevisit) {
     // Silent move (done node, possibly passthrough).
@@ -4635,7 +4661,10 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size =
     }
     ctx.drawImage(art, sx, sy, sw, sh, x, y, w, h);
   } else {
-    ctx.fillStyle = borderColor;
+    // Neutral dark fallback while art loads (avoids a bright purple/red
+    // flash on first draw — the preloader fills the cache quickly, but
+    // on cold loads or slow connections this keeps the card subdued).
+    ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(x, y, w, h);
   }
 
@@ -10925,6 +10954,8 @@ function handleInventoryClick(x, y) {
       } else if (b.kind === 'minus') {
         player.deckLimitBonuses[b.catId] = Math.max(0, (player.deckLimitBonuses[b.catId] || 0) - 1);
         _restBonusCat = null;
+      } else if (b.kind === 'debug_rest') {
+        restMode = true;
       }
       return;
     }
@@ -11391,6 +11422,29 @@ function drawInventoryCharacter(rect) {
   ctx.font = 'bold 12px Georgia, serif';
   ctx.textAlign = 'left';
   ctx.fillText('Deck Limits', limitsBaseX + 2, nextY);
+
+  // Debug-only: "Rest Mode" button next to the header (enters deck
+  // rebalancing mode so the developer can move cards freely).
+  if (debugMode && !restMode) {
+    const dbW = 70, dbH = 14;
+    const dbX = limitsBaseX + limitsW - dbW;
+    const dbY = nextY - 10;
+    const dbHov = hitTest(mouseX, mouseY, { x: dbX, y: dbY, w: dbW, h: dbH });
+    ctx.fillStyle = dbHov ? 'rgba(130,80,50,0.9)' : 'rgba(80,50,30,0.8)';
+    ctx.fillRect(dbX, dbY, dbW, dbH);
+    ctx.strokeStyle = '#e0a060';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(dbX, dbY, dbW, dbH);
+    ctx.fillStyle = '#ffe0b0';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Rest Mode', dbX + dbW / 2, dbY + dbH / 2);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    _deckLimitBtnRects.push({ x: dbX, y: dbY, w: dbW, h: dbH, kind: 'debug_rest' });
+  }
+
   nextY += 16;
 
   // Count cards in deck per category
@@ -12535,6 +12589,8 @@ function drawHelpScreen() {
 // IN-GAME MENU
 // ============================================================
 
+let _ingameMenuOptionRects = []; // option toggles below the main buttons
+
 function getIngameMenuBtnRects() {
   const btnW = 280, btnH = 56, gap = 16;
   const items = [
@@ -12543,10 +12599,6 @@ function getIngameMenuBtnRects() {
     { label: 'Load Game', action: 'load' },
     { label: 'Main Menu', action: 'quit' },
   ];
-  // Debug-only: Rest Mode button (enters deck rebalancing from anywhere)
-  if (debugMode && player) {
-    items.push({ label: 'Rest Mode (Debug)', action: 'debug_rest' });
-  }
   const totalH = items.length * (btnH + gap) - gap;
   const startX = (SCREEN_WIDTH - btnW) / 2;
   const startY = (SCREEN_HEIGHT - totalH) / 2 + 30;
@@ -12556,6 +12608,13 @@ function getIngameMenuBtnRects() {
 }
 
 function handleIngameMenuClick(x, y) {
+  // Option toggles (below the main buttons)
+  for (const opt of _ingameMenuOptionRects) {
+    if (hitTest(x, y, opt)) {
+      if (opt.action === 'toggle_run_fast') runFast = !runFast;
+      return;
+    }
+  }
   for (const btn of getIngameMenuBtnRects()) {
     if (!hitTest(x, y, btn)) continue;
     if (btn.action === 'resume') {
@@ -12577,9 +12636,6 @@ function handleIngameMenuClick(x, y) {
       player = null;
       currentMap = null;
       currentEncounter = null;
-    } else if (btn.action === 'debug_rest') {
-      restMode = true;
-      state = GameState.INVENTORY;
     }
     return;
   }
@@ -12644,6 +12700,35 @@ function drawIngameMenu() {
     // Click is handled by handleIngameMenuClick using getIngameMenuBtnRects directly
     menuButtons.pop();
   }
+
+  // --- Options section below the buttons ---
+  const optY = boxY + boxH - 70;
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(boxX + 30, optY - 10);
+  ctx.lineTo(boxX + boxW - 30, optY - 10);
+  ctx.stroke();
+
+  // Run Fast toggle
+  const rfLabel = runFast ? '✓ Run Fast' : '  Run Fast';
+  const rfW = 160, rfH = 32;
+  const rfX = boxX + (boxW - rfW) / 2, rfY = optY;
+  const rfHov = hitTest(mouseX, mouseY, { x: rfX, y: rfY, w: rfW, h: rfH });
+  ctx.fillStyle = rfHov ? 'rgba(80,80,100,0.85)' : 'rgba(40,40,55,0.8)';
+  ctx.fillRect(rfX, rfY, rfW, rfH);
+  ctx.strokeStyle = runFast ? Colors.GREEN : '#666';
+  ctx.lineWidth = runFast ? 2 : 1;
+  ctx.strokeRect(rfX, rfY, rfW, rfH);
+  ctx.fillStyle = runFast ? Colors.GREEN : '#ccc';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(rfLabel, rfX + rfW / 2, rfY + rfH / 2);
+  ctx.textBaseline = 'alphabetic';
+  // Store rect for click handling (reuses the ingame menu click handler)
+  _ingameMenuOptionRects = [{ x: rfX, y: rfY, w: rfW, h: rfH, action: 'toggle_run_fast' }];
+
   ctx.textAlign = 'left';
 }
 
