@@ -1,4 +1,5 @@
 import { StatusEffect } from './constants.js';
+import { Creature } from './creature.js';
 
 /**
  * Buff applied to a character.
@@ -141,6 +142,7 @@ export class Character {
   // --- Damage ---
 
   takeDamageFromDeck(amount) {
+    if (this._invulnerable) return 0;
     if (!this.deck) return 0;
     if (amount <= 0) return 0;
     // Outside combat, ensure there's a draw pile for non-combat damage events.
@@ -151,13 +153,22 @@ export class Character {
     for (let i = 0; i < amount; i++) {
       // Draw pile first, then recharge pile (via damageFromDrawPile).
       const card = this.deck.damageFromDrawPile();
-      if (card) { taken++; continue; }
+      if (card) {
+        taken++;
+        // damageFromDrawPile pushes the card to discardPile directly, so the
+        // generic discardCard hook didn't fire — re-check the on-discard
+        // passive here.
+        if (card.effects && card.effects.some(e => e && e.effectType === 'on_discard_draw')) {
+          this.deck.draw(1, this.maxHandSize || 10);
+        }
+        continue;
+      }
       // No more cards in deck — pull from hand instead (random card).
       if (this.deck.hand.length > 0) {
         const idx = Math.floor(Math.random() * this.deck.hand.length);
         const handCard = this.deck.hand.splice(idx, 1)[0];
         handCard.exhausted = false;
-        this.deck.discardPile.push(handCard);
+        this.deck.discardCard(handCard);
         taken++;
         continue;
       }
@@ -168,6 +179,7 @@ export class Character {
   }
 
   takeDamageWithDefense(amount) {
+    if (this._invulnerable) return [amount, 0];
     // Shield absorbs first
     let remaining = amount;
     if (this.shield > 0) {
@@ -178,9 +190,11 @@ export class Character {
     // Armor absorbs next
     const blocked = Math.min(this.armor, remaining);
     remaining -= blocked;
-    // Block absorbs next
+    // Block absorbs next. Block is a one-attack absorber: whatever block the
+    // target had at the start of this hit is consumed (or wasted) on this
+    // attack only — leftover doesn't carry over to the next swing.
     const blockAbsorb = Math.min(this.currentBlock, remaining);
-    this.currentBlock -= blockAbsorb;
+    this.currentBlock = 0;
     remaining -= blockAbsorb;
     const totalBlocked = blocked + blockAbsorb + (amount - remaining - (amount - blocked - blockAbsorb - remaining));
     const taken = this.takeDamageFromDeck(remaining);
@@ -208,7 +222,13 @@ export class Character {
 
   // --- Creatures ---
 
+  // Hard cap on simultaneous allies. Mirrors PY (player + enemy max_creatures
+  // = 12 in this build) — anything past the cap is silently refused so
+  // callers can branch on the return value to short-circuit summon effects.
+  static MAX_CREATURES = 12;
+
   addCreature(creature) {
+    if (this.creatures.length >= Character.MAX_CREATURES) return false;
     creature.owner = this;
     // Assign the lowest free slot so creatures fill 2 rows of 6 in display order
     const used = new Set(this.creatures.map(c => c.slot).filter(s => s >= 0));
@@ -219,6 +239,10 @@ export class Character {
     return true;
   }
 
+  canSummonMore() {
+    return this.creatures.length < Character.MAX_CREATURES;
+  }
+
   readyCreatures() {
     for (const c of this.creatures) {
       c.ready();
@@ -227,6 +251,16 @@ export class Character {
 
   removeDeadCreatures() {
     const dead = this.creatures.filter(c => !c.isAlive);
+    // Companion cards (e.g. Thorb) are linked to a sourceCard sitting in the
+    // play pile while alive. When the companion dies, route its source card
+    // to the discard pile so the player visibly loses it (PY parity).
+    if (this.deck) {
+      for (const c of dead) {
+        if (c.isCompanion && c.sourceCard) {
+          this.deck.playPileToDiscard(c.sourceCard);
+        }
+      }
+    }
     this.creatures = this.creatures.filter(c => c.isAlive);
     return dead;
   }
@@ -260,33 +294,67 @@ export class Character {
         switch (buff.effectType) {
           case 'gain_heroism':
             this.heroism += buff.effectValue;
-            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Heroism`, color: '#ffd700', token: 'Heroism', tokenAmount: buff.effectValue, tokenColor: '#ffd700' });
+            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Heroism`, color: '#ffd700', token: 'Heroism', tokenAmount: buff.effectValue, tokenColor: '#ffd700', buff });
             break;
           case 'gain_shield':
             this.shield += buff.effectValue;
-            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Shield`, color: '#64b4dc', token: 'Shield', tokenAmount: buff.effectValue, tokenColor: '#64b4dc' });
+            logs.push({ text: `  ${buff.name}: +${buff.effectValue} Shield`, color: '#64b4dc', token: 'Shield', tokenAmount: buff.effectValue, tokenColor: '#64b4dc', buff });
             break;
           case 'draw_card':
             if (this.deck) {
               const drawn = this.deck.draw(buff.effectValue, 10);
-              for (const d of drawn) logs.push({ text: `  ${buff.name}: Draw ${d.name}`, color: '#3c3cc8' });
+              for (const d of drawn) logs.push({ text: `  ${buff.name}: Draw ${d.name}`, color: '#3c3cc8', card: d, buff });
             }
             break;
           case 'heal':
             if (this.deck && this.deck.discardPile.length > 0) {
               const card = this.deck.discardPile.pop();
               this.deck.addToRechargePile(card);
-              logs.push({ text: `  ${buff.name}: Healed 1 (${card.name})`, color: '#3cc83c', card, healed: 1 });
+              logs.push({ text: `  ${buff.name}: Healed 1 (${card.name})`, color: '#3cc83c', card, healed: 1, buff });
             }
             break;
+          case 'apply_ice': {
+            // Blizzard buff (Wolf Pack fight): every turn, the player
+            // and every alive ally takes one Ice stack. Mirrors PY's
+            // start_of_turn handler.
+            this.applyStatus('ICE', buff.effectValue);
+            for (const ally of (this.creatures || [])) {
+              if (!ally.isAlive) continue;
+              ally.iceStacks = (ally.iceStacks || 0) + buff.effectValue;
+            }
+            logs.push({
+              text: `  ${buff.name}: +${buff.effectValue} Ice on you and all allies`,
+              color: '#7ec8e3',
+              token: 'Ice', tokenAmount: buff.effectValue, tokenColor: '#7ec8e3',
+              buff,
+            });
+            break;
+          }
+          case 'summon_elf_warrior': {
+            // Elf Reinforcements buff (General Zhost army fight): summon 1
+            // Elf Warrior at start of turn, only when fewer than 6 living
+            // allies. Default summoning-sickness rule applies — the elf
+            // can't attack until next turn.
+            const aliveAllies = (this.creatures || []).filter(c => c.isAlive).length;
+            if (aliveAllies < 6) {
+              const elf = new Creature({ name: 'Elf Warrior', attack: 2, maxHp: 2 });
+              if (this.addCreature(elf)) {
+                logs.push({ text: `  ${buff.name}: Elf Warrior reinforces!`, color: '#3cc83c', creature: elf, buff });
+              }
+            }
+            break;
+          }
         }
         if (buff.turnsRemaining > 0) {
           buff.turnsRemaining--;
+          if (buff.turnsRemaining === 0) buff._expired = true;
         }
       }
     }
-    // Remove expired turn-based buffs
-    this.combatBuffs = this.combatBuffs.filter(b => b.turnsRemaining !== 0 || b.trigger !== 'start_of_turn');
+    // Remove only buffs whose turn count just ran out. Buffs with
+    // turnsRemaining === 0 from the start (no per-turn limit) stay until
+    // endCombatBuffCleanup() drops them at end of combat.
+    this.combatBuffs = this.combatBuffs.filter(b => !b._expired);
     return logs;
   }
 

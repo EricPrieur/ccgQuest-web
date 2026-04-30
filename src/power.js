@@ -192,6 +192,49 @@ export function createKoboldBackup() {
   });
 }
 
+// Bone Amalgam — start of each enemy turn either summons a fresh 3/3
+// Bone Amalgam ally, or buffs every existing Bone Amalgam ally by
+// +1 attack and +1 max HP (also healing the +1).
+export function createAmalgam() {
+  return new Power({
+    id: 'amalgam',
+    name: 'Create Amalgam',
+    costDescription: 'Passive',
+    effectDescription: 'Start of Turn: Summon a 3/3 Bone Amalgam, or +1 Atk/HP to existing.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Create\nAmalgam',
+  });
+}
+
+// Wolf Pack — invulnerable boss summon: each turn, top up the wolf
+// roster. Mirrors PY create_wolf_pack_power.
+export function createWolfPack() {
+  return new Power({
+    id: 'wolf_pack',
+    name: 'Wolf Pack',
+    costDescription: 'Passive',
+    effectDescription: 'Start of Turn: Summon Wolves.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Summon\nWolves',
+  });
+}
+
+// General Zhost's Army — replenishes guards/slingers (and sometimes a
+// Dragonshield) every turn so the kill-20 fight stays loud.
+export function createKoboldArmy() {
+  return new Power({
+    id: 'kobold_army',
+    name: 'Kobold Army',
+    costDescription: 'Passive',
+    effectDescription: 'Start of Turn: Summon a Kobold Army.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Summon Army',
+  });
+}
+
 export function getClassPower(className) {
   const powers = {
     Paladin: createCleave,

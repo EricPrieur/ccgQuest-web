@@ -104,7 +104,6 @@ export const CARD_ART_MAP = {
   // === Enemy Cards - Kobold ===
   guards: 'KoboldGuard.jpg',
   hide_in_corner: 'HiddingInCorner.jpg',
-  motivational_whip: 'WardensWhip.jpg',
   wardens_whip: 'WardensWhip.jpg',
   kobold_spear: 'KoboldSpear.jpg',
   kobold_shield: 'KoboldShield.jpg',
@@ -117,6 +116,20 @@ export const CARD_ART_MAP = {
   // === Enemy Cards - Stone Giant ===
   stone_giant_smash: 'StoneGiant.jpg',
   large_boulder: 'GiantBoulder.jpg',
+
+  // === Encounter Buffs (Mountain Pass rockslide choices) ===
+  buff_running: 'Running.jpg',
+  buff_hiding: 'Hiding.jpg',
+  buff_calculating: 'Calculating.jpg',
+
+  // === Item-granted buff pseudo-cards (codex-only, reuse source art) ===
+  buff_vial_of_poison: 'VialOfPoison.jpg',
+  buff_slime_jar: 'SlimeInJar.jpg',
+  buff_scroll_of_potency: 'ScrollOfPotency.jpg',
+  buff_ale: 'Ale.jpg',
+  buff_dwarven_brew: 'DwarvenBrew.jpg',
+  buff_regrowth: 'RegrowthDruid.jpg',
+  buff_elf_reinforcements: 'ElfWarrior.jpg',
 
   // === Enemy Cards - Spider ===
   poisoned_bite: 'PoisonedBite.jpg',
@@ -298,6 +311,11 @@ export const CARD_ART_MAP = {
   bone_amalgam: 'BoneAmalgam.jpg',
   goblin_sapper: 'GoblinSapper.jpg',
   elf_warrior: 'ElfWarrior.jpg',
+  // Two normalization variants exist: the combat character panel uses
+  // replace(/ /g, '_') (apostrophe kept), and the character splash uses
+  // replace(/[^a-z0-9]+/g, '_') (apostrophe → underscore). Register both.
+  "general_zhost's_army": 'GeneralZhost.jpg',
+  general_zhost_s_army: 'GeneralZhost.jpg',
   raena: 'RaenaAlly.jpg',
   piranhas: 'PiranhasSwarm.jpg',
   durin_stoneheart: 'DurinStoneheart.jpg',
@@ -349,6 +367,8 @@ export const POWER_ART_MAP = {
   lava_floor: 'MagmaFloor.jpg',
   vanish: 'Vanish.jpg',
   kobold_backup: 'KoboldGuard.jpg',
+  kobold_army: 'KoboldArmy.jpg',
+  amalgam: 'BonePile.jpg',
 };
 
 // Lazy-loading image cache

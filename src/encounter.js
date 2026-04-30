@@ -664,54 +664,100 @@ export function createMountainCampEncounter() {
 }
 
 export function createMountainPassEncounter() {
-  return new Encounter('mountain_pass', 'Mountain Pass', 'A narrow pass through the peaks', [
+  // Mirrors the Python Mountain Pass encounter: rockslide buff choice
+  // → text → Stone Giant survival fight → loot → escape narrative.
+  return new Encounter('mountain_pass', 'Mountain Pass', 'A treacherous mountain path', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The path narrows as it climbs between two towering cliff faces. Wind howls through the gap, whipping at your clothes and stinging your eyes.'),
-        new EncounterText('Loose scree crunches underfoot, and the drop to your left is dizzying. One wrong step and you\'d tumble into the abyss.'),
-        new EncounterText('Movement ahead — a patrol of Kobolds picks its way along the pass, their crude weapons glinting in the sunlight. They spot you and screech an alarm!'),
-      ],
-    }),
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.COMBAT,
-      enemyId: 'kobold_patrol',
-    }),
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.TEXT,
-      texts: [
-        new EncounterText('The last Kobold tumbles over the edge with a fading shriek. The pass is clear.'),
-        new EncounterText('You press on through the narrow gap, the wind at your back now. The path begins to descend on the other side.'),
-      ],
-    }),
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.LOOT,
-      lootGoldDice: [2, 6],
-    }),
-  ]);
-}
-
-export function createCalmStreamEncounter() {
-  return new Encounter('calm_stream', 'Calm Stream', 'A peaceful mountain stream', [
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.TEXT,
-      texts: [
-        new EncounterText('The path opens into a small clearing where a crystal-clear stream bubbles over smooth stones. The water is cold and clean, fed by snowmelt from the peaks above.'),
-        new EncounterText('After the stench of the sewers and the dust of the pass, this place feels like paradise. Birds sing in the branches overhead.'),
+        new EncounterText('You continue down the mountain, picking your way carefully along the narrow trail. The day wears on and you keep to the shadows, wary of more Kobold patrols. Twice you spot pale-scaled figures in the distance and press yourself against the rocks until they pass.'),
+        new EncounterText('A deep rumbling echoes through the peaks above. At first you mistake it for thunder, but the sky is clear. Giant shadows sweep across the mountainside — something enormous is moving up there, dislodging stone and debris as it goes.'),
+        new EncounterText('Then you see them. Boulders, tumbling down the slope toward you. Small ones at first, skipping off the rocks, then larger ones that shake the ground with each impact. The path ahead is about to become very dangerous.', '!'),
       ],
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.CHOICE,
       choices: [
         new EncounterChoice(
-          'Rest by the stream',
-          'You sit beside the stream and drink deeply, letting the cold water wash away the grime and fatigue. The gentle sound of flowing water soothes your nerves.',
-          'short_rest', 3
+          'Run for it!',
+          'You sprint down the trail, legs pumping, rocks crashing around you. A boulder clips your shoulder and sends you stumbling, but you keep your footing. Heart hammering, you burst through the worst of it and throw yourself behind an outcrop. Bruised but alive.',
+          'boulder_run', 1
         ),
         new EncounterChoice(
-          'Continue on',
-          'You fill your waterskin and press onward. There will be time to rest when you reach Qualibaf.',
-          '', 0
+          'Take cover behind the rocks',
+          'You dive for cover, flattening yourself into a small alcove where the rock wall curves inward. Boulders thunder past, bouncing over your sheltered position. Dust and gravel rain down, but the worst of it sails harmlessly overhead. A solid strategy.',
+          'boulder_shelter', 1
+        ),
+        new EncounterChoice(
+          'Methodically navigate your way through',
+          'You watch the pattern of the falling rocks, timing your movements between impacts. Step, pause, dash, wait. It\'s nerve-wracking but effective. You weave through the rockslide with calculated precision, emerging on the other side without a scratch. Your focus is sharp.',
+          'boulder_navigate', 1
+        ),
+      ],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText('As the dust settles, you hear heavy footsteps shaking the ground. A massive figure emerges from behind the rocks — a Stone Giant, its body carved from living granite, eyes glowing like molten rock.'),
+        new EncounterText('Thorb goes pale — a rare sight for a dwarf. "Stone Giant," he whispers. "Mortal enemies of the Mountain Dwarves. Killed me grandfather. Killed his grandfather too." He swallows hard. "We need to run. Now."', 'Thorb'),
+        new EncounterText('The giant turns its gaze upon you, hefting a boulder in one enormous hand like a weapon.', '!'),
+      ],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.COMBAT,
+      enemyId: 'stone_giant',
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.LOOT,
+      lootGoldDice: [2, 6],
+      lootCards: ['stone_giant_loot'],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText('You scramble down the trail as fast as your legs will carry you. The giant\'s thunderous footsteps shake the mountain behind you, but you don\'t look back. You just run.'),
+        new EncounterText('"Don\'t stop!" Thorb gasps, stumbling over loose rocks. "Those things don\'t tire. Just keep movin\'!"', 'Thorb'),
+        new EncounterText('The rumbling finally fades. You collapse behind a rocky outcrop, gasping. The giant seems content to let you go — you\'ve left its territory. The mountain path continues downward.', '!'),
+      ],
+    }),
+  ]);
+}
+
+export function createCalmStreamEncounter() {
+  // Mirrors Python create_calm_stream_encounter exactly: the intro narrative,
+  // then 4 independent choices that persist between visits (each can be used
+  // once per run). Choice handlers in main.js consume them by id.
+  return new Encounter('calm_stream', 'Calm Stream', 'A sheltered hollow with a gentle stream', [
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText('The path winds down through a grove of ancient trees, their branches draped with soft moss that glows faintly in the dappled light. You hear the gentle murmur of water before you see it - a crystal-clear stream winding through a sheltered hollow.'),
+        new EncounterText('The air here feels different. Lighter. Tiny motes of golden light drift lazily through the glade, and wildflowers in impossible colors line the banks. The water itself seems to shimmer with an inner radiance, as though touched by something ancient and kind.'),
+        new EncounterText('This place feels safe. Whatever magic lingers here, it means you no harm.', '!'),
+      ],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.CHOICE,
+      choices: [
+        new EncounterChoice(
+          'Drink from the stream',
+          'You cup your hands and drink deeply from the stream. The water is impossibly cool and sweet, and warmth spreads through your body as you swallow. Your aches fade and your breathing steadies.',
+          'stream_drink', 1, { returnToChoices: true },
+        ),
+        new EncounterChoice(
+          'Search for food along the banks',
+          'You forage along the stream banks, pushing aside the luminous wildflowers. Hidden among the roots and moss, you find clusters of plump, glowing berries — Goodberries, gifts of the forest.',
+          'stream_search', 1, { returnToChoices: true },
+        ),
+        new EncounterChoice(
+          'Bathe in the stream',
+          'You wade into the stream and let the enchanted water wash over you. As you float in the gentle current, you notice a tiny figure watching you from a nearby flower — a Small Faery, no bigger than your thumb, with iridescent wings and curious eyes. It flutters down and lands on your shoulder, chirping softly.',
+          'stream_bathe', 1, { returnToChoices: true },
+        ),
+        new EncounterChoice(
+          'Continue on your way',
+          'You leave the enchanted hollow behind, feeling refreshed just from the peaceful atmosphere.',
+          '', 0,
         ),
       ],
     }),
@@ -719,61 +765,109 @@ export function createCalmStreamEncounter() {
 }
 
 export function createGeneralZhostEncounter() {
-  return new Encounter('general_zhost', 'River Crossing', 'A dramatic confrontation', [
+  // Mirrors Python create_general_zhost_encounter exactly: intro, army fight
+  // (kill 20), loot, transition text, boss fight, boss loot, epilogue.
+  return new Encounter('general_zhost', "General Zhost's Army", 'A Kobold army camps near the river crossing', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The mountain path opens onto a wide river crossing — a stone bridge spanning churning rapids. But the bridge is not unguarded.'),
-        new EncounterText('Dozens of Kobold soldiers stand in formation on the far bank, their spears raised and shields locked. At their center, mounted on a snarling warg, sits a Kobold unlike any you\'ve seen before.'),
-        new EncounterText('Clad in blackened armor etched with crimson runes, the Kobold commander surveys your approach with cold, calculating eyes. A tattered banner snaps in the wind behind it.'),
-        new EncounterText('"You escaped the prison, but you will not escape ME. I am General Zhost, and this river marks the end of your journey!"', 'General Zhost'),
+        new EncounterText('You follow the road east, staying out of sight. The bridge to Qualibaf comes into view but something is terribly wrong - there\'s a gaping hole in the middle of it, smoke still rising from the rubble. Kobolds swarm across the wreckage like ants.'),
+        new EncounterText('Desperate cries ring out from a nearby clearing. Through the trees you see Elf Combatants surrounded by hundreds of Kobolds, fighting for their lives.'),
+        new EncounterText('"Elves," Thorb spits. "Not me favorite folk. But even I can\'t stand by and watch \'em get slaughtered by kobold scum."', 'Thorb'),
+        new EncounterText('Patrols close in from all directions - there\'s no choice but to fight. In the chaos, you spot the biggest Kobold you\'ve ever seen on the back line, barking orders. He will pay!', '!'),
       ],
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.COMBAT,
-      enemyId: 'kobold_patrol',
+      enemyId: 'general_zhost',
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.LOOT,
+      lootGoldDice: [2, 6],
+      lootCards: ['kobold_patrol_loot'],
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('General Zhost\'s army scatters in disarray, the surviving Kobolds fleeing into the rocks. The general himself vanishes in the chaos, leaving behind only a snarled promise of revenge.'),
-        new EncounterText('The river crossing is clear. You step onto the bridge, the roar of the rapids beneath your feet, and cross to the other side.'),
+        new EncounterText('Dozens of Kobolds lie broken around you. Through the carnage, a path opens toward the massive general on the back line. His eyes widen as you lock gazes. It\'s time to finish this!', '!'),
       ],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.COMBAT,
+      enemyId: 'general_zhost_boss',
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.LOOT,
       lootGoldDice: [3, 6],
-      lootCards: ['white_claw'],
+      lootCards: ['general_zhost_loot'],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText('General Zhost staggers back, his weapons clattering to the ground. Before you can finish him, a wave of Kobold reinforcements pours from the treeline. The general snarls and vanishes into the chaos.'),
+        new EncounterText('"Leave him! More coming!" Thorb bellows, hauling you back toward the Elves. "We\'ll settle that score another day!"', 'Thorb'),
+        new EncounterText('Together you cut a path south and disappear into the forest, leaving the Kobold horde behind.', '!'),
+      ],
     }),
   ], true);
 }
 
 export function createCalmGroveEncounter() {
-  return new Encounter('calm_grove', 'Calm Grove', 'A sheltered grove of ancient trees', [
+  // Mirrors Python create_calm_grove_encounter exactly: post-Zhost flight,
+  // Raena joins the party (+ level-up + rest), then a single optional gift
+  // (Lambas Bread) before pressing on.
+  return new Encounter('calm_grove', 'Calm Grove', 'A hidden grove where Raena and the surviving elves rest.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('You enter a sheltered grove where ancient trees form a natural canopy overhead. Dappled sunlight filters through the leaves, and the air smells of moss and wildflowers.'),
-        new EncounterText('This place has a timeless quality, as though the mountain itself has been protecting this grove for centuries.'),
+        new EncounterText('You flee south through the forest with Raena and the surviving elves. After what feels like hours, you stumble into a hidden grove sheltered by ancient oaks. The sounds of pursuit fade.'),
+        new EncounterText('Raena slumps against a mossy trunk. "That ambush... so many fell. Without you, none of us would have survived." You tell her you\'re trying to reach Qualibaf.', 'Raena'),
+        new EncounterText('"Aye, fought well for an elf," Thorb admits grudgingly, cleaning his weapon. "Suppose they\'re not ALL useless."', 'Thorb'),
+        new EncounterText('Raena rises, ignoring Thorb. "Then let me come with you. The Kobold threat is greater than any of us realized. Together we can warn the free peoples before it\'s too late."', 'Raena'),
+        new EncounterText('"More the merrier," Thorb shrugs. "Let\'s rest a bit first. Me legs are about to give out."', 'Thorb'),
       ],
     }),
     new EncounterPhaseData({
+      phaseType: EncounterPhase.LOOT,
+      lootCards: ['raena_card'],
+      lootTitle: 'Raena joins the party!',
+      triggersLevelUp: true,
+    }),
+    new EncounterPhaseData({
       phaseType: EncounterPhase.CHOICE,
+      choicePrompt: 'While resting in the peaceful grove, Raena offers you some bread.',
       choices: [
         new EncounterChoice(
-          'Rest here',
-          'You settle beneath the largest tree and close your eyes. The grove seems to embrace you, and when you wake, your wounds feel lighter.',
-          'short_rest', 5
+          "Accept Raena's Lambas Bread",
+          'Raena reaches into her pack and produces a leaf-wrapped bundle of warm elvish bread. "Lambas," she says softly. "It will restore your strength." The bread is light and fragrant, and warmth spreads through you with every bite.',
+          'accept_lambas_card', 0,
+          { returnToChoices: true },
         ),
         new EncounterChoice(
-          'Search for herbs',
-          'You forage among the undergrowth, finding clusters of medicinal plants growing between the roots of the ancient trees.',
-          'search_camp', 1
+          'Press on',
+          'After resting a while in the grove\'s shelter, you feel ready to press forward. Raena nods and falls into step beside you.',
+          '', 0,
         ),
-        new EncounterChoice(
-          'Move on',
-          'You pass through the grove without stopping, though you feel a pang of regret as the canopy thins behind you.',
-          '', 0
+      ],
+    }),
+  ]);
+}
+
+// Mirrors PY chapter_end_text shown alongside the "Chapter 3" banner —
+// here we display the narrative as a brief two-page dialog after the
+// title card, before dropping the player onto the plains map.
+export function createEnteringPlainsEncounter() {
+  return new Encounter('entering_plains', 'The Plains of No Hope', 'A bitter wind, a grey sky.', [
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText(
+          'You leave the forest behind and step onto the barren plains. ' +
+          'The wind is bitter and the sky heavy with grey clouds. ' +
+          'Snow drifts lazily down around you.'
+        ),
+        new EncounterText(
+          'The path ahead is long and desolate, but Qualibaf waits on the other side.'
         ),
       ],
     }),
@@ -781,13 +875,38 @@ export function createCalmGroveEncounter() {
 }
 
 export function createToThePlainsEncounter() {
-  return new Encounter('to_the_plains', 'To the Plains', 'The mountain path descends', [
+  return new Encounter('to_the_plains', 'To the Plains', 'The edge of the forest, overlooking a vast desolate plain.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The mountain path begins its final descent, switchbacking down a rocky slope. The air grows warmer with each step, and the harsh mountain winds give way to gentle breezes.'),
-        new EncounterText('Below you, the plains stretch to the horizon — golden grasslands rippling like an ocean under the afternoon sun. Roads wind between distant farmsteads and clusters of trees.'),
-        new EncounterText('And there, nestled where the plains meet the foothills, you see it: the walls and towers of Qualibaf, smoke rising from its chimneys. Your destination is finally within reach.'),
+        new EncounterText(
+          'You leave the shelter of the grove and follow the tree line south. ' +
+          'The forest thins and the land opens up - a vast, grey expanse ' +
+          'stretches to the horizon, flat, barren, and utterly still.'
+        ),
+        new EncounterText(
+          '"The Plains of No Hope," Raena says quietly. "Nothing grows ' +
+          'here. Nothing lives here by choice."',
+          'Raena'
+        ),
+        new EncounterText(
+          '"Cheerful name," Thorb mutters. "Reminds me of me aunt\'s ' +
+          'cooking. Flat, grey, and best avoided."',
+          'Thorb'
+        ),
+        new EncounterText(
+          'A few white flakes drift down from the grey sky. Raena frowns. ' +
+          '"Snow? It\'s early for that. We should cross the plains heading ' +
+          'west - there should be a way to reach Qualibaf on the other ' +
+          'side of the river."',
+          'Raena'
+        ),
+        new EncounterText(
+          '"Long as we keep movin\', I\'m fine," Thorb says, pulling his ' +
+          'collar up. "Standing still in a place called \'No Hope\' seems ' +
+          'like bad luck."',
+          'Thorb'
+        ),
       ],
     }),
   ]);
@@ -798,13 +917,51 @@ export function createToThePlainsEncounter() {
 // ============================================================
 
 export function createBoneValleyEncounter() {
-  return new Encounter('bone_valley', 'Bone Valley', 'A barren valley of bones', [
+  return new Encounter('bone_valley', 'Bone Valley', 'A desolate valley choked with ancient bones.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The path descends into a barren valley strewn with sun-bleached bones. Ribcages and skulls of creatures long dead litter the cracked earth.'),
-        new EncounterText('An eerie silence hangs over the valley. No wind stirs, no birds call. Even your footsteps seem muffled, swallowed by the oppressive stillness.'),
-        new EncounterText('The bones begin to tremble. One by one they rattle and roll, drawn together by unseen force. They fuse and stack, forming a towering amalgamation of death that lurches toward you!'),
+        new EncounterText(
+          '"We should cut through there," Raena says, pointing between ' +
+          'two looming peaks. "Staying low keeps us less exposed."',
+          'Raena'
+        ),
+        new EncounterText(
+          'You descend into a narrow valley. The grass gives way to cracked, ' +
+          'sun-bleached earth. No wind. No birds. Nothing.'
+        ),
+        new EncounterText(
+          'Then you notice the bones. Rib cages half-buried in the dust, ' +
+          'jawbones jutting from the dirt. As you press deeper, they ' +
+          'multiply - skulls, femurs, spines - scattered everywhere.'
+        ),
+        new EncounterText(
+          '"I don\'t like this," Thorb growls, scanning the valley walls. ' +
+          '"Dwarves know their bones. These aren\'t natural remains. ' +
+          'Something put \'em here."',
+          'Thorb'
+        ),
+        new EncounterText(
+          '"Wait..." Raena freezes. "The bones. They weren\'t here a ' +
+          'moment ago. They\'re spreading."',
+          'Raena'
+        ),
+        new EncounterText(
+          'The ground rumbles. The bones tremble, rattle, then MOVE - ' +
+          'dragging themselves across the earth, converging on a single ' +
+          'point ahead of you.'
+        ),
+        new EncounterText(
+          '"RUN! We have to-" But there is nowhere to run. The valley ' +
+          'walls close in on both sides, the path behind choked with ' +
+          'writhing bones.',
+          'Raena'
+        ),
+        new EncounterText(
+          'Hundreds of bones fuse together with sickening cracks, twisting ' +
+          'into a towering AMALGAM. A dozen skulls stare from its body.',
+          '!'
+        ),
       ],
     }),
     new EncounterPhaseData({
@@ -814,24 +971,32 @@ export function createBoneValleyEncounter() {
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The bone amalgam shatters apart, its fragments scattering across the valley floor. Whatever dark energy held it together dissipates like smoke.'),
+        new EncounterText('The bone amalgam shatters, its remains collapsing into a lifeless heap.'),
+        new EncounterText('Among the wreckage, you find something useful.'),
       ],
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.LOOT,
-      lootGoldDice: [2, 6],
+      lootGoldDice: [3, 6],
+      lootCards: ['bone_amalgam_loot'],
     }),
   ]);
 }
 
 export function createWolfBlizzardEncounter() {
-  return new Encounter('wolf_blizzard', 'Wolf Blizzard', 'A blizzard brings wolves', [
+  // Mirrors Python create_wolf_blizzard_encounter exactly: 6 narrative
+  // beats with Raena chiming in, the kill-10 fight, salvage loot, and
+  // a 3-block epilogue forcing the cave entrance.
+  return new Encounter('wolf_blizzard', 'Wolf Pack', 'A pack of wolves hunts you through the blizzard.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('A blizzard sweeps across the plains without warning, the sky darkening as snow and ice lash at your face. Visibility drops to nothing.'),
-        new EncounterText('Through the howling wind, you hear wolves — their cries rising and falling, circling closer with each pass.'),
-        new EncounterText('Yellow eyes appear in the white curtain of snow. A pack of wolves emerges from the storm, teeth bared, moving in coordinated silence.'),
+        new EncounterText("You flee the storm of bones and rocks, running south without thinking. When the dust settles, you realize you've wandered far from your objective. Too far."),
+        new EncounterText('The sky darkens. Snow begins to fall — softly at first, then in thick, biting sheets. Within minutes, a dry blizzard swallows everything. Visibility drops to nothing. The wind screams.'),
+        new EncounterText('"The rocks — I think they\'re east!" Raena shouts over the howling gale, pulling you toward dark shapes in the white. "We need cover, NOW!"', 'Raena'),
+        new EncounterText('Then you hear them. Low growls cutting through the wind. Shadows moving in the snow — too many to count. Yellow eyes flash in the whiteout, circling closer.'),
+        new EncounterText('"Wolves..." Raena draws her blade, voice trembling. "A whole pack. They\'ve been tracking us."', 'Raena'),
+        new EncounterText('You scramble toward the rocks but the cliff face blocks your escape. Cornered. The pack closes in, snarling, their breath steaming in the frozen air. There is no running from this.', '!'),
       ],
     }),
     new EncounterPhaseData({
@@ -841,65 +1006,81 @@ export function createWolfBlizzardEncounter() {
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The surviving wolves scatter into the fading storm, their howls growing distant.'),
-        new EncounterText('As the blizzard clears, you spot the dark mouth of a cave in the hillside ahead, half-hidden by drifted snow.'),
+        new EncounterText('The last wolf yelps and retreats into the blizzard. The pack scatters.'),
+        new EncounterText('Among the fallen wolves, you find something useful.'),
       ],
     }),
     new EncounterPhaseData({
-      phaseType: EncounterPhase.CHOICE,
-      choices: [
-        new EncounterChoice(
-          'Enter the cave',
-          'You push through the snow toward the cave entrance. Anything is better than being caught in the open.',
-          'enter_cave', 1
-        ),
-        new EncounterChoice(
-          'Turn back',
-          'You press on across the plains, leaving the cave behind. The storm is fading — you can make it.',
-          '', 0
-        ),
+      phaseType: EncounterPhase.LOOT,
+      lootGoldDice: [3, 6],
+      lootCards: ['wolf_pack_loot'],
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText('You barely catch your breath before more howls pierce the wind. Many more. The blizzard thickens and dark shapes close in from every direction. This isn\'t over.'),
+        new EncounterText('"There!" Raena grabs your arm, pointing at a dark opening in the rock face. A cave entrance, half-hidden by snow and ice. "It\'s our only chance!"', 'Raena'),
+        new EncounterText('Without thinking, you throw yourselves inside. The wolves snarl at the entrance but don\'t follow. The howling wind fades to an eerie silence as you stumble deeper into the darkness.'),
       ],
     }),
   ]);
 }
+
 
 // ============================================================
 // Cave Encounters
 // ============================================================
 
 export function createCaveEntranceEncounter() {
-  return new Encounter('cave_entrance', 'Cave Entrance', 'A dark cave entrance', [
+  // Mirrors Python create_cave_entrance_encounter — Thorb lights a
+  // makeshift torch, Raena resigns to going forward.
+  return new Encounter('cave_entrance', 'Cave Entrance', 'The cave entrance, where Thorb lights a makeshift torch.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The cave mouth yawns before you, a jagged opening in the rock face. Cold air flows outward, carrying the smell of damp stone and something older.'),
-        new EncounterText('You light a torch, but its flame barely pushes back the darkness. The walls glisten with moisture, and the passage slopes steadily downward.'),
+        new EncounterText('The cave mouth swallows the last of the daylight behind you. The howling wind dies to a whisper, replaced by the drip of water echoing in the darkness. You can barely see your own hands.'),
+        new EncounterText('"Hold on, I\'ve got something," Thorb grunts. You hear him rummaging through scraps of old clothing scattered on the cave floor. The rasp of flint on steel echoes off the walls.', 'Thorb'),
+        new EncounterText('A spark catches. Then another. A strip of cloth wrapped around a broken stalagmite flickers to life, casting dancing shadows across the rough stone walls. The torch\'s warm glow pushes back the darkness just enough to see.'),
+        new EncounterText('"That\'ll do for now," Thorb says, raising the makeshift torch higher. The cave stretches deeper ahead, splitting into passages that vanish into the dark. Cool air drifts from somewhere below.', 'Thorb'),
+        new EncounterText('Raena peers into the gloom. "We can\'t go back. The wolves will be waiting." She pauses. "Whatever is down here, at least it\'s warmer than that blizzard."', 'Raena'),
+        new EncounterText('You press forward, guided by the flickering torchlight. The cave walls glisten with moisture and strange mineral deposits. The air smells of damp stone and something older, deeper. Only way is forward.'),
       ],
     }),
   ]);
 }
 
 export function createCaveLedgeEncounter() {
-  return new Encounter('cave_ledge', 'Cave Ledge', 'A narrow ledge over a chasm', [
+  // Mirrors Python create_cave_ledge_encounter — narrative beat at a
+  // sheer drop, then a choice of how to descend. PY offers four paths
+  // (Climb / Use gear as rope / Long way / Jump) but the gear-based
+  // and rope-based variants need new effect handlers; the JS version
+  // currently exposes Climb (Recharge a Card) and Long Way (Safe).
+  return new Encounter('cave_ledge', 'The Ledge', 'A rocky ledge overlooking an icy darkness below.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The passage opens onto a narrow ledge overlooking a vast underground chasm. The far side is lost in shadow, and loose pebbles tumble silently into the void.'),
-        new EncounterText('The rock beneath your feet is slick with condensation. One careless step could send you over the edge.'),
+        new EncounterText('You move deeper until you nearly topple over an edge. Below, faint reflections glimmer — ice. The sound of running water echoes from somewhere far below.'),
+        new EncounterText('The drop is maybe fifteen feet. The walls offer some handholds, but they\'re slick with moisture.', '!'),
       ],
     }),
     new EncounterPhaseData({
       phaseType: EncounterPhase.CHOICE,
+      choicePrompt: 'How do you descend?',
       choices: [
         new EncounterChoice(
           'Climb down carefully',
-          'You press yourself flat against the rock and inch along the ledge, fingers gripping every crack and crevice. The stone crumbles in places, but you make it across.',
-          'try_squeeze', 1
+          'You press yourself flat against the rock and inch your way down, fingers gripping every crack and crevice. The stone crumbles in places, but you make it.',
+          '', 0
         ),
         new EncounterChoice(
-          'Go back',
-          'You step away from the edge. The chasm is too treacherous to risk.',
+          'Find a longer way around (Safe)',
+          'You skirt the cliff face until you find a gradual slope that winds down to the river. It costs you time, but you arrive untouched.',
           '', 0
+        ),
+        new EncounterChoice(
+          'Jump! (Risky)',
+          'You leap. The drop is longer than it looked. You hit the floor hard — but you\'re alive, and the way ahead is clear.',
+          'cave_jump_down', 1
         ),
       ],
     }),
@@ -907,55 +1088,48 @@ export function createCaveLedgeEncounter() {
 }
 
 export function createCaveRiverLandingEncounter() {
-  return new Encounter('cave_river_landing', 'River Landing', 'An underground river', [
+  // Mirrors Python create_cave_river_landing_encounter — torch dies,
+  // cave shrooms light the way, party decides to follow the river.
+  // Loot table cave_shroom_loot needs to be defined in main.js for the
+  // LOOT phase to award anything; in JS we drop the loot phase for now
+  // and just narrate finding the shrooms.
+  return new Encounter('cave_river_landing', 'River Landing', 'A rocky landing beside an icy underground river.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The ledge deposits you on a rocky shelf beside an underground river. Dark water rushes past, its current strong and steady.'),
-        new EncounterText('The sound of rushing water echoes off the cavern walls, filling the space with a constant low roar.'),
-      ],
-    }),
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.CHOICE,
-      choices: [
-        new EncounterChoice(
-          'Follow the river',
-          'You pick your way along the riverbank, following the current downstream into deeper darkness.',
-          '', 0
-        ),
-        new EncounterChoice(
-          'Rest here',
-          'You settle onto the dry stone and drink from the river. The water is cold and clean. After a while, you feel renewed.',
-          'short_rest', 3
-        ),
+        new EncounterText('You dust yourself off and take stock of your surroundings. A rocky landing stretches along an underground river, its surface glazed with thin ice. The torch flickers weakly.'),
+        new EncounterText('"We should be able to find some cave mushrooms down here," Thorb says, holding the sputtering torch higher. "They glow — should let us see without the torch. Good thing too, this thing won\'t last much longer."', 'Thorb'),
+        new EncounterText('On the damp rocks near the water\'s edge, small clusters of mushrooms emit a soft, pale blue glow.'),
+        new EncounterText('The torch sputters and dies, but the mushrooms cast an ethereal blue glow that reaches further than you\'d expect.', '!'),
+        new EncounterText('"Not bad," Thorb admits, tucking a few mushrooms into his belt. "Now, the river\'s flowing that way. In the mountains, water always finds a way out. I say we follow it."', 'Thorb'),
+        new EncounterText('Raena nods. "And these mushrooms... I\'ve read about them. They have healing properties."', 'Raena'),
+        new EncounterText('You decide to follow the icy river deeper into the cave.'),
       ],
     }),
   ]);
 }
 
 export function createUndergroundRiverEncounter() {
-  return new Encounter('underground_river', 'Underground River', 'The river leads to ruins', [
+  // Mirrors Python create_underground_river_encounter — long TEXT-only
+  // journey: party wades into the river, current sweeps them through a
+  // tunnel, plunges over a small waterfall, deposits them on a rocky
+  // shelf with an amber glow ahead. NOTE: PY has NO combat here — the
+  // sahuagin/piranha fight lives at the next node (piranha_pool, on
+  // the ruins basin map).
+  return new Encounter('underground_river', 'Underground River', 'The river disappears into a dark tunnel.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The river pulls you through a low tunnel and spills into a vast flooded chamber. Ancient stone walls rise from the water, carved with symbols you cannot read.'),
-        new EncounterText('Pillars of worked stone break the surface, remnants of a civilization that built beneath the earth. Pale light filters from cracks in the ceiling far above.'),
-        new EncounterText('The water stirs near a submerged archway. A scaled figure rises from the depths, trident in hand, its cold eyes fixed on you.'),
+        new EncounterText('You follow the river deeper underground. The air grows warmer here — the ice along the banks has given way to slick, dark stone. The pale glow of cave mushrooms reflects off the water\'s surface.'),
+        new EncounterText('The passage narrows ahead. The river fills the entire tunnel — there\'s no way forward along the banks. You\'ll have to wade in.'),
+        new EncounterText('"I don\'t like this," Thorb mutters, eyeing the dark water. "But I don\'t see another way."', 'Thorb'),
+        new EncounterText('You step into the river. The water is surprisingly warm, rising to your waist. The current is gentle at first, guiding you forward through the tunnel. The mushroom light fades behind you.'),
+        new EncounterText('The current picks up. What was a gentle pull becomes an insistent tug. The water rises to your chest. The tunnel walls rush past faster now.'),
+        new EncounterText('"Grab onto something!" Thorb shouts, but there\'s nothing to grab. The river has you now. You\'re swept forward, tumbling through the darkness, water roaring in your ears.', 'Thorb'),
+        new EncounterText('A sudden drop — your stomach lurches as you go over a small waterfall. You crash into a deeper pool, pulled under for a terrifying moment before surfacing, gasping.'),
+        new EncounterText('The current slows. You drag yourself onto a rocky shelf, coughing water. Thorb hauls himself up beside you, breathing hard. Your torch is long gone, but a faint amber glow emanates from somewhere ahead.'),
+        new EncounterText('There\'s no going back the way you came.', '!'),
       ],
-    }),
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.COMBAT,
-      enemyId: 'sahuagin_sentinel',
-    }),
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.TEXT,
-      texts: [
-        new EncounterText('The sentinel sinks beneath the dark water, its trident clattering against the stone floor below.'),
-      ],
-    }),
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.LOOT,
-      lootGoldDice: [2, 6],
     }),
   ]);
 }

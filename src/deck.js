@@ -103,15 +103,24 @@ export class Deck {
   }
 
   // End combat: draw back up to hand size, then clear transient piles.
-  // Hand and discard pile persist for the next combat.
+  // Hand and discard pile persist for the next combat. Companion cards
+  // sitting in the play pile (creature survived) are dropped from the
+  // playPile — they remain in masterDeck and will be reshuffled into
+  // drawPile when the next combat starts (the "recharge to bottom of
+  // deck" rule, applied across the combat boundary).
   endCombat(classHandSize = 4, maxHandSize = 10) {
+    for (const c of this.playPile) c.exhausted = false;
+    this.playPile = [];
+    // Wipe any lingering exhausted state on hand cards so the next
+    // combat doesn't open with already-spent stays-in-hand weapons.
+    for (const c of this.hand) c.exhausted = false;
+
     const toDraw = Math.max(0, classHandSize - this.hand.length);
     this.draw(toDraw, maxHandSize);
 
     this.drawPile = [];
     this.damagePile = [];
     this.rechargePile = [];
-    this.playPile = [];
   }
 
   // Rebalance: merge hand + deck + discard back into one deck, heal all
@@ -134,6 +143,10 @@ export class Deck {
       if (this.hand.length >= maxHandSize) break;
       if (this.drawPile.length === 0) break;
       const card = this.drawPile.pop();
+      // Belt-and-suspenders: a card coming OUT of the deck should
+      // never carry an exhausted flag (legacy save data, lingering
+      // stays-in-hand state, etc.).
+      card.exhausted = false;
       // Tag for draw animation: each card staggers 80 ms so they visually
       // arrive one-by-one from the deck. The renderer in main.js checks
       // _drawAnimStart and lerps the card from the deck origin to its hand
@@ -188,8 +201,18 @@ export class Deck {
     const idx = this.hand.indexOf(card);
     if (idx === -1) return false;
     this.hand.splice(idx, 1);
-    this.discardPile.push(card);
+    this.discardCard(card);
     return true;
+  }
+
+  // Push a card into the discard pile and fire any on-discard passives
+  // (Lucky Pebble: draw 1 when it lands in discard from hand or deck).
+  discardCard(card) {
+    if (!card) return;
+    this.discardPile.push(card);
+    if ((card.effects || []).some(e => e && e.effectType === 'on_discard_draw')) {
+      this.draw(1, 10);
+    }
   }
 
   discardHand() {
@@ -267,6 +290,10 @@ export class Deck {
   flushRechargePile() {
     const count = this.rechargePile.length;
     for (const card of this.rechargePile) {
+      // Clear exhausted state so stays-in-hand cards (Bone Dagger,
+      // Sturdy Boots etc.) re-enter the deck ready to be played again
+      // when they next surface in a draw.
+      card.exhausted = false;
       this.drawPile.unshift(card);
     }
     this.rechargePile = [];

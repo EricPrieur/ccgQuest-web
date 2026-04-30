@@ -566,6 +566,65 @@ export function createGoodberry() {
   });
 }
 
+// Raena — recruited at Calm Grove after the General Zhost fight. Summons
+// the multi-attack ranger as a player ally (R+1 cost).
+export function createRaenaCard() {
+  return new Card({
+    id: 'raena_card',
+    name: 'Raena',
+    description: 'Recharge +1 Card -> Summon Raena to the battle!',
+    shortDesc: 'R+1->Summon Raena',
+    subtype: 'allies',
+    cardType: CardType.CREATURE,
+    costType: CostType.RECHARGE,
+    effects: [
+      new CardEffect('summon_raena', 1, TargetType.SUMMON),
+      new CardEffect('recharge_extra', 1, TargetType.SELF),
+    ],
+    rarity: 'rare',
+    isUnique: true,
+    previewCreature: new Creature({
+      name: 'Raena', attack: 2, maxHp: 3, multiAttack: 2, isCompanion: true,
+      description: 'Attacks 2 targets.',
+    }),
+  });
+}
+
+// Lambas Bread — elvish healing item awarded by Raena at Calm Grove.
+export function createLambasBread() {
+  return new Card({
+    id: 'lambas_bread',
+    name: 'Lambas Bread',
+    description: 'Banish + Recharge 1 -> Heal 6.',
+    shortDesc: 'B+R1->Heal 6',
+    subtype: 'item',
+    cardType: CardType.ITEM,
+    costType: CostType.BANISH,
+    effects: [
+      new CardEffect('heal', 6, TargetType.SELF),
+      new CardEffect('recharge_extra', 1, TargetType.SELF),
+    ],
+    rarity: 'uncommon',
+  });
+}
+
+// Small Faery — gift from the Calm Stream "Bathe" choice. Banish to heal
+// the player and all allies for 3.
+export function createSmallFaery() {
+  return new Card({
+    id: 'small_faery',
+    name: 'Small Faery',
+    description: 'Banish -> Heal yourself and your allies for 3.',
+    shortDesc: 'B->Heal All 3',
+    subtype: 'allies',
+    cardType: CardType.ABILITY,
+    costType: CostType.BANISH,
+    effects: [new CardEffect('heal_all', 3, TargetType.SELF)],
+    rarity: 'rare',
+    tier: 1,
+  });
+}
+
 export function createGoodberries() {
   return new Card({
     id: 'goodberries',
@@ -1015,22 +1074,6 @@ export function createGuards() {
   });
 }
 
-export function createMotivationalWhip() {
-  return new Card({
-    id: 'motivational_whip',
-    name: 'Motivational Whip',
-    description: 'Recharge +1 -> Deal 2 damage.',
-    shortDesc: 'R+1->2 Dmg',
-    subtype: 'weapon',
-    cardType: CardType.ATTACK,
-    costType: CostType.RECHARGE,
-    effects: [
-      new CardEffect('damage', 2, TargetType.SINGLE_ENEMY),
-      new CardEffect('recharge_extra', 1, TargetType.SELF),
-    ],
-  });
-}
-
 export function createHideInCorner() {
   return new Card({
     id: 'hide_in_corner',
@@ -1127,6 +1170,25 @@ export function createBoneMace() {
   });
 }
 
+export function createBoneStaff() {
+  return new Card({
+    id: 'bone_staff',
+    name: 'Bone Staff',
+    description: 'Recharge +1 Card -> Deal 3 Damage + Poison, Shield 1.',
+    shortDesc: 'R+1->3 Dmg\n+Poison, Shield 1',
+    subtype: 'staff',
+    cardType: CardType.ATTACK,
+    costType: CostType.RECHARGE,
+    effects: [
+      new CardEffect('damage', 3, TargetType.SINGLE_ENEMY),
+      new CardEffect('apply_poison', 1, TargetType.SINGLE_ENEMY),
+      new CardEffect('gain_shield', 1, TargetType.SELF),
+      new CardEffect('recharge_extra', 1, TargetType.SELF),
+    ],
+    rarity: 'uncommon',
+  });
+}
+
 export function createBadRations() {
   return new Card({
     id: 'bad_rations',
@@ -1148,17 +1210,22 @@ export function createSturdyBoots() {
   return new Card({
     id: 'sturdy_boots',
     name: 'Sturdy Boots',
-    // Attack on the player's turn: 1 Dmg + Draw. The PY version also has a
-    // block mode for the defending phase but the modal flow made it fail to
-    // fire on clicks; keep it simple as a single-mode attack for now.
-    description: 'Recharge -> 1 Damage, Draw.',
-    shortDesc: 'R->1 Dmg,\nDraw',
+    // Dual-type per Python: top-level effects fire on player turn (1 Dmg + Draw);
+    // the block mode is offered during the defending phase (Block 1 + Draw).
+    description: 'Attack: 1 Dmg + Draw\nDefense: Block 1 + Draw',
+    shortDesc: 'R->1 Dmg/Block,\nDraw',
     subtype: 'light_armor',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
     effects: [
       new CardEffect('damage', 1, TargetType.SINGLE_ENEMY),
       new CardEffect('draw', 1, TargetType.SELF),
+    ],
+    modes: [
+      new CardMode('Block 1 Damage, Draw a card', [
+        new CardEffect('block', 1, TargetType.SELF),
+        new CardEffect('draw', 1, TargetType.SELF),
+      ]),
     ],
     rarity: 'uncommon',
   });
@@ -1229,6 +1296,183 @@ export function createSharpRock() {
       new CardEffect('damage', 1, TargetType.SINGLE_ENEMY),
       new CardEffect('draw', 1, TargetType.SELF),
     ],
+  });
+}
+
+// Zhost's Buckler — drops as boss loot. Light armor that hits for 1 damage,
+// applies 1 Ice, and grants 1 Shield.
+export function createZhostsBuckler() {
+  return new Card({
+    id: 'zhosts_buckler',
+    name: "Zhost's Buckler",
+    description: 'Recharge -> Deal 1 Damage and 1 Ice. Gain 1 Shield.',
+    shortDesc: 'R->1 Dmg, 1 Ice,\n+1 Shield',
+    subtype: 'light_armor',
+    cardType: CardType.ATTACK,
+    costType: CostType.RECHARGE,
+    effects: [
+      new CardEffect('damage', 1, TargetType.SINGLE_ENEMY),
+      new CardEffect('apply_ice', 1, TargetType.SINGLE_ENEMY),
+      new CardEffect('gain_shield', 1, TargetType.SELF),
+    ],
+    rarity: 'rare',
+  });
+}
+
+export function createLuckyPebble() {
+  return new Card({
+    id: 'lucky_pebble',
+    name: 'Lucky Pebble',
+    description: 'On Discard: Draw 1 Card.',
+    shortDesc: 'On Discard:\nDraw 1',
+    subtype: 'relic',
+    cardType: CardType.RELIC,
+    // Plays for free (Recharge cost = no effect when played, just goes into
+    // the recharge pile). The "On Discard" trigger fires only when the card
+    // is discarded passively (deck damage, hand-discard effects, etc.) —
+    // see Character.takeDamageFromDeck for the hook.
+    costType: CostType.RECHARGE,
+    effects: [new CardEffect('on_discard_draw', 1, TargetType.SELF)],
+    rarity: 'rare',
+  });
+}
+
+// === Buff Pseudo-Cards ===
+// Codex-only entries showing each CombatBuff granted by a source card or
+// encounter choice. Match Python's image_id (which reuses the source-card
+// art) and description text. Never placed in a deck — purely informational.
+export function createBuffVialOfPoison() {
+  return new Card({
+    id: 'buff_vial_of_poison',
+    name: 'Vial of Poison',
+    description: 'Next attack also applies Poison.',
+    shortDesc: 'Next attack:\n+Poison',
+    subtype: 'buff', cardType: CardType.ABILITY, costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffSlimeJar() {
+  return new Card({
+    id: 'buff_slime_jar',
+    name: 'Slime Jar',
+    description: 'Next weapon attack is Unpreventable.',
+    shortDesc: 'Next attack:\nUnpreventable',
+    subtype: 'buff', cardType: CardType.ABILITY, costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffScrollOfPotency() {
+  return new Card({
+    id: 'buff_scroll_of_potency',
+    name: 'Scroll of Potency',
+    description: 'Start of Turn: +1 Heroism',
+    shortDesc: '+1 Heroism/turn',
+    subtype: 'buff', cardType: CardType.ABILITY, costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffAle() {
+  return new Card({
+    id: 'buff_ale',
+    name: 'Ale',
+    description: 'Start of Turn: +1 Heroism',
+    shortDesc: '+1 Heroism/turn',
+    subtype: 'buff', cardType: CardType.ABILITY, costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffDwarvenBrew() {
+  return new Card({
+    id: 'buff_dwarven_brew',
+    name: 'Dwarven Brew',
+    description: 'Start of Turn: +1 Shield',
+    shortDesc: '+1 Shield/turn',
+    subtype: 'buff', cardType: CardType.ABILITY, costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffRegrowth() {
+  return new Card({
+    id: 'buff_regrowth',
+    name: 'Regrowth',
+    description: 'Start of Turn: Heal 1',
+    shortDesc: 'Heal 1/turn',
+    subtype: 'buff', cardType: CardType.ABILITY, costType: CostType.FREE,
+    effects: [],
+  });
+}
+
+// === Encounter Buff Cards ===
+// Pseudo-cards rendered as `Buff` codex entries. They aren't placed in any
+// deck; they describe a CombatBuff granted by an encounter choice and let
+// the player browse the buff card art / description in the codex.
+export function createBuffElfReinforcements() {
+  return new Card({
+    id: 'buff_elf_reinforcements',
+    name: 'Elf Reinforcements',
+    description: 'Start of Turn: Summon 1 Elf Warrior.',
+    shortDesc: '+1 Elf/turn',
+    subtype: 'buff',
+    cardType: CardType.ABILITY,
+    costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffRunning() {
+  return new Card({
+    id: 'buff_running',
+    name: 'Running',
+    description: 'Start of Turn: Draw 1',
+    shortDesc: 'Draw 1/turn',
+    subtype: 'buff',
+    cardType: CardType.ABILITY,
+    costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffHiding() {
+  return new Card({
+    id: 'buff_hiding',
+    name: 'Hiding',
+    description: 'Start of Turn: +1 Shield',
+    shortDesc: '+1 Shield/turn',
+    subtype: 'buff',
+    cardType: CardType.ABILITY,
+    costType: CostType.FREE,
+    effects: [],
+  });
+}
+export function createBuffCalculating() {
+  return new Card({
+    id: 'buff_calculating',
+    name: 'Calculating',
+    description: 'Start of Turn: +1 Heroism',
+    shortDesc: '+1 Heroism/turn',
+    subtype: 'buff',
+    cardType: CardType.ABILITY,
+    costType: CostType.FREE,
+    effects: [],
+  });
+}
+
+// Stone Giant summon card — heaves a 6/4/1-armor self-destructing boulder
+// into play. Played as a CREATURE summon (priority 10 so it lands before
+// sharp rocks).
+export function createLargeBoulder() {
+  return new Card({
+    id: 'large_boulder',
+    name: 'Large Boulder',
+    description: 'Recharge -> Large Boulder rolling down the mountain!',
+    shortDesc: 'R->Summon Boulder',
+    subtype: 'allies',
+    cardType: CardType.CREATURE,
+    costType: CostType.RECHARGE,
+    effects: [new CardEffect('summon_large_boulder', 1, TargetType.SUMMON)],
+    priority: 10,
+    previewCreature: new Creature({
+      name: 'Large Boulder', attack: 6, maxHp: 4, armor: 1, selfDestruct: true,
+      description: 'Self-Destruct: explodes after attacking.',
+    }),
   });
 }
 
@@ -1921,18 +2165,23 @@ export function createDwarvenThrowingAxe() {
 }
 
 export function createRuneforgedBuckler() {
+  // Mirrors PY create_runeforged_buckler: ABILITY (proactive), grants 2
+  // Shield + 2 Heroism. PY had this as ABILITY not DEFENSE — earlier
+  // JS port misclassified it.
   return new Card({
     id: 'runeforged_buckler',
     name: 'Runeforged Buckler',
-    description: 'Recharge -> Block 2, Draw.',
-    shortDesc: 'R->Block 2, Draw',
-    subtype: 'armor',
-    cardType: CardType.DEFENSE,
+    description: 'Recharge -> Gain 2 Shield and 2 Heroism.',
+    shortDesc: 'R->+2 Shield\n+2 Heroism',
+    subtype: 'light_armor',
+    cardType: CardType.ABILITY,
     costType: CostType.RECHARGE,
     effects: [
-      new CardEffect('block', 2, TargetType.SELF),
-      new CardEffect('draw', 1, TargetType.SELF),
+      new CardEffect('gain_shield', 2, TargetType.SELF),
+      new CardEffect('gain_heroism', 2, TargetType.SELF),
     ],
+    rarity: 'common',
+    tier: 2,
   });
 }
 
@@ -2034,18 +2283,18 @@ export function createMagmaMephitSummonCard() {
 // ============================================================
 
 export function createDefensiveFormation() {
+  // Mirrors Python: ability card, on play caster + every alive ally gets
+  // +1 Shield. Used by General Zhost's Army to stack shields each turn
+  // after kobold_army repopulates the field.
   return new Card({
     id: 'defensive_formation',
     name: 'Defensive Formation',
-    description: 'Recharge -> Block 1 + 1 Shield.',
-    shortDesc: 'R->Block 1, Shield',
-    subtype: 'armor',
-    cardType: CardType.DEFENSE,
+    description: 'Recharge -> You and allies gain 1 Shield.',
+    shortDesc: 'R->Team Shield 1',
+    subtype: 'ability',
+    cardType: CardType.ABILITY,
     costType: CostType.RECHARGE,
-    effects: [
-      new CardEffect('block', 1, TargetType.SELF),
-      new CardEffect('gain_shield', 1, TargetType.SELF),
-    ],
+    effects: [new CardEffect('team_shield', 1, TargetType.SELF)],
   });
 }
 
@@ -2074,12 +2323,13 @@ export function createBoneStorm() {
   return new Card({
     id: 'bone_storm',
     name: 'Bone Storm',
-    description: 'Recharge -> Deal 1 Damage to ALL.',
-    shortDesc: 'R->1 Dmg ALL',
-    subtype: 'weapon',
-    cardType: CardType.ATTACK,
+    description: 'All enemies lose Shields. Deal 1 Damage to all enemies. Allies gain +1 Atk, +1 HP, +1 Shield.',
+    shortDesc: 'Strip Shield\n1 Dmg All\nBuff Allies',
+    subtype: 'ability',
+    cardType: CardType.ABILITY,
     costType: CostType.RECHARGE,
-    effects: [new CardEffect('damage_all', 1, TargetType.ALL_ENEMIES)],
+    effects: [new CardEffect('bone_storm', 1, TargetType.ALL_ENEMIES)],
+    priority: 15,
   });
 }
 
@@ -2176,8 +2426,8 @@ export function createDwarvenGreaves() {
   return new Card({
     id: 'dwarven_greaves',
     name: 'Dwarven Greaves',
-    description: 'Recharge -> Block 2. When Recharged as cost -> Gain Shield.',
-    shortDesc: 'R->Block 2\n+Shield on R',
+    description: 'Recharge -> Block 2. On Recharge Gain Shield.',
+    shortDesc: 'R->Block 2\nOn R: +Shield',
     subtype: 'heavy_armor',
     cardType: CardType.DEFENSE,
     costType: CostType.RECHARGE,
@@ -2220,6 +2470,24 @@ export function createWhiteWolfCloak() {
       new CardEffect('block', 2, TargetType.SELF),
       new CardEffect('clear_ice', 1, TargetType.SELF),
     ],
+    rarity: 'rare',
+  });
+}
+
+// Wolf Fang — relic mirroring PY create_wolf_teeth. The card has no
+// active effect when played; instead its Heroism trigger fires every
+// time it lands in the recharge pile (paid as cost or self-recharged
+// at end of turn). Effect handler lives in main.js (applyOnRechargeHeroism).
+export function createWolfFang() {
+  return new Card({
+    id: 'wolf_teeth',
+    name: 'Wolf Fang',
+    description: 'On Recharge: Gain 1 Heroism.',
+    shortDesc: 'On Recharge:\nHeroism +1',
+    subtype: 'relic',
+    cardType: CardType.RELIC,
+    costType: CostType.RECHARGE,
+    effects: [new CardEffect('on_recharge_heroism', 1, TargetType.SELF)],
     rarity: 'rare',
   });
 }

@@ -142,4 +142,5 @@ export const SUBTYPE_COLORS = Object.freeze({
   ally: '#64b4dc',          // Ally blue (matches in-combat ally tint)
   allies: '#64b4dc',        // Ally blue
   relic: '#c0c0dc',         // Silver
+  buff: '#5aa088',          // Encounter-buff teal
 });

@@ -48,9 +48,12 @@ When adding any of these, also update the listed file:
    `CARD_REGISTRY`) → add the creator to `ALL_EXTRA_CARD_CREATORS`
    (main.js ~11492). Currently used for `Goodberry` and the four
    power-choice cards (`Fire`, `Ice`, `Feline Form`, `Bear Form`).
-5. **A new player class power** → add the power id to
-   `PLAYER_POWER_IDS` (main.js ~11500) so the codex classifies it as
-   player-side (otherwise it's tagged `enemy`).
+5. **A new power (player or enemy)** → add the creator to
+   `ALL_POWER_CREATORS` (main.js, near the codex section). Without this
+   the power gets *source lines* but no codex entry. Then:
+   - If it's a **player class power**, also add the id to
+     `PLAYER_POWER_IDS` so the codex tags it player-side (default is
+     enemy).
 6. **A new player summon that no card has `previewCreature` for**
    (e.g. spawned only by an effect handler) → add an explicit
    `addCreature(new Creature({...}), 'Summoned by: <source>')` block in

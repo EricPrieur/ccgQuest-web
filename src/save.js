@@ -44,6 +44,9 @@ export function saveGame(state, saveName = '') {
     // rummage phase).
     kitchenChoiceMade: state.kitchenChoiceMade || null,
     prisonBarrelLooted: !!state.prisonBarrelLooted,
+    shownDeckTutorial: !!state.shownDeckTutorial,
+    calmGroveRaenaJoined: !!state.calmGroveRaenaJoined,
+    calmGroveBreadTaken: !!state.calmGroveBreadTaken,
     // Node states
     nodeStates: {},
   };

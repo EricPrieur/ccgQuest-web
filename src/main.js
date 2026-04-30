@@ -21,9 +21,13 @@ import {
   createBite, createToughHide, createSkreeeeeeeek,
   createBigBone, createLooseBone,
   createSlimeAppendage, createPartiallyDigestedBone, createCorrodedArmor, createPetSlimeCard, createSlimeJar,
-  createGuards, createMotivationalWhip, createHideInCorner,
+  createGuards, createHideInCorner,
   createDireRatBite, createDireRatScreech,
-  createSharpRock, createBoneWand, createBoneClub, createBoneMace, createTorch,
+  createSharpRock, createLargeBoulder, createLuckyPebble, createBoneWand, createBoneClub, createBoneMace, createBoneStaff, createTorch,
+  createSmallFaery, createRaenaCard, createLambasBread,
+  createBuffRunning, createBuffHiding, createBuffCalculating,
+  createBuffVialOfPoison, createBuffSlimeJar, createBuffScrollOfPotency,
+  createBuffAle, createBuffDwarvenBrew, createBuffRegrowth, createBuffElfReinforcements,
   createBadRations, createSturdyBoots,
   createChickenLeg, createWardensWhip,
   createWoodenSword, createLeatherArmor, createScraps,
@@ -38,7 +42,7 @@ import {
   createMultiShot, createGoodberries, createGoodberry, createTamedRat,
   createFireToken, createIceToken, createCatFormToken, createBearFormToken,
   createWrath, createRegrowth, createFeralSwipe,
-  createSpearThrow, createIcyBreath, createShieldBashEnemy,
+  createSpearThrow, createIcyBreath, createShieldBashEnemy, createZhostsBuckler,
   createWhiteClaw, createGreatclub, createQuarterstaff, createAle,
   createTravelRations, createBandages, createTravelersClothing, createSack,
   createSteelAxe, createSteelMace, createSteelSword, createSteelGreataxe,
@@ -58,19 +62,20 @@ import {
   createMagmaMephitSummonCard,
   createDefensiveFormation, createMimicBite, createBoneStorm,
   createThorbCard, createThorbUpgradedCard,
-  createDwarvenCrossbow, createDwarvenGreaves, createDwarvenBrew, createWhiteWolfCloak,
+  createDwarvenCrossbow, createDwarvenGreaves, createDwarvenBrew, createWhiteWolfCloak, createWolfFang,
 } from './cards.js';
 import { createPrisonCellMap, createMountainPathMap, createPlainsMap, createCaveMap, createRuinsBasinMap, createNorthQualibafMap, createFilibafForestMap, createTharnagMap, createVolcanoMap, createObsidianWastesMap, createTharnagInteriorMap, createEntryCorridorMap, createGateAreaMap, createHallOfAncestorsMap, createMonumentAlleyMap, createTombOfAncestorMap, createGrandStairsMap, createDwarvenThroneRoomMap, createMapRoomMap, createDeeperTunnelsMap, createArtisanDistrictMap } from './map.js';
-import { ENCOUNTER_REGISTRY, EncounterPhase } from './encounter.js';
+import { ENCOUNTER_REGISTRY, EncounterPhase, createEnteringPlainsEncounter } from './encounter.js';
 import { getCardArt, POWER_ART_MAP, preloadAllArt } from './card-art.js';
 import {
   Power, getClassPower,
   createCleave, createAimedShot, createElementalInfusion,
   createQuickStrike, createBattleFury, createFeralForm,
   createChunkyBite, createDireFury, createSplit, createArmorPower,
-  createKoboldBackup,
+  createKoboldBackup, createKoboldArmy, createAmalgam, createWolfPack,
 } from './power.js';
 import { saveToSlot, saveToAutoSlot, loadFromSlot, hasSave, hasAnySave, getSaveInfo, deleteSave, MANUAL_SLOT_COUNT, AUTO_SLOT_COUNT } from './save.js';
+import { initSound, playSound, playSoundFile, stopSoundFile, stopAllSounds, setSoundVolume, getSoundVolume, toggleSound, isSoundEnabled, playMusic, stopMusic, crossfadeMusic, fadeOutMusic, pauseMusic, resumeMusic, setMusicVolume, getMusicVolume, toggleMusic, isMusicEnabled, SOUND_PACKS, SOUND_MAP } from './sound.js';
 
 // === Canvas Setup ===
 const canvas = document.getElementById('game');
@@ -116,11 +121,16 @@ let enemyActions = [];
 let enemyActionIndex = 0;
 let abilityChoices = [];
 let shrineAbilityMode = false; // True when the ability-select screen is triggered by the Lost Shrine
+let levelUpAbilityMode = false; // True when ABILITY_SELECT is the level-up reward (Calm Grove etc.)
 
 // Map / Encounter state
 let currentMap = null;
 let currentEncounter = null;
 let encounterTextIndex = 0;
+// Tracks whether the in-progress encounter has hit a COMBAT phase yet.
+// Drives the post-encounter autosave: we only persist after fights, chapter
+// transitions, and level-ups — not after every text/choice exchange.
+let _encounterHadCombat = false;
 let encounterChoiceResult = null; // { text, effectType, effectValue } after choosing
 let visitedNodes = new Set();
 let gold = 0;
@@ -130,6 +140,12 @@ let backpack = []; // Cards not in deck, stored between encounters
 // fight=0%). Reset on new game / load.
 let kitchenChoiceMade = null; // 'attack' | 'talk' | 'sneak' | null
 let prisonBarrelLooted = false;
+// Calm Grove revisit guards. Once Raena's card is granted we never re-run
+// the intro/loot/level-up phases (so the player can't farm a second Raena
+// or a second level-up by walking away). Once the bread choice is taken
+// we skip the encounter entirely on revisit.
+let calmGroveRaenaJoined = false;
+let calmGroveBreadTaken = false;
 
 // Shop state
 let shopCards = []; // { card, price, creator }[]
@@ -217,6 +233,9 @@ let restMode = false; // true when inventory opened during level-up rest
 // Rest-mode deck-limit bonus: tracks the category the player chose to +1
 // during this rest session. null = not yet chosen. Cleared on exit.
 let _restBonusCat = null;
+// True while a level-up rest is in flight — drives the "+1 deck-limit
+// category" UI in the rest inventory (same UX as the chapter-1 transition).
+let _levelUpBonusPending = false;
 // Hit rects for deck-limit +/- buttons (filled during draw, tested on click).
 let _deckLimitBtnRects = [];
 // Rest-mode validation error shown above the Apply Rest button.
@@ -243,6 +262,10 @@ let debugMode = false;
 let runFast = false; // doubles map movement speed
 let optionsReturnState = null; // state to return to from options screen
 let previousState = null; // state before help/ingame menu
+// Separate from previousState — the codex can be opened from inside
+// the in-game menu, and stomping previousState would lose the menu's
+// own back-target. Restored when the codex closes.
+let codexReturnState = null;
 let saveLoadReturnState = null; // state to return to from save/load screens
 let helpScrollY = 0;
 let loadTab = 'manual'; // 'manual' or 'auto'
@@ -334,8 +357,13 @@ const COMBAT_BTN_AREA = { x: COMBAT_RIGHT_X, y: COMBAT_RIGHT_BTN_Y, w: COMBAT_RI
 // Special encounter state
 let killCount = 0; // for kill-count encounters (wolf pack, etc.)
 let killTarget = 0; // how many kills needed to win
-let survivalRounds = 0; // survive N rounds to win
+let survivalRounds = 0; // total rounds (mirrors Python survival_rounds_total) — used as the bar denominator
+let survivalRoundsRemaining = 0; // countdown — decremented at end of each enemy turn; victory at <= 0
 let enemyTurnNumber = 0;
+// Sentinel UX state — when the player tries to attack a non-sentinel while
+// at least one living sentinel guards the row, briefly flash the sentinel
+// creatures (gold pulse) and show a "Must target Sentinel" toast.
+let sentinelFlashTimer = 0;
 
 // Modal card state
 let modalCard = null; // Card being played in modal mode
@@ -366,6 +394,10 @@ let selectedAlly = null;
 let multiTargets = [];
 let multiMaxTargets = 0;
 let multiCardIndex = -1;
+// When set, the active MULTI_TARGETING is an ally swing (Raena etc.) instead
+// of a player card play. The picker UX is identical (axe-style), but the
+// resolver routes through resolveAllyAttack for each picked target.
+let multiAllyAttacker = null;
 
 // Feral Swipe state: multi-target where # targets = player shield
 let feralSwipeMode = false;
@@ -400,13 +432,15 @@ const CARD_REGISTRY = {
   goodberries: createGoodberries, tamed_rat: createTamedRat,
   wrath: createWrath, regrowth: createRegrowth, feral_swipe: createFeralSwipe,
   // Loot / Story
-  sharp_rock: createSharpRock, bone_wand: createBoneWand,
-  bone_club: createBoneClub, bone_mace: createBoneMace, torch: createTorch,
+  sharp_rock: createSharpRock, lucky_pebble: createLuckyPebble, bone_wand: createBoneWand,
+  small_faery: createSmallFaery, raena_card: createRaenaCard,
+  lambas_bread: createLambasBread,
+  bone_club: createBoneClub, bone_mace: createBoneMace, bone_staff: createBoneStaff, torch: createTorch,
   bad_rations: createBadRations, sturdy_boots: createSturdyBoots,
   chicken_leg: createChickenLeg, wardens_whip: createWardensWhip,
   partially_digested_bone: createPartiallyDigestedBone, corroded_armor: createCorrodedArmor,
   pet_slime: createPetSlimeCard, slime_jar: createSlimeJar,
-  white_claw: createWhiteClaw,
+  white_claw: createWhiteClaw, zhosts_buckler: createZhostsBuckler,
   // Shop cards
   travel_rations: createTravelRations, bandages: createBandages,
   travelers_clothing: createTravelersClothing, sack: createSack,
@@ -421,7 +455,7 @@ const CARD_REGISTRY = {
   thorb_card: createThorbCard, thorb_card_2: createThorbUpgradedCard,
   dwarven_crossbow: createDwarvenCrossbow, dwarven_tower_shield: createDwarvenTowerShield,
   dwarven_greaves: createDwarvenGreaves, dwarven_brew: createDwarvenBrew,
-  white_wolf_cloak: createWhiteWolfCloak,
+  white_wolf_cloak: createWhiteWolfCloak, wolf_teeth: createWolfFang,
 };
 
 // Loot tables: special loot IDs that pick one card from a weighted pool.
@@ -479,6 +513,30 @@ const LOOT_TABLES = {
     { creator: createSmallPouch,    weight: 1.0 },
     { creator: createChainShirt,    weight: 0.5 },
   ],
+  // Stone Giant loot — Sharp Rock with a 25 % chance of a Lucky Pebble.
+  // Mirrors Python's get_stone_giant_loot (pick one).
+  stone_giant_loot: [
+    { creator: createSharpRock,    weight: 1.0 },
+    { creator: createLuckyPebble,  weight: 0.25 },
+  ],
+  // General Zhost boss loot — 50/50 White Claw or Zhost's Buckler.
+  // Mirrors Python's get_general_zhost_loot.
+  general_zhost_loot: [
+    { creator: createWhiteClaw,     weight: 1.0 },
+    { creator: createZhostsBuckler, weight: 1.0 },
+  ],
+  // Bone Amalgam loot — pick-one, mirrors PY get_bone_amalgam_loot.
+  bone_amalgam_loot: [
+    { creator: createBoneClub,  weight: 1.0 },
+    { creator: createBoneMace,  weight: 1.0 },
+    { creator: createBoneWand,  weight: 0.5 },
+    { creator: createBoneStaff, weight: 0.5 },
+  ],
+  // Wolf Pack loot — pick-one, mirrors PY get_wolf_pack_loot.
+  wolf_pack_loot: [
+    { creator: createWhiteWolfCloak, weight: 1.0 },
+    { creator: createWolfFang,       weight: 0.25 },
+  ],
 };
 
 // Display names for loot tables (shown in the Codex tab + source lines).
@@ -489,6 +547,10 @@ const LOOT_TABLE_LABELS = {
   gear_barrel_loot:    'Prison Gear Barrel',
   prison_warden_loot:  'Prison Warden',
   kobold_patrol_loot:  'Kobold Patrol',
+  stone_giant_loot:    'Stone Giant',
+  general_zhost_loot:  'General Zhost',
+  bone_amalgam_loot:   'Bone Amalgam',
+  wolf_pack_loot:      'Wolf Pack',
 };
 
 // Per-table notes shown under the title in the Loot Tables tab.
@@ -499,6 +561,10 @@ const LOOT_TABLE_NOTES = {
   gear_barrel_loot:    'Snatched from the prison warden\'s barrel of confiscated gear.',
   prison_warden_loot:  'Looted from the warden\'s body after the prison-entrance fight.',
   kobold_patrol_loot:  'Dropped after defeating Kobold Patrol encounters.',
+  stone_giant_loot:    'Survived after the Stone Giant fight. Pick-one: Sharp Rock or (rarely) Lucky Pebble.',
+  general_zhost_loot:  'Dropped after defeating General Zhost — 50/50 White Claw or Zhost\'s Buckler.',
+  bone_amalgam_loot:   'Dropped after defeating the Bone Amalgam. Pick-one bone weapon.',
+  wolf_pack_loot:      'Dropped after surviving the Wolf Blizzard (kill 10 wolves).',
 };
 
 function rollLootTable(id) {
@@ -547,6 +613,7 @@ async function loadAssets() {
     loadImage('menu_bg', `${BASE}assets/Backgrounds/MainScreen.jpg`),
     loadImage('char_select_bg', `${BASE}assets/Backgrounds/CharacterSelection.jpg`),
     loadImage('combat_bg', `${BASE}assets/Backgrounds/PrisonBackground.jpg`),
+    loadImage('game_end_bg', `${BASE}assets/Backgrounds/GameEnd.png`),
     loadImage('map_prison_cell', `${BASE}assets/Maps/PrisonCellMap.jpg`),
     loadImage('map_sewers', `${BASE}assets/Maps/SewerMap.jpg`),
     loadImage('map_upper_prison', `${BASE}assets/Maps/KoboldCastlePrisonMap.jpg`),
@@ -784,6 +851,11 @@ canvas.addEventListener('mouseup', (e) => {
 });
 
 canvas.addEventListener('click', (e) => {
+  initSound(); // unlock AudioContext on first user gesture
+  // Kick off the menu/exploration music loop on the first click that
+  // unlocks audio. stopMusic() runs at the start of the first combat,
+  // so this only fires while we're still in the pre-combat phase.
+  startMenuMusicIfNeeded();
   if (suppressNextClick) {
     suppressNextClick = false;
     return;
@@ -845,7 +917,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 // === Utility ===
-function addLog(text, color = Colors.WHITE, card = null) {
+function addLog(text, color = Colors.WHITE, card = null, buff = null, creature = null) {
   // Effect sub-lines (indented with two spaces) get a → prefix.
   // The arrow is rendered in orange and the rest in the entry color
   // (defaults to white, but caller may pass a specific color to override).
@@ -874,7 +946,7 @@ function addLog(text, color = Colors.WHITE, card = null) {
       arrow = true;
     }
   }
-  combatLog.push({ text, color, card, arrow });
+  combatLog.push({ text, color, card, buff, creature, arrow });
   if (combatLog.length > 200) combatLog.shift();
   // Auto-pin to bottom when new entries arrive
   combatLogScrollY = 0;
@@ -1199,28 +1271,49 @@ function handleKeyDown(key, event) {
       // ESC = Back button -> character select (only at game start, not mid-game level-up)
       if (!player) state = GameState.CHARACTER_SELECT;
     } else if (state === GameState.CODEX) {
-      state = previousState || GameState.MAP;
+      state = codexReturnState || GameState.MAP;
+      codexReturnState = null;
+      resumeMusic();
     } else if (state === GameState.HELP_SCREEN) {
       state = previousState || GameState.MAP;
     } else if (state === GameState.INGAME_MENU) {
-      // Close the menu (resume)
+      playSound('book_close');
       state = previousState || GameState.MAP;
     } else if (state === GameState.OPTIONS_SCREEN) {
+      playSound('book_close');
       state = optionsReturnState || GameState.MENU;
     } else if (state === GameState.SAVE_GAME || state === GameState.LOAD_GAME) {
-      cancelSaveEditing(); // drop any in-progress name edit
+      playSound('book_close');
+      cancelSaveEditing();
       state = saveLoadReturnState || (player ? GameState.MAP : GameState.MENU);
     } else if (state === GameState.SHOP) {
       state = GameState.MAP;
     } else if (state === GameState.INVENTORY) {
-      // Return to where we came from (combat, map, rest mode, or
-      // chapter-end flow). Route through exitInventory so the
-      // pendingChapter2Transition → Chapter 2 title-card hop fires.
+      // Rest mode is a hard gate — you have to click the explicit Apply
+      // Rest button to leave (which runs validateRestDeck). ESC should
+      // never sneak past it, even in debug mode where validation is
+      // otherwise skipped.
+      if (restMode) {
+        _restErrorMsg = 'Click Apply Rest to leave deck rebalancing.';
+        _restErrorTimer = 3500;
+        return;
+      }
+      // Return to where we came from (combat, map, encounter, etc.).
+      // Route through exitInventory so the pendingChapter2Transition
+      // → Chapter 2 title-card hop fires.
       exitInventory();
     } else if (state === GameState.COMBAT || state === GameState.MAP || state === GameState.ENCOUNTER_TEXT || state === GameState.ENCOUNTER_CHOICE) {
       // Open in-game menu
+      playSound('book_open');
       previousState = state;
       state = GameState.INGAME_MENU;
+    } else if (state === GameState.MENU) {
+      // ESC on the main menu opens the Options panel — same as the
+      // dedicated Options button but lets the player adjust audio
+      // before clicking into a new game.
+      playSound('book_open');
+      optionsReturnState = GameState.MENU;
+      state = GameState.OPTIONS_SCREEN;
     }
   }
   if (key === 's' || key === 'S') {
@@ -1248,9 +1341,11 @@ function handleKeyDown(key, event) {
                        state === GameState.ENCOUNTER_CHOICE ||
                        state === GameState.ENCOUNTER_LOOT;
     if (canOpenInv) {
+      playSound('book_open');
       previousState = state;
       state = GameState.INVENTORY;
     } else if (state === GameState.INVENTORY && !restMode) {
+      playSound('book_close');
       exitInventory();
     }
   }
@@ -1260,9 +1355,11 @@ function handleKeyDown(key, event) {
   }
   if (key === 'h' || key === 'H') {
     if (state === GameState.HELP_SCREEN) {
+      playSound('book_close');
       state = previousState || GameState.MAP;
     } else if (state === GameState.COMBAT || state === GameState.MAP ||
                state === GameState.MENU || state === GameState.CHARACTER_SELECT) {
+      playSound('book_open');
       previousState = state;
       helpScrollY = 0;
       state = GameState.HELP_SCREEN;
@@ -1271,12 +1368,23 @@ function handleKeyDown(key, event) {
   // Codex (debug-only): browse every card / power / character at any size.
   if ((key === 'c' || key === 'C') && debugMode && !event?.ctrlKey) {
     if (state === GameState.CODEX) {
-      state = previousState || GameState.MAP;
+      // Restore the saved return state and resume game audio. Default
+      // to MAP if somehow nothing was stashed.
+      state = codexReturnState || GameState.MAP;
+      codexReturnState = null;
+      resumeMusic();
     } else {
-      previousState = state;
+      codexReturnState = state;
       codexScrollY = 0;
       codexSelectedCard = null;
       state = GameState.CODEX;
+      // Silence any in-flight SFX (combat sounds, music previews from
+      // the prior tab, etc.) and pause the music bed so the codex is
+      // a quiet workspace. Also dismiss any active toast so prompts
+      // like "Play defense or pass" don't hover over the codex.
+      stopAllSounds();
+      pauseMusic();
+      hideToast();
     }
   }
   // Arrow-key map navigation: pick the accessible connected node whose path
@@ -1299,8 +1407,89 @@ const menuButtons = [];
 
 function handleMenuClick(x, y) {
   for (const btn of menuButtons) {
-    if (hitTest(x, y, btn)) { btn.action(); return; }
+    if (hitTest(x, y, btn)) { playSound('click'); btn.action(); return; }
   }
+}
+
+// Pre-combat menu music + scene-driven ambience. The heroic theme
+// plays through menu/character-select. Once chapter 1 begins the
+// prison ambience takes over (via crossfadeMusic at startGameWithAbility).
+// As the player moves between map areas, updateMusicForCurrentScene
+// crossfades to the right track for that area.
+let _menuMusicStarted = false;
+let _hasEnteredCombat = false;
+let _lastMusicArea = null; // map area currently bedded under the music
+function startMenuMusicIfNeeded() {
+  if (_menuMusicStarted) return;
+  if (_hasEnteredCombat) return;
+  _menuMusicStarted = true;
+  playMusic('Music/music_heroic_01');
+}
+
+// Map area → looping track. Returns null when the area has no music
+// wired (silence). Add new entries here as more zones get ambience.
+const MUSIC_FOR_AREA = {
+  prison_cell:   'Music/ambience_prison_01',
+  upper_prison:  'Music/ambience_prison_01',
+  sewers:        'Music/ambience_cave_water_01',
+  mountain_path: 'Music/ambience_mountain_wind_01',
+  // Plains of No Hope — same howling mountain wind continues across the
+  // chapter 3 map until the player descends into the cave.
+  plains:        'Music/ambience_mountain_wind_01',
+  // Cave interior — dedicated dripping/flowing water bed for the whole
+  // cave map (entrance / ledge / river landing / underground river).
+  cave:          'Music/ambience_cave_dripping_01',
+};
+
+// Static music wirings that aren't keyed to area/node — used by the
+// codex to show where each track plays. Keys are pack/file paths,
+// values are arrays of human-readable role tags. Anything in here
+// shows up in the codex Sound tab "Wired To" column as `tag:role`.
+const MUSIC_TAGS = {
+  'Music/music_heroic_01': ['title', 'chapter-end / level-up'],
+  'Music/music_tension_01': ['boss: General Zhost (army + boss)'],
+};
+
+// Per-node overrides — win over MUSIC_FOR_AREA for specific nodes
+// that have their own atmosphere (Lost Shrine drone, Abandoned Camp
+// crackling fire, etc.). Leaving the node lets the area track resume.
+const MUSIC_FOR_NODE = {
+  lost_shrine:  'Music/ambience_shrine_drone_01',
+  // 'deeper_sewer' is the node id behind the "Abandoned Camp" — a fire
+  // crackles while the player rests/searches there.
+  deeper_sewer: 'Music/ambience_campfire_01',
+  // Calm Stream — gentle mountain creek replacing the howling wind.
+  calm_stream:  'Music/ambience_mountain_creek_01',
+  // General Zhost — after the fight the node plays forest ambience until
+  // the player moves on to the plains.
+  general_zhost: 'Music/ambience_forest_01',
+  // Calm Grove — Raena's grove also sits under forest cover.
+  calm_grove:    'Music/ambience_forest_01',
+};
+
+let _lastMusicNodeId = null;
+function updateMusicForCurrentScene() {
+  if (!currentMap) return;
+  const node = currentMap.getCurrentNode && currentMap.getCurrentNode();
+  const area = node && node.mapArea ? node.mapArea : null;
+  const nodeId = node && node.id ? node.id : null;
+  // Per-node override takes precedence — short-circuit out of the
+  // area system so leaving the node correctly falls back.
+  const nodeTrack = MUSIC_FOR_NODE[nodeId];
+  if (nodeTrack) {
+    if (_lastMusicNodeId !== nodeId) {
+      _lastMusicNodeId = nodeId;
+      _lastMusicArea = null; // force area re-evaluation when we leave
+      crossfadeMusic(nodeTrack, 1500, 2500);
+    }
+    return;
+  }
+  _lastMusicNodeId = null;
+  if (!area || area === _lastMusicArea) return;
+  _lastMusicArea = area;
+  const track = MUSIC_FOR_AREA[area];
+  if (track) crossfadeMusic(track, 1500, 2500);
+  else stopMusic();
 }
 
 function startNewGame() {
@@ -1311,6 +1500,13 @@ function startNewGame() {
   // from a previous save-state snapshot.
   kitchenChoiceMade = null;
   prisonBarrelLooted = false;
+  shownDeckTutorial = false;
+  calmGroveRaenaJoined = false;
+  calmGroveBreadTaken = false;
+  // Re-arm the menu music for the next run.
+  _menuMusicStarted = false;
+  _hasEnteredCombat = false;
+  startMenuMusicIfNeeded();
   state = GameState.CHARACTER_SELECT;
 }
 
@@ -1388,6 +1584,7 @@ function drawMenu() {
   const optW = 200, optH = 50;
   const optX = 20, optY = SCREEN_HEIGHT - optH - 20;
   drawStyledButton(optX, optY, optW, optH, 'Options', () => {
+    playSound('book_open');
     optionsReturnState = GameState.MENU;
     state = GameState.OPTIONS_SCREEN;
   }, 'large', 18);
@@ -1395,7 +1592,7 @@ function drawMenu() {
   // Help icon button (bottom-right, same icon as combat H button)
   const helpRect = { x: SCREEN_WIDTH - 52, y: SCREEN_HEIGHT - 52, w: 36, h: 36 };
   drawIconButton(helpRect, 'icon_help', () => {
-    previousState = state; helpScrollY = 0; state = GameState.HELP_SCREEN;
+    playSound('book_open'); previousState = state; helpScrollY = 0; state = GameState.HELP_SCREEN;
   }, 'H');
 
   ctx.textAlign = 'left';
@@ -1518,6 +1715,7 @@ function handleCharSelectClick(x, y) {
 }
 
 function selectClass(className) {
+  playSound('click');
   selectedClass = className;
   abilityChoices = getAbilityChoices(className, 3);
   state = GameState.ABILITY_SELECT;
@@ -1547,6 +1745,15 @@ function startGameWithAbility(ability) {
   visitedNodes = new Set();
   gold = 0;
   backpack = [];
+
+  // Crossfade out the heroic main theme into the prison ambience as
+  // the chapter intro begins. Triggered here (not inside the title
+  // card callback) so the fade-out runs DURING the title card and the
+  // ambience is already breathing by the time gameplay starts.
+  // Stamp _lastMusicArea so the first node-step (mapArea === 'prison_cell')
+  // doesn't re-trigger another crossfade to the same track.
+  crossfadeMusic('Music/ambience_prison_01', 1500, 2500);
+  _lastMusicArea = 'prison_cell';
 
   // Show title card then start first encounter
   showTitleCard('Part 1: The White Claw', '', () => {
@@ -1695,7 +1902,7 @@ function drawCharacterSelect() {
   // Help icon button (bottom-right, same icon as combat H button)
   const helpRect = { x: SCREEN_WIDTH - 52, y: SCREEN_HEIGHT - 52, w: 36, h: 36 };
   drawIconButton(helpRect, 'icon_help', () => {
-    previousState = state; helpScrollY = 0; state = GameState.HELP_SCREEN;
+    playSound('book_open'); previousState = state; helpScrollY = 0; state = GameState.HELP_SCREEN;
   }, 'H');
 
   ctx.textAlign = 'left';
@@ -1733,6 +1940,7 @@ function handleAbilitySelectClick(x, y) {
   const rects = getAbilityCardRects();
   for (let i = 0; i < rects.length; i++) {
     if (hitTest(x, y, rects[i])) {
+      playSound('click');
       if (shrineAbilityMode) {
         // Lost Shrine: add the chosen card to master deck and place a copy in hand
         // (overflowing to the top of the draw pile if the hand is full).
@@ -1749,6 +1957,11 @@ function handleAbilitySelectClick(x, y) {
         shrineAbilityMode = false;
         abilityChoices = [];
         state = GameState.MAP;
+        // The player is leaving the shrine — clear the per-node music
+        // override and reapply the area's track (sewers cave water).
+        _lastMusicNodeId = null;
+        _lastMusicArea = null;
+        updateMusicForCurrentScene();
         autosaveNow();
         return;
       }
@@ -1757,6 +1970,10 @@ function handleAbilitySelectClick(x, y) {
         const ability = abilityChoices[i];
         player.deck.addCard(ability);
         player.level++;
+        levelUpAbilityMode = false;
+        // Every level-up grants a +1 deck-limit category pick during the
+        // upcoming rest (same UX as the chapter-1 transition).
+        _levelUpBonusPending = true;
         // Rebalance: merge everything, heal all, shuffle, draw fresh hand
         player.deck.rebalance(getPlayerHandSize(), MAX_HAND_SIZE);
         addLog(`Level Up! Gained ${ability.name}. Level ${player.level}.`, Colors.GOLD);
@@ -1804,17 +2021,22 @@ function drawAbilitySelect() {
   ctx.textAlign = 'center';
   let titleText;
   if (shrineAbilityMode) titleText = "The Shrine's Blessing";
-  else if (pendingChapter2Transition) titleText = 'Level Up! Choose a New Ability';
+  else if (pendingChapter2Transition || levelUpAbilityMode) titleText = 'Level Up! Choose a New Ability';
   else titleText = 'Choose Your Starting Ability';
   ctx.fillText(titleText, SCREEN_WIDTH / 2, 80);
 
-  ctx.fillStyle = '#e0e0e0';
-  ctx.font = '20px sans-serif';
-  let subtitleText;
-  if (shrineAbilityMode) subtitleText = `${selectedClass} — Choose one card. It joins your hand immediately.`;
-  else if (pendingChapter2Transition) subtitleText = `${selectedClass} — Pick a new ability to add to your deck`;
-  else subtitleText = `${selectedClass} — Pick one ability card to add to your deck`;
-  ctx.fillText(subtitleText, SCREEN_WIDTH / 2, 120);
+  // Subtitle is only shown for the shrine and the initial character-creation
+  // pick. Level-up flows (chapter transitions and Calm Grove / mid-game
+  // level-ups) skip it — the title already conveys "pick a new ability".
+  if (shrineAbilityMode) {
+    ctx.fillStyle = '#e0e0e0';
+    ctx.font = '20px sans-serif';
+    ctx.fillText(`${selectedClass} — Choose one card. It joins your hand immediately.`, SCREEN_WIDTH / 2, 120);
+  } else if (!pendingChapter2Transition && !levelUpAbilityMode) {
+    ctx.fillStyle = '#e0e0e0';
+    ctx.font = '20px sans-serif';
+    ctx.fillText(`${selectedClass} — Pick one ability card to add to your deck`, SCREEN_WIDTH / 2, 120);
+  }
 
   const rects = getAbilityCardRects();
   let hoveredAbilityIdx = -1;
@@ -1861,9 +2083,10 @@ function drawAbilitySelect() {
     }
   }
 
-  // Back button (matches character select style) — hidden in shrine mode
-  // and in the chapter-end level-up flow (mandatory pick).
-  if (!shrineAbilityMode && !pendingChapter2Transition) {
+  // Back button (matches character select style) — only on the initial
+  // character-creation pick. Shrine + every level-up flow are mandatory:
+  // the player must commit to one ability before continuing.
+  if (!shrineAbilityMode && !pendingChapter2Transition && !levelUpAbilityMode) {
     drawStyledButton(40, SCREEN_HEIGHT - 100, 200, 70, '< Back', () => { state = GameState.CHARACTER_SELECT; }, 'large', 22);
   }
 
@@ -1988,7 +2211,6 @@ function moveToMapNode(node) {
   const duration = Math.max(150, Math.min(1200, dist * 1.8 * speedMul));
 
   if (node.isDone && !node.canRevisit) {
-    // Silent move (done node, possibly passthrough).
     const target = node.passthroughTo ? currentMap.getNode(node.passthroughTo) : null;
     if (passthroughEnabledFor(node) && target && !target.isLocked && node.passthroughTo !== current.id) {
       // Passthrough: animate to the intermediate node, then instantly hop
@@ -2021,9 +2243,21 @@ function moveToMapNode(node) {
 function updateMapMoveAnim(dt) {
   if (!mapMoveAnim) return;
   mapMoveAnim.elapsed += dt;
+  // Repeating footstep sounds every ~250ms during the walk.
+  const stepInterval = 250;
+  if (!mapMoveAnim._nextStep) mapMoveAnim._nextStep = 0;
+  if (mapMoveAnim.elapsed >= mapMoveAnim._nextStep) {
+    playSound('footstep', 0.5);
+    mapMoveAnim._nextStep += stepInterval;
+  }
   if (mapMoveAnim.elapsed >= mapMoveAnim.duration) {
-    // Animation complete — commit the move.
     currentMap.currentNodeId = mapMoveAnim.destNodeId;
+    // Refresh ambience for the new node — startNodeEncounter does this
+    // for encounter nodes, but plain map walks (passthrough teleports,
+    // already-done one-shot nodes) bypass it. Without this call the
+    // music stays bedded under the previous node (e.g. campfire still
+    // playing after leaving Abandoned Camp).
+    updateMusicForCurrentScene();
     const cb = mapMoveAnim.callback;
     mapMoveAnim = null;
     if (cb) cb();
@@ -2045,6 +2279,7 @@ function handleMapClick(x, y) {
         const target = currentMap.getNode(node.passthroughTo);
         if (target && !target.isLocked) {
           currentMap.currentNodeId = node.passthroughTo;
+          updateMusicForCurrentScene();
         }
       }
       return;
@@ -2072,7 +2307,8 @@ const ENCOUNTER_BG_MAP = {
   // Mountain
   mountain_camp: 'bg_leaving_prison', mountain_pass: 'bg_mountain_pass',
   calm_stream: 'bg_small_stream', general_zhost: 'bg_kobold_bridge',
-  calm_grove: 'bg_calm_grove', to_the_plains: 'bg_mountain_overlook',
+  calm_grove: 'bg_calm_grove', to_the_plains: 'bg_plains',
+  entering_plains: 'bg_plains',
   // Plains / Cave
   bone_valley: 'bg_bone_valley', wolf_blizzard: 'bg_wolf_blizzard',
   cave_entrance: 'bg_cave_entrance', cave_ledge: 'bg_the_ledge',
@@ -2119,6 +2355,7 @@ const ENCOUNTER_BG_FILES = {
   bg_mountain_pass: 'MountainPass.jpg', bg_small_stream: 'SmallStream.jpg',
   bg_kobold_bridge: 'KoboldBridgeBackground.jpg', bg_calm_grove: 'CalmGrove.jpg',
   bg_mountain_overlook: 'MountainOverlook.jpg',
+  bg_plains: 'PlainsOfNoHopeBackground.jpg',
   bg_bone_valley: 'BoneValley.jpg', bg_wolf_blizzard: 'WolfInBlizzardBackground.jpg',
   bg_cave_entrance: 'CaveEntrance.jpg', bg_the_ledge: 'TheLedge.jpg',
   bg_cave_river: 'CaveRiverBackground.jpg', bg_cave_waterfall: 'CaveWaterfall.jpg',
@@ -2183,12 +2420,17 @@ function transitionToMap(mapCreator, startNode) {
   currentMap = mapCreator();
   visitedNodes = new Set();
   startNodeEncounter(startNode);
+  // Chapter / area transitions are a natural autosave checkpoint.
+  autosaveNow();
 }
 
 function startNodeEncounter(nodeId) {
   currentMap.currentNodeId = nodeId;
   const node = currentMap.getNode(nodeId);
   visitedNodes.add(nodeId);
+  // Switch ambience based on the area we just stepped into. No-op when
+  // the area hasn't changed.
+  updateMusicForCurrentScene();
 
   // Upward Passage skip: once the player has made any Kitchen choice, they
   // already know where this passage leads — don't make them sit through the
@@ -2215,19 +2457,43 @@ function startNodeEncounter(nodeId) {
     const cc = currentMap.getNode('corner_cell');
     const thorbRescued = !!(cc && cc.isDone);
     currentEncounter = factory(thorbRescued);
+  } else if (node.encounterId === 'calm_grove') {
+    // Bread already taken on a prior visit → no encounter at all (matches
+    // PY: just walk in and out).
+    if (calmGroveBreadTaken) {
+      currentMap.completeCurrentNode();
+      state = GameState.MAP;
+      return;
+    }
+    currentEncounter = factory();
+    // Raena already joined on a prior visit → skip the intro text and the
+    // loot phase (which is what grants Raena + triggers the level-up).
+    // Jump straight to the bread choice phase.
+    if (calmGroveRaenaJoined && currentEncounter.phases) {
+      const choiceIdx = currentEncounter.phases.findIndex(
+        p => p.phaseType === EncounterPhase.CHOICE
+      );
+      if (choiceIdx >= 0) currentEncounter.currentPhaseIndex = choiceIdx;
+    }
   } else {
     currentEncounter = factory();
   }
 
-  // Dormant-node check: if the node has persisted exhaustedChoices from a
-  // previous visit (e.g. Abandoned Camp where the player already rested and
-  // searched), and every non-leave choice in the encounter is now exhausted,
-  // skip the dialog entirely and mark the node done. This happens on reload
-  // when the save restored exhaustedChoices but the encounter re-instantiates.
+  // Boss music for the General Zhost encounter starts as soon as the
+  // intro dialog opens — overrides the node's forest ambience for the
+  // duration of the fight. Reset _lastMusicNodeId so when the encounter
+  // ends and we return to MAP, updateMusicForCurrentScene reapplies the
+  // forest ambience.
+  if (node.encounterId === 'general_zhost') {
+    crossfadeMusic('Music/music_tension_01', 1500, 2500);
+    _lastMusicArea = null;
+    _lastMusicNodeId = null;
+  }
+
+  // Re-apply persisted exhaustedChoices to the freshly-built encounter so
+  // already-used options stay grayed out across visits / saves.
   const persisted = Array.isArray(node.exhaustedChoices) ? node.exhaustedChoices : [];
   if (persisted.length > 0 && currentEncounter.phases) {
-    // Apply persisted exhausted state to every phase's choices up front so
-    // the CHOICE phase logic can detect "all done" on first evaluation.
     for (const phase of currentEncounter.phases) {
       if (!phase.choices) continue;
       for (const c of phase.choices) {
@@ -2235,9 +2501,10 @@ function startNodeEncounter(nodeId) {
         if (key && persisted.includes(key)) c.exhausted = true;
       }
     }
-    // Check if the encounter has any CHOICE phase where all repeat choices
-    // are already exhausted — if so, deactivate the node entirely.
-    const hasDormantChoice = currentEncounter.phases.some(p =>
+    // Revisit after every repeat option has been used → the encounter has
+    // nothing new to offer. Skip the intro/choice dialog entirely and run
+    // the normal completion flow (idempotent: keeps unlocks intact).
+    const allRepeatsDone = currentEncounter.phases.some(p =>
       p.phaseType === EncounterPhase.CHOICE &&
       Array.isArray(p.choices) &&
       (() => {
@@ -2245,9 +2512,8 @@ function startNodeEncounter(nodeId) {
         return repeats.length > 0 && repeats.every(c => c.exhausted);
       })()
     );
-    if (hasDormantChoice) {
-      node.isDone = true;
-      node.canRevisit = false;
+    if (allRepeatsDone && node.isDone) {
+      currentMap.completeCurrentNode();
       currentEncounter = null;
       state = GameState.MAP;
       return;
@@ -2256,6 +2522,7 @@ function startNodeEncounter(nodeId) {
 
   encounterTextIndex = 0;
   encounterChoiceResult = null;
+  _encounterHadCombat = false;
   advanceEncounterPhase();
 }
 
@@ -2267,11 +2534,30 @@ function advanceEncounterPhase() {
 
     // Check for map transitions based on completed node
     const nodeId = currentMap.currentNodeId;
+    // Wolf Blizzard → Cave (mirrors PY: encounter ends with the party
+    // forced into the cave; auto-jump to the cave map and start the
+    // entrance encounter).
+    if (nodeId === 'wolf_blizzard') {
+      currentMap = createCaveMap();
+      visitedNodes = new Set();
+      visitedNodes.add(currentMap.currentNodeId);
+      startNodeEncounter('cave_entrance');
+      return;
+    }
     if (nodeId === 'to_the_plains') {
       showTitleCard('Chapter 3: The Plains of No Hope', '', () => {
         currentMap = createPlainsMap();
         visitedNodes = new Set();
-        startNodeEncounter('plains_of_no_hope');
+        visitedNodes.add(currentMap.currentNodeId);
+        // Narrative bridge between the title card and the map — mirrors
+        // PY's chapter_end_text. Runs as a transient TEXT-only encounter
+        // anchored to the current node (plains_of_no_hope), which is then
+        // marked done on completion (canRevisit keeps it accessible).
+        currentEncounter = createEnteringPlainsEncounter();
+        encounterTextIndex = 0;
+        encounterChoiceResult = null;
+        _encounterHadCombat = false;
+        advanceEncounterPhase();
       });
       return;
     }
@@ -2332,8 +2618,15 @@ function advanceEncounterPhase() {
     }
 
     state = GameState.MAP;
-    // Autosave after the full encounter (combat + loot + all dialogs) is done
-    autosaveNow();
+    // Reapply node/area music. Most encounters don't move music away
+    // from the node, but a few (General Zhost boss music) do — this
+    // catches them and crossfades back to the node's ambience.
+    updateMusicForCurrentScene();
+    // Autosave only when this encounter actually contained a fight. Pure
+    // text/choice encounters (Calm Stream, etc.) skip the save — their
+    // exhausted-choice persistence is fine without a snapshot.
+    if (_encounterHadCombat) autosaveNow();
+    _encounterHadCombat = false;
     return;
   }
 
@@ -2373,7 +2666,6 @@ function advanceEncounterPhase() {
             node.canRevisit = false;
             currentEncounter = null;
             state = GameState.MAP;
-            autosaveNow();
             return;
           }
         }
@@ -2381,6 +2673,8 @@ function advanceEncounterPhase() {
       state = GameState.ENCOUNTER_CHOICE;
       break;
     case EncounterPhase.COMBAT:
+      // Mark that this encounter contains combat — autosave on map-return.
+      _encounterHadCombat = true;
       setupEnemyForCombat(phase.enemyId);
       startCombat();
       break;
@@ -2428,6 +2722,16 @@ function advanceEncounterPhase() {
         }
       }
       phase._lootGoldAmount = lootGoldAmount;
+      if (lootGoldAmount + luckyFindBonus > 0 || phase._lootedCards.length > 0) {
+        playSound('gold');
+      }
+      // Calm Grove: mark Raena as joined the moment her card is granted,
+      // so a revisit (before bread is taken) skips the intro/loot/level-up.
+      if (currentEncounter && currentEncounter.id === 'calm_grove') {
+        if (phase._lootedCards.some(c => c && c.id === 'raena_card')) {
+          calmGroveRaenaJoined = true;
+        }
+      }
       // Check for level-up trigger
       if (phase.triggersLevelUp) {
         pendingLevelUp = true;
@@ -2481,7 +2785,9 @@ function setupEnemyForCombat(enemyId) {
       enemy.deck = new Deck();
       enemy.shield = 4;
       for (let i = 0; i < 6; i++) enemy.deck.addCard(createGuards());
-      for (let i = 0; i < 6; i++) enemy.deck.addCard(createMotivationalWhip());
+      // Warden's Whip is the single canonical warden whip — same card
+      // the player loots after the fight (1 dmg + 1 ally heroism).
+      for (let i = 0; i < 6; i++) enemy.deck.addCard(createWardensWhip());
       for (let i = 0; i < 4; i++) enemy.deck.addCard(createHideInCorner());
       // 2 guard creatures
       enemy.addCreature(new Creature({ name: 'Kobold Guard', attack: 2, maxHp: 1, shield: 1 }));
@@ -2529,7 +2835,10 @@ function setupEnemyForCombat(enemyId) {
     enemy.deck = new Deck();
     for (let i = 0; i < 5; i++) enemy.deck.addCard(createSpearThrow());
     for (let i = 0; i < 5; i++) enemy.deck.addCard(createIcyBreath());
-    for (let i = 0; i < 5; i++) enemy.deck.addCard(createShieldBashEnemy());
+    // Shield Bash and Kobold Shield are mechanically identical (1 dmg
+    // + 1 shield in PY). Use the player-facing Kobold Shield card so
+    // it's the single canonical version.
+    for (let i = 0; i < 5; i++) enemy.deck.addCard(createKoboldShield());
     // Kobold Backup: passive, summons 1 Kobold Guard at start of each
     // enemy turn. Matches PY's create_kobold_backup() power.
     enemy.addPower(createKoboldBackup());
@@ -2549,7 +2858,15 @@ function setupEnemyForCombat(enemyId) {
     for (let i = 0; i < 6; i++) enemy.deck.addCard(createBigBone());
     for (let i = 0; i < 4; i++) enemy.deck.addCard(createLooseBone());
     for (let i = 0; i < 4; i++) enemy.deck.addCard(createBoneStorm());
-    enemy.addCreature(new Creature({ name: 'Bone Amalgam', attack: 3, maxHp: 3 }));
+    enemy.addPower(createArmorPower(1));
+    enemy.addPower(createAmalgam());
+    // Starting Bone Amalgam ally — summoning sickness on round 1 (PY parity).
+    const starting = new Creature({
+      name: 'Bone Amalgam', attack: 3, maxHp: 3,
+      description: 'A mass of fused bones.',
+    });
+    starting.exhausted = true;
+    enemy.addCreature(starting);
   };
   ENEMY_HAND_SIZE.bone_amalgam = 2;
 
@@ -2621,7 +2938,7 @@ function setupEnemyForCombat(enemyId) {
     enemy = new Character('Kobold Drake Rider');
     enemy.deck = new Deck();
     for (let i = 0; i < 5; i++) enemy.deck.addCard(createSpearThrow());
-    for (let i = 0; i < 6; i++) enemy.deck.addCard(createShieldBashEnemy());
+    for (let i = 0; i < 6; i++) enemy.deck.addCard(createKoboldShield());
     for (let i = 0; i < 5; i++) enemy.deck.addCard(createDrakeRiderCharge());
     for (let i = 0; i < 4; i++) enemy.deck.addCard(createChainShirt());
     enemy.addCreature(new Creature({ name: 'Frost Drake', attack: 3, maxHp: 8, iceAttack: 1, armor: 1 }));
@@ -2645,40 +2962,91 @@ function setupEnemyForCombat(enemyId) {
   ENEMY_DECKS.general_zhost = () => {
     enemy = new Character("General Zhost's Army");
     enemy.deck = new Deck();
+    // Mirrors PY: 10 Defensive Formation + 10 Warden's Whip, kobold_army
+    // power, 4 Guards + 2 Slingers + 1 Dragonshield, kill 20 to win.
     for (let i = 0; i < 10; i++) enemy.deck.addCard(createDefensiveFormation());
-    for (let i = 0; i < 10; i++) enemy.deck.addCard(createMotivationalWhip());
+    for (let i = 0; i < 10; i++) enemy.deck.addCard(createWardensWhip());
     enemy._invulnerable = true;
-    enemy._killTarget = 10;
+    enemy._killTarget = 20;
+    enemy.addPower(createKoboldArmy());
     for (let i = 0; i < 4; i++) {
       enemy.addCreature(new Creature({ name: 'Kobold Guard', attack: 2, maxHp: 1, shield: 1 }));
     }
     for (let i = 0; i < 2; i++) {
       enemy.addCreature(new Creature({ name: 'Kobold Slinger', attack: 2, maxHp: 1, fireAttack: 1 }));
     }
-    enemy.addCreature(new Creature({ name: 'Kobold Dragonshield', attack: 2, maxHp: 2, shield: 2, sentinel: true }));
+    enemy.addCreature(new Creature({
+      name: 'Kobold Dragonshield', attack: 2, maxHp: 2, shield: 2, sentinel: true,
+      description: 'Sentinel: Must be targeted first.',
+    }));
+    // Player allies — 5 Elf Warriors + Raena (companion) join the fight.
+    // Per PY, they arrive with summoning sickness (default exhausted=true /
+    // justSummoned=true), so they can't attack on the first player turn.
+    // Guard against double-spawn: only run if the player doesn't already
+    // have these (e.g. retry / mid-fight reload edge cases).
+    if (currentEncounter && currentEncounter.id === 'general_zhost') {
+      const hasRaena = player.creatures.some(c => c.name === 'Raena');
+      const elfCount = player.creatures.filter(c => c.name === 'Elf Warrior').length;
+      const elvesNeeded = Math.max(0, 5 - elfCount);
+      for (let i = 0; i < elvesNeeded; i++) {
+        player.addCreature(new Creature({ name: 'Elf Warrior', attack: 2, maxHp: 2 }));
+      }
+      if (!hasRaena) {
+        const raena = new Creature({
+          name: 'Raena', attack: 2, maxHp: 3, multiAttack: 2, isCompanion: true,
+          description: 'Attacks 2 targets.',
+        });
+        // Stamp the source rarity / subtype so the full-card preview uses the
+        // ornate rare frame, matching the Raena ally card the player can pick
+        // up later in the game.
+        raena._sourceRarity = 'rare';
+        raena._sourceSubtype = 'allies';
+        player.addCreature(raena);
+      }
+    }
   };
   ENEMY_HAND_SIZE.general_zhost = 1;
 
   ENEMY_DECKS.general_zhost_boss = () => {
     enemy = new Character('General Zhost');
     enemy.deck = new Deck();
+    // Mirrors PY: 4 White Claw + 4 Zhost's Buckler + 3 Kobold Spear + 4
+    // Chain Shirt, dire_fury power.
     for (let i = 0; i < 4; i++) enemy.deck.addCard(createWhiteClaw());
+    for (let i = 0; i < 4; i++) enemy.deck.addCard(createZhostsBuckler());
+    for (let i = 0; i < 3; i++) enemy.deck.addCard(createKoboldSpear());
     for (let i = 0; i < 4; i++) enemy.deck.addCard(createChainShirt());
-    for (let i = 0; i < 3; i++) enemy.deck.addCard(createSpearThrow());
-    for (let i = 0; i < 4; i++) enemy.deck.addCard(createChainShirt());
+    enemy.addPower(createDireFury());
   };
   ENEMY_HAND_SIZE.general_zhost_boss = 2;
 
   ENEMY_DECKS.wolf_pack = () => {
     enemy = new Character('Wolf Pack');
     enemy.deck = new Deck();
-    enemy.deck.addCard(createBite()); // dummy card
     enemy._invulnerable = true;
     enemy._killTarget = 10;
+    // Mirrors PY: passive Wolf Pack power tops up the wolf roster every
+    // turn (3-4 fresh wolves while alive count <5, otherwise 1-2).
+    enemy.addPower(createWolfPack());
     for (let i = 0; i < 3; i++) {
       const wolf = new Creature({ name: 'Wolf', attack: 2, maxHp: 2 });
       wolf.ready();
       enemy.addCreature(wolf);
+    }
+    // PY applies a Blizzard combat buff to the player at fight start —
+    // every turn the player + every alive ally takes 1 Ice. Re-entry
+    // guard so a retry doesn't stack a second copy.
+    if (player && !player.combatBuffs.some(b => b.id === 'blizzard')) {
+      player.addCombatBuff(new CombatBuff({
+        id: 'blizzard',
+        name: 'Blizzard',
+        description: 'Start of Turn: You and all allies get 1 Ice.',
+        imageId: 'buff_blizzard',
+        effectType: 'apply_ice',
+        effectValue: 1,
+        trigger: 'start_of_turn',
+        combatsRemaining: 1,
+      }));
     }
   };
   ENEMY_HAND_SIZE.wolf_pack = 0;
@@ -2686,7 +3054,10 @@ function setupEnemyForCombat(enemyId) {
   ENEMY_DECKS.stone_giant = () => {
     enemy = new Character('Stone Giant');
     enemy.deck = new Deck();
-    for (let i = 0; i < 20; i++) enemy.deck.addCard(createSharpRock());
+    // Mirrors PY: 10 Sharp Rock + 10 Large Boulder summons. The giant summons
+    // fresh boulders to replace any the player destroys.
+    for (let i = 0; i < 10; i++) enemy.deck.addCard(createSharpRock());
+    for (let i = 0; i < 10; i++) enemy.deck.addCard(createLargeBoulder());
     enemy._invulnerable = true;
     enemy._survivalRounds = 5;
     const boulder = new Creature({ name: 'Large Boulder', attack: 6, maxHp: 4, armor: 1, selfDestruct: true });
@@ -2920,14 +3291,26 @@ const SPEAKER_COLORS = {
   Raena: Colors.GREEN,
 };
 
+// Set true when a freshly-revealed paragraph needs to be scrolled to. Read +
+// cleared inside drawEncounterText after the new overflow is known, so the
+// snap happens with the correct content height (the previous overflow value
+// was always one paragraph behind, leaving the bottom paragraph clipped).
+let encounterTextSnapToBottom = false;
+
 function handleEncounterTextClick() {
   const phase = currentEncounter.currentPhase;
   if (!phase) return;
   // If there are more paragraphs to reveal, reveal the next one
   if (encounterTextIndex + 1 < phase.texts.length) {
     encounterTextIndex++;
-    // Auto-scroll to bottom so the new paragraph is visible
-    encounterTextScrollY = encounterTextOverflow;
+    // Defer the snap to the draw pass — the new overflow isn't known yet.
+    encounterTextSnapToBottom = true;
+    // Per-encounter dialog cues. Prison Wing line 2 mentions the
+    // warden's key clicking each lock — play the unlock click as the
+    // line is revealed.
+    if (currentEncounter && currentEncounter.id === 'prison_wing' && encounterTextIndex === 1) {
+      playSound('door_unlock', 0.7);
+    }
   } else {
     // All paragraphs shown, advance to next phase
     currentEncounter.advancePhase();
@@ -2973,19 +3356,45 @@ function drawEncounterText() {
   const innerW = boxW - padding * 2;
   const innerH = boxH - padding * 2 - 30; // leave room for continue prompt
 
-  // Clip to inner area
+  ctx.font = '21px Georgia, serif';
+  ctx.textAlign = 'left';
+  const lineH = 30;
+  const paragraphGap = 18;
+
+  // Layout pass: walk all visible paragraphs once with the same fonts as the
+  // draw pass to compute total content height. Doing this BEFORE we set
+  // scrollY lets a click-to-reveal snap to the new bottom in the same frame
+  // (previously encounterTextOverflow was a frame behind, clipping the
+  // freshly-revealed paragraph).
+  const visibleCount = Math.min(encounterTextIndex + 1, phase.texts.length);
+  let layoutY = 0;
+  for (let i = 0; i < visibleCount; i++) {
+    const entry = phase.texts[i];
+    if (entry.speaker) layoutY += 32;
+    ctx.font = '21px Georgia, serif';
+    const lines = wrapTextLong(entry.text, innerW, 21);
+    layoutY += lines.length * lineH;
+    layoutY += paragraphGap;
+  }
+  const totalContentH = Math.max(0, layoutY - paragraphGap);
+  encounterTextOverflow = Math.max(0, totalContentH - innerH);
+
+  // Apply pending "snap to bottom" now that the overflow reflects every
+  // revealed paragraph (including the freshly-added one).
+  if (encounterTextSnapToBottom) {
+    encounterTextScrollY = encounterTextOverflow;
+    encounterTextSnapToBottom = false;
+  }
+  // Clamp scroll against the up-to-date overflow.
+  if (encounterTextScrollY > encounterTextOverflow) encounterTextScrollY = encounterTextOverflow;
+
+  // Clip to inner area + draw pass
   ctx.save();
   ctx.beginPath();
   ctx.rect(innerX, innerY, innerW, innerH);
   ctx.clip();
 
-  ctx.font = '21px Georgia, serif';
-  ctx.textAlign = 'left';
-  const lineH = 30;
-  const paragraphGap = 18;
   let cursorY = innerY - encounterTextScrollY;
-
-  const visibleCount = Math.min(encounterTextIndex + 1, phase.texts.length);
   for (let i = 0; i < visibleCount; i++) {
     const entry = phase.texts[i];
 
@@ -3017,12 +3426,6 @@ function drawEncounterText() {
   }
 
   ctx.restore();
-
-  // Calculate overflow for scroll handling
-  const totalContentH = (cursorY - paragraphGap) - (innerY - encounterTextScrollY);
-  encounterTextOverflow = Math.max(0, totalContentH - innerH);
-  // Clamp scroll
-  if (encounterTextScrollY > encounterTextOverflow) encounterTextScrollY = encounterTextOverflow;
 
   // Scrollbar if needed
   if (encounterTextOverflow > 0) {
@@ -3096,6 +3499,8 @@ function handleEncounterChoiceClick(x, y) {
       case 'damage':
         if (val > 0) {
           player.takeDamageFromDeck(val);
+          // Pain cue is fired at toast-time (in handleEncounterChoiceClick)
+          // so it lines up with the "-1 HP!" flash, not at result-click.
         }
         break;
 
@@ -3104,14 +3509,28 @@ function handleEncounterChoiceClick(x, y) {
         if (splash) splash.isLocked = false;
         currentMap.completeCurrentNode();
         currentMap.currentNodeId = 'splash_point';
+        // Big splash as the player drops through the crack into the
+        // sewer water — fires right as the dialog opens.
+        playSound('splash_dive', 0.7);
         startNodeEncounter('splash_point');
         return;
       }
 
+      case 'cave_jump_down': {
+        // Jumping the ledge in the cave — bruising deck damage + a
+        // dull thud cue. PY's risky descent costs the player a card.
+        if (val > 0) {
+          player.takeDamageFromDeck(val);
+          playHeroPainSound(val);
+        }
+        break;
+      }
+
       case 'short_rest':
       case 'search_camp':
-        // Already resolved at selection time — autosave after state change
-        autosaveNow();
+        // Already resolved at selection time. No autosave here — non-combat
+        // encounters checkpoint via the encounter-complete hook only when
+        // they contained a fight.
         break;
 
       case 'move_to_kitchen': {
@@ -3185,13 +3604,21 @@ function handleEncounterChoiceClick(x, y) {
         encounterChoiceResult = null;
         currentEncounter = null;
         state = GameState.MAP;
-        autosaveNow();
         return;
       }
 
       case 'leave_prison':
-        // End of Chapter 1. Go straight to the chapter-end narrative
-        // (no fade — the player clicked "leave", the scene just changes).
+        // End of Chapter 1. Crossfade from prison ambience to the
+        // heroic title theme — same track that plays on the main menu
+        // — so it carries the player through chapter-end narrative,
+        // ability pick, perk pick, deck tutorial, and rest inventory.
+        // Once the player applies rest and the chapter 2 area loads,
+        // the area-music system crossfades to the mountain wind.
+        // Reset trackers so updateMusicForCurrentScene re-evaluates
+        // when the new map opens.
+        crossfadeMusic('Music/music_heroic_01', 2000, 2500);
+        _lastMusicArea = null;
+        _lastMusicNodeId = null;
         currentMap.completeCurrentNode();
         currentEncounter = null;
         encounterChoiceResult = null;
@@ -3228,7 +3655,6 @@ function handleEncounterChoiceClick(x, y) {
           encounterChoiceResult = null;
           currentEncounter = null;
           state = GameState.MAP;
-          autosaveNow();
           return;
         }
         break;
@@ -3308,24 +3734,14 @@ function handleEncounterChoiceClick(x, y) {
           if (key && !node.exhaustedChoices.includes(key)) {
             node.exhaustedChoices.push(key);
           }
-          autosaveNow();
+          // No autosave on every choice tick — the user-facing rule is that
+          // saves only happen post-combat / chapter / level-up.
         }
       }
       encounterChoiceResult = null;
-      // If every repeat choice is now exhausted, the node becomes dormant and the
-      // encounter auto-completes — the player doesn't have to click Leave.
-      const phase = currentEncounter && currentEncounter.currentPhase;
-      if (phase && phase.choices) {
-        const repeats = phase.choices.filter(c => c.returnToChoices);
-        const allDone = repeats.length > 0 && repeats.every(c => c.exhausted);
-        if (allDone) {
-          const node = currentMap.getCurrentNode();
-          if (node) { node.isDone = true; node.canRevisit = false; }
-          currentEncounter = null;
-          state = GameState.MAP;
-          autosaveNow();
-        }
-      }
+      // The player must select a non-repeating exit (typically "Continue") to
+      // leave. That path runs the normal completeCurrentNode flow which both
+      // marks the node done AND unlocks its connections.
       return;
     }
     if (encounterChoiceResult.completesEncounter) {
@@ -3346,7 +3762,8 @@ function handleEncounterChoiceClick(x, y) {
       encounterChoiceResult = null;
       currentEncounter = null;
       state = GameState.MAP;
-      autosaveNow();
+      if (_encounterHadCombat) autosaveNow();
+      _encounterHadCombat = false;
       return;
     }
 
@@ -3368,13 +3785,19 @@ function handleEncounterChoiceClick(x, y) {
         currentEncounter = null;
         encounterChoiceResult = null;
         state = GameState.MAP;
-        autosaveNow();
         return;
       }
       encounterChoiceResult = r.choice;
       if (r.choice.effectType === 'damage' && r.choice.effectValue > 0) {
         showDamageToast(`-${r.choice.effectValue} HP!`, 3000);
+        // Pain cue lands at the same beat as the damage toast — Pick
+        // Lock fail / Crack squeeze / any choice-driven damage event.
+        playHeroPainSound(r.choice.effectValue);
       }
+      // Door click sound fires here — when the player picks the
+      // "Use the Prison Key and leave" choice, alongside the result
+      // text describing the key turning and the door groaning open.
+      if (r.choice.effectType === 'leave_prison') playSound('door_unlock', 0.7);
       // Resolve try_squeeze immediately so result text is dynamic
       if (r.choice.effectType === 'try_squeeze') resolveTrySqueeze(r.choice);
       // Resolve search_camp immediately to generate loot/gold for result text
@@ -3393,6 +3816,20 @@ function handleEncounterChoiceClick(x, y) {
       // Prison barrel rolls must happen up front too.
       if (r.choice.effectType === 'prison_snatch') resolvePrisonSnatch(r.choice);
       if (r.choice.effectType === 'loot_barrel') resolveLootBarrel(r.choice);
+      // Mountain Pass rockslide buffs (active for the next combat).
+      if (r.choice.effectType === 'boulder_run' ||
+          r.choice.effectType === 'boulder_shelter' ||
+          r.choice.effectType === 'boulder_navigate') {
+        resolveBoulderBuff(r.choice);
+      }
+      // Calm Stream choices — resolve immediately so the result page shows
+      // the heal / berries / faery without waiting for the encounter
+      // advance step.
+      if (r.choice.effectType === 'stream_drink')  resolveStreamDrink(r.choice);
+      if (r.choice.effectType === 'stream_search') resolveStreamSearch(r.choice);
+      if (r.choice.effectType === 'stream_bathe')  resolveStreamBathe(r.choice);
+      // Calm Grove gift: Raena offers Lambas Bread (added to deck + hand).
+      if (r.choice.effectType === 'accept_lambas_card') resolveAcceptLambas(r.choice);
       return;
     }
   }
@@ -3402,7 +3839,7 @@ function handleEncounterChoiceClick(x, y) {
 function autosaveNow() {
   try {
     if (!player || !currentMap) return;
-    saveToAutoSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack, kitchenChoiceMade, prisonBarrelLooted });
+    saveToAutoSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack, kitchenChoiceMade, prisonBarrelLooted, shownDeckTutorial, calmGroveRaenaJoined, calmGroveBreadTaken });
     addLog('  [Auto-saved]', Colors.GRAY);
   } catch (err) {
     console.warn('Autosave failed:', err);
@@ -3465,6 +3902,7 @@ function resolveSearchCamp(choice) {
   choice._lootGold = goldAmt;
   choice.resultText = `You rummage through the supplies, finding ${goldAmt} gold and useful odds and ends.`;
   showStyledToast(`+${goldAmt} gold`, 'gold', 2500);
+  playSound('gold');
 }
 
 // Shared: finalize the kitchen node as done (the encounter advance flow does
@@ -3492,6 +3930,7 @@ function resolveKitchenTalk(choice) {
   const leg = createChickenLeg();
   player.deck.addCard(leg, true);
   choice._lootItems = [leg];
+  playSound('gold');
   markKitchenDone();
 }
 
@@ -3518,6 +3957,7 @@ function resolvePrisonSnatch(choice) {
       choice._lootItems = [card];
       prisonBarrelLooted = true;
       choice.resultText = `You slip to the barrel and palm a ${card.name} before the guards notice. They notice now — to arms!`;
+      playSound('gold');
     } else {
       choice.resultText = 'The barrel is empty! The guards spot you. To arms!';
     }
@@ -3540,9 +3980,125 @@ function resolveLootBarrel(choice) {
     choice._lootItems = [card];
     prisonBarrelLooted = true;
     choice.resultText = `You rummage through the barrel and find: ${card.name}.`;
+    playSound('gold');
   } else {
     choice.resultText = 'You rummage through the barrel — but find nothing useful.';
   }
+}
+
+// Mountain Pass rockslide: choosing how to cross grants a single-combat buff
+// for the upcoming Stone Giant fight. Mirrors the Python boulder_* effects.
+function resolveBoulderBuff(choice) {
+  if (!player) return;
+  const buffs = {
+    boulder_run: {
+      buff: {
+        id: 'running', name: 'Running',
+        description: 'Start of Turn: Draw 1',
+        imageId: 'buff_running',
+        effectType: 'draw_card', effectValue: 1,
+      },
+      cardCreator: createBuffRunning,
+    },
+    boulder_shelter: {
+      buff: {
+        id: 'hiding', name: 'Hiding',
+        description: 'Start of Turn: +1 Shield',
+        imageId: 'buff_hiding',
+        effectType: 'gain_shield', effectValue: 1,
+      },
+      cardCreator: createBuffHiding,
+    },
+    boulder_navigate: {
+      buff: {
+        id: 'calculating', name: 'Calculating',
+        description: 'Start of Turn: +1 Heroism',
+        imageId: 'buff_calculating',
+        effectType: 'gain_heroism', effectValue: 1,
+      },
+      cardCreator: createBuffCalculating,
+    },
+  };
+  const entry = buffs[choice.effectType];
+  if (!entry) return;
+  // combatsRemaining: 1 means the buff lasts ONE combat (the upcoming Stone
+  // Giant fight) and is dropped at endCombatBuffCleanup. turnsRemaining is
+  // omitted (default 0 = no per-turn limit) so the buff persists every turn
+  // of that combat.
+  player.addCombatBuff(new CombatBuff({ ...entry.buff, combatsRemaining: 1 }));
+  // Show the buff card on the result page (full-size, hoverable like loot).
+  // The "Buff gained: X!" banner there replaces the toast.
+  choice._lootItems = [entry.cardCreator()];
+}
+
+// Calm Stream — Drink: heal 1 (move 1 card from discard back to draw pile).
+function resolveStreamDrink(choice) {
+  if (!player) return;
+  playSound('drink');
+  let healed = 0;
+  if (player.deck.discardPile.length > 0) {
+    const card = player.deck.discardPile.pop();
+    player.deck.drawPile.unshift(card);
+    healed = 1;
+  }
+  if (healed > 0) {
+    spawnHealOnTarget(player, healed);
+    showStyledToast('+1 Healed', 'heal', 2000);
+  }
+}
+
+// Calm Stream — Search: 2-4 random Goodberries added to hand (matches PY).
+function resolveStreamSearch(choice) {
+  if (!player) return;
+  const count = 2 + Math.floor(Math.random() * 3); // 2..4
+  const items = [];
+  for (let i = 0; i < count; i++) {
+    const berry = createGoodberry();
+    if (player.deck.hand.length < MAX_HAND_SIZE) {
+      player.deck.hand.push(berry);
+    } else {
+      player.deck.drawPile.unshift(berry);
+    }
+    player.deck.masterDeck.push(berry);
+    items.push(berry);
+  }
+  choice._lootItems = items;
+  if (count > 0) playSound('gold');
+}
+
+// Calm Stream — Bathe: gain a Small Faery (added to deck + a copy to hand).
+function resolveStreamBathe(choice) {
+  if (!player) return;
+  const faery = createSmallFaery();
+  player.deck.addCard(faery);
+  const handCopy = faery.copy();
+  if (player.deck.hand.length < MAX_HAND_SIZE) {
+    player.deck.hand.push(handCopy);
+  } else {
+    player.deck.drawPile.unshift(handCopy);
+  }
+  choice._lootItems = [faery];
+  playSound('gold');
+  // Faery joins your deck — same shimmer as when she's banished to heal.
+  playSound('faery_cast', 0.7);
+}
+
+// Calm Grove — Raena's Lambas Bread gift. Add the card to the masterDeck
+// and route a copy to hand so the player can use it immediately.
+function resolveAcceptLambas(choice) {
+  if (!player) return;
+  const lambas = createLambasBread();
+  player.deck.addCard(lambas);
+  const handCopy = lambas.copy();
+  if (player.deck.hand.length < MAX_HAND_SIZE) {
+    player.deck.hand.push(handCopy);
+  } else {
+    player.deck.drawPile.unshift(handCopy);
+  }
+  choice._lootItems = [lambas];
+  playSound('gold');
+  // One bread per save: prevents farming on revisit.
+  calmGroveBreadTaken = true;
 }
 
 function resolveShortRest(choice) {
@@ -3564,6 +4120,10 @@ function resolveShortRest(choice) {
 
 function drawEncounterChoice() {
   drawEncounterBg();
+  // Reset hit-area registries so the inline icon / badge tooltips on the
+  // already-full-size loot cards register cleanly each frame.
+  iconHitAreas.length = 0;
+  cardBadgeHitAreas.length = 0;
 
   // Title — same style as encounter text (40px bold Georgia with shadow)
   ctx.fillStyle = Colors.GOLD;
@@ -3627,11 +4187,13 @@ function drawEncounterChoice() {
       const totalW = lootItems.length * cardW + (lootItems.length - 1) * gap;
       const startX = Math.floor((SCREEN_WIDTH - totalW) / 2);
       const lootY = boxY + boxH + 26;
-      // "Received: X!" banner — yellow so it pops, sits above the cards
-      // with breathing room below the text box.
+      // Banner above the loot row. Buff cards (subtype 'buff') get a
+      // "Buff gained:" prefix instead of the generic "Received:".
+      const allBuffs = lootItems.every(c => (c.subtype || '').toLowerCase() === 'buff');
+      const verb = allBuffs ? 'Buff gained' : 'Received';
       const receivedText = lootItems.length === 1
-        ? `Received: ${lootItems[0].name}!`
-        : `Received: ${lootItems.map(c => c.name).join(', ')}!`;
+        ? `${verb}: ${lootItems[0].name}!`
+        : `${verb}: ${lootItems.map(c => c.name).join(', ')}!`;
       ctx.fillStyle = Colors.GOLD;
       ctx.font = 'bold 24px Georgia, serif';
       ctx.textAlign = 'center';
@@ -3652,6 +4214,8 @@ function drawEncounterChoice() {
       for (let i = 0; i < lootItems.length; i++) {
         const cx = startX + i * (cardW + gap);
         drawCard(lootItems[i], cx, cardsStartY, cardW, cardH, false, false, 'full');
+        // Register a hover hit area so cursor-on-card pops the full preview
+        // (and shift-locks for icon tooltips).
       }
     }
 
@@ -3661,11 +4225,21 @@ function drawEncounterChoice() {
     const continueY = hasLoot ? SCREEN_HEIGHT - 40 : boxY + boxH - 24;
     ctx.fillText('Click to continue', SCREEN_WIDTH / 2, continueY);
   } else {
-    // Show choices
+    // Show choices. The current phase may set its own prompt (e.g. Calm
+    // Grove "While resting…, Raena offers you some bread.") — fall back to
+    // the generic "What do you do?" otherwise.
+    const phase = currentEncounter && currentEncounter.currentPhase;
+    const promptText = (phase && phase.choicePrompt) ? phase.choicePrompt : 'What do you do?';
     ctx.fillStyle = Colors.WHITE;
     ctx.font = '24px Georgia, serif';
     ctx.textAlign = 'center';
-    ctx.fillText('What do you do?', SCREEN_WIDTH / 2, 140);
+    // Wrap long prompts so they fit nicely above the choices.
+    const promptLines = wrapTextLong(promptText, SCREEN_WIDTH - 200, 24);
+    let py = 140;
+    for (const line of promptLines) {
+      ctx.fillText(line, SCREEN_WIDTH / 2, py);
+      py += 30;
+    }
 
     const rects = getChoiceRects();
     for (const r of rects) {
@@ -3695,6 +4269,13 @@ function drawEncounterChoice() {
     }
   }
 
+  // The result-page loot cards are already drawn at full size, so don't
+  // pop a duplicate hover preview on top of them. Inline icon / badge
+  // tooltips still fire (so hovering Armor / On-Discard / etc. inside the
+  // card shows the keyword definition).
+  drawIconTooltip();
+  drawBadgeTooltip();
+
   ctx.textAlign = 'left';
 }
 
@@ -3705,6 +4286,14 @@ function drawEncounterChoice() {
 function handleEncounterLootClick() {
   if (pendingLevelUp) {
     pendingLevelUp = false;
+    levelUpAbilityMode = true;
+    playSound('level_up_screen', 0.7);
+    // Heroic theme for the level-up flow (matches chapter-end). Reset
+    // node/area trackers so updateMusicForCurrentScene re-applies the
+    // map ambience after the player picks ability/perk and returns.
+    crossfadeMusic('Music/music_heroic_01', 1500, 2500);
+    _lastMusicArea = null;
+    _lastMusicNodeId = null;
     // Level up: offer ability choices
     abilityChoices = getAbilityChoices(selectedClass, 3);
     state = GameState.ABILITY_SELECT;
@@ -3723,7 +4312,7 @@ function drawEncounterLoot() {
   ctx.shadowColor = 'rgba(0,0,0,0.9)';
   ctx.shadowBlur = 6;
   ctx.shadowOffsetY = 2;
-  ctx.fillText('Loot!', SCREEN_WIDTH / 2, 150);
+  ctx.fillText(currentEncounter.currentPhase.lootTitle || 'Loot!', SCREEN_WIDTH / 2, 150);
   ctx.shadowColor = 'transparent';
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
@@ -3808,7 +4397,18 @@ function drawEncounterLoot() {
 // COMBAT
 // ============================================================
 
+// Play staggered card-draw sounds (one per card, 80ms apart).
+function playDrawSounds(count) {
+  for (let i = 0; i < Math.min(count, 6); i++) {
+    setTimeout(() => playSound('card_draw'), i * 80);
+  }
+}
+
 function startCombat() {
+  // Music is scene-driven now (see updateMusicForCurrentScene). The
+  // prison ambience keeps playing through prison fights; switching to
+  // the sewer track happens on map-area transition, not on combat.
+  if (!_hasEnteredCombat) _hasEnteredCombat = true;
   combatLog = [];
   combatLogScrollY = 0;
   isPlayerTurn = true;
@@ -3824,6 +4424,7 @@ function startCombat() {
   killCount = 0;
   killTarget = enemy._killTarget || 0;
   survivalRounds = enemy._survivalRounds || 0;
+  survivalRoundsRemaining = survivalRounds;
   enemyTurnNumber = 0;
 
   const hs = getPlayerHandSize();
@@ -3832,11 +4433,31 @@ function startCombat() {
   enemy.deck.startCombat(enemyStartHand, 10);
 
   addLog('--- Combat Start ---', Colors.GOLD);
+  playSound('card_shuffle');
   addLog(`${player.name} vs ${enemy.name}`, Colors.WHITE);
   addLog(`${enemy.name} draws ${enemy.deck.hand.length} cards`, Colors.GRAY);
 
   // Apply perk effects at combat start
   applyPerksCombatStart();
+
+  // Encounter-specific player buffs (e.g. Elf Reinforcements during the
+  // General Zhost army fight — start of turn summon 1 Elf Warrior). Only
+  // add once — re-entering combat (retry) shouldn't stack copies.
+  if (currentEncounter && currentEncounter.id === 'general_zhost' && enemy && enemy._killTarget) {
+    const hasBuff = (player.combatBuffs || []).some(b => b.id === 'elf_reinforcements');
+    if (!hasBuff) {
+      player.addCombatBuff(new CombatBuff({
+        id: 'elf_reinforcements',
+        name: 'Elf Reinforcements',
+        description: 'Start of Turn: Summon 1 Elf Warrior.',
+        imageId: 'buff_elf_reinforcements',
+        effectType: 'summon_elf_warrior',
+        effectValue: 1,
+        trigger: 'start_of_turn',
+        combatsRemaining: 1,
+      }));
+    }
+  }
 
   addLog(`Your turn! Play cards from your hand.`, Colors.GREEN);
 
@@ -3848,6 +4469,22 @@ function startCombat() {
     combatIntroMessage = `Survive ${survivalRounds} rounds!`;
   } else {
     combatIntroMessage = `Combat with ${enemy.name}!`;
+  }
+  // Per-enemy splash cue. Slime gets a wet squelch; rats squeak; bone
+  // family rattles bones; the Kobold Warden hisses; future bosses can
+  // claim their own monster-pack sound here. Routed through
+  // getFightStartSfxKey so the codex can show the same value.
+  const startKey = getFightStartSfxKey(enemy && enemy.name);
+  if (startKey) playSound(startKey, 0.7);
+
+  // Boss music — General Zhost army + boss share music_tension_01 across
+  // both fights. Reset _lastMusicNode/_lastMusicArea so returning to the
+  // map after the encounter cleanly crossfades back to node ambience
+  // (forest_01 on general_zhost).
+  if (currentEncounter && currentEncounter.id === 'general_zhost') {
+    crossfadeMusic('Music/music_tension_01', 1500, 2500);
+    _lastMusicArea = null;
+    _lastMusicNodeId = null;
   }
 
   state = GameState.COMBAT;
@@ -3895,7 +4532,7 @@ function applyPerksCombatStart() {
       const t = targets[Math.floor(Math.random() * targets.length)];
       t.takeUnpreventableDamage(firstStrike);
       addLog(`  First Strike: ${firstStrike} dmg to ${t.name}!`, Colors.GOLD, fsPerk);
-      if (!t.isAlive) { addLog(`  ${t.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+      if (!t.isAlive) { addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); countAndRemoveDeadCreatures(); }
     } else if (enemy.isAlive) {
       enemy.takeDamageFromDeck(firstStrike);
       addLog(`  First Strike: ${firstStrike} dmg to ${enemy.name}!`, Colors.GOLD, fsPerk);
@@ -4041,8 +4678,15 @@ const PERK_TRIGGER_BADGES = [
   { re: /^Combat:\s*/,       label: 'COMBAT',       bg: 'rgba(60,110,80,0.92)',  border: '#7ec89a', fg: '#c8ffd0' },
   { re: /^Turn Start:\s*/,   label: 'TURN START',   bg: 'rgba(60,90,130,0.92)',  border: '#9ad6ff', fg: '#d6ecff' },
   { re: /^Turn End:\s*/,     label: 'TURN END',     bg: 'rgba(60,90,130,0.92)',  border: '#9ad6ff', fg: '#d6ecff' },
+  // Verbose forms ("Start of Turn:" / "End of Turn:") used by encounter buff
+  // cards. Same palette as Turn Start / Turn End so the badge style matches.
+  { re: /^Start of Turn:\s*/, label: 'TURN START', bg: 'rgba(60,90,130,0.92)',  border: '#9ad6ff', fg: '#d6ecff' },
+  { re: /^End of Turn:\s*/,   label: 'TURN END',   bg: 'rgba(60,90,130,0.92)',  border: '#9ad6ff', fg: '#d6ecff' },
   // Loot: fires at combat-end gold award (Lucky Find). Yellow/gold palette.
   { re: /^Loot:\s*/,         label: 'LOOT',         bg: 'rgba(130,100,30,0.92)', border: '#ffe066', fg: '#fff3b8' },
+  // Discard trigger (Lucky Pebble: "On Discard: Draw 1 Card."). Purple
+  // palette to read distinct from the turn/combat triggers.
+  { re: /^On Discard:\s*/,   label: 'ON DISCARD',   bg: 'rgba(80,50,110,0.92)',  border: '#c898ff', fg: '#ecd9ff' },
 ];
 
 // Tokenize text into words and inline icons/badges.
@@ -4073,6 +4717,36 @@ function tokenizeKeywordText(text, opts = {}) {
         break;
       }
     }
+  }
+
+  // Inline "On Recharge" badge — works on any card, not just perks.
+  // Marks the conditional-on-recharge half of cards like Dwarven
+  // Greaves ("Recharge -> Block 2. On Recharge Gain Shield."). We
+  // tokenize the whole `text` here and bail out early since the
+  // remaining substrings are recursed back through the keyword pass.
+  const onRechargeRe = /\bOn Recharge\b:?\s*/g;
+  if (onRechargeRe.test(text)) {
+    onRechargeRe.lastIndex = 0;
+    let cursor = 0;
+    let m;
+    while ((m = onRechargeRe.exec(text)) !== null) {
+      if (m.index > cursor) {
+        // Recurse on the prefix segment so its keywords still iconize.
+        for (const t of tokenizeKeywordText(text.slice(cursor, m.index), opts)) tokens.push(t);
+      }
+      tokens.push({
+        type: 'badge', label: 'ON RECHARGE',
+        bg: 'rgba(80,90,140,0.92)', border: '#a0b0ff', fg: '#dde4ff',
+      });
+      // Re-add a leading space after the pill so the next word doesn't
+      // collide with it (same trick as the perk-prefix path above).
+      cursor = m.index + m[0].length;
+    }
+    if (cursor < text.length) {
+      const tail = ' ' + text.slice(cursor);
+      for (const t of tokenizeKeywordText(tail, opts)) tokens.push(t);
+    }
+    return tokens;
   }
 
   // Match keywords (case-sensitive whole word) - longest first to avoid
@@ -4728,7 +5402,7 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size =
     const descFontSize = Math.max(11, Math.floor(w * 0.058));
     let descText = card.description || card.shortDesc || '';
     if (card.id === 'sneak_attack' && isCombatContext()) descText = descText.replace(/X/g, String(attacksThisTurn + 1));
-    const tokenizeOpts = card._isPerk ? { asPerk: true } : {};
+    const tokenizeOpts = (card._isPerk || card.subtype === 'buff' || card.subtype === 'relic') ? { asPerk: true } : {};
     const iconSize = Math.floor(descFontSize * 1.3);
     const lineH = Math.max(descFontSize + 4, iconSize + 2);
     const lines = countWrappedLines(descText, descBoxW - textWrapPad, descFontSize, tokenizeOpts);
@@ -4754,7 +5428,7 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size =
     // bottom edge — no visible gap between the box and the frame border.
     let descText = card.shortDesc || card.description;
     if (card.id === 'sneak_attack' && isCombatContext()) descText = descText.replace(/X/g, String(attacksThisTurn + 1));
-    const smallOpts = card._isPerk ? { asPerk: true } : {};
+    const smallOpts = (card._isPerk || card.subtype === 'buff' || card.subtype === 'relic') ? { asPerk: true } : {};
     const descFontSize = Math.max(8, Math.floor(w * 0.085));
     const sideInset = 6;
     const bottomInset = 4; // tight to the frame; was 10 (too high, left a gap)
@@ -4810,63 +5484,68 @@ function drawCard(card, x, y, w, h, highlighted = false, hovered = false, size =
   }
 
   // 4c. Tier/rarity + subtype badges — drawn on TOP of the frame so the frame's
-  // bottom filigree can't hide them.
+  // bottom filigree can't hide them. Buff cards skip the tier/rarity badge
+  // (they're encounter rewards, not tiered loot) but keep the subtype label.
   if (isFullSize) {
-    const RARITY_CODES = { common: 'C', uncommon: 'U', rare: 'R', epic: 'E', legendary: 'L' };
-    const RARITY_LABELS = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare', epic: 'Epic', legendary: 'Legendary' };
-    const RARITY_COLORS = {
-      common: '#8b5a2b', uncommon: '#c0c0c0', rare: '#4682e6',
-      epic: '#b482ff', legendary: '#ffd700',
-    };
-    const rarity = card.rarity || 'common';
-    const tier = Math.max(card.tier || 1, 1);
-    const code = RARITY_CODES[rarity] || 'C';
-    const color = RARITY_COLORS[rarity] || RARITY_COLORS.common;
-
-    const badgeFontSize = Math.max(8, Math.floor(w * 0.045));
-    ctx.font = `bold ${badgeFontSize}px sans-serif`;
-    const codeW = ctx.measureText(code).width;
-    const tierText = `T${tier}`;
-    const tierW = ctx.measureText(tierText).width;
+    const isBuffCard = card.subtype === 'buff';
     const padX = 4, padY = 2;
-    const sepW = 4;
-    const totalW = codeW + tierW + padX * 4 + sepW;
+    const badgeFontSize = Math.max(8, Math.floor(w * 0.045));
     const badgeH = badgeFontSize + padY * 2;
-    const badgeX = x + w - totalW - 6;
     const badgeY = y + h - badgeH - 4; // 2 px lower — sits on the frame's bottom filigree
 
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    ctx.fillRect(badgeX, badgeY, totalW, badgeH);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(badgeX, badgeY, totalW, badgeH);
+    if (!isBuffCard) {
+      const RARITY_CODES = { common: 'C', uncommon: 'U', rare: 'R', epic: 'E', legendary: 'L' };
+      const RARITY_LABELS = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare', epic: 'Epic', legendary: 'Legendary' };
+      const RARITY_COLORS = {
+        common: '#8b5a2b', uncommon: '#c0c0c0', rare: '#4682e6',
+        epic: '#b482ff', legendary: '#ffd700',
+      };
+      const rarity = card.rarity || 'common';
+      const tier = Math.max(card.tier || 1, 1);
+      const code = RARITY_CODES[rarity] || 'C';
+      const color = RARITY_COLORS[rarity] || RARITY_COLORS.common;
 
-    const codeBoxW = codeW + padX * 2;
-    ctx.fillStyle = color;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(code, badgeX + codeBoxW / 2, badgeY + badgeH / 2 + 1);
+      ctx.font = `bold ${badgeFontSize}px sans-serif`;
+      const codeW = ctx.measureText(code).width;
+      const tierText = `T${tier}`;
+      const tierW = ctx.measureText(tierText).width;
+      const sepW = 4;
+      const totalW = codeW + tierW + padX * 4 + sepW;
+      const badgeX = x + w - totalW - 6;
 
-    ctx.strokeStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(badgeX + codeBoxW + sepW / 2, badgeY + 2);
-    ctx.lineTo(badgeX + codeBoxW + sepW / 2, badgeY + badgeH - 2);
-    ctx.stroke();
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(badgeX, badgeY, totalW, badgeH);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(badgeX, badgeY, totalW, badgeH);
 
-    const tierBoxX = badgeX + codeBoxW + sepW;
-    const tierBoxW = tierW + padX * 2;
-    ctx.fillStyle = '#e0e0e0';
-    ctx.fillText(tierText, tierBoxX + tierBoxW / 2, badgeY + badgeH / 2 + 1);
-    ctx.textBaseline = 'alphabetic';
+      const codeBoxW = codeW + padX * 2;
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(code, badgeX + codeBoxW / 2, badgeY + badgeH / 2 + 1);
 
-    cardBadgeHitAreas.push({
-      x: badgeX, y: badgeY, w: codeBoxW, h: badgeH,
-      label: RARITY_LABELS[rarity] || 'Common',
-    });
-    cardBadgeHitAreas.push({
-      x: tierBoxX, y: badgeY, w: tierBoxW, h: badgeH,
-      label: `Tier ${tier}`,
-    });
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(badgeX + codeBoxW + sepW / 2, badgeY + 2);
+      ctx.lineTo(badgeX + codeBoxW + sepW / 2, badgeY + badgeH - 2);
+      ctx.stroke();
+
+      const tierBoxX = badgeX + codeBoxW + sepW;
+      const tierBoxW = tierW + padX * 2;
+      ctx.fillStyle = '#e0e0e0';
+      ctx.fillText(tierText, tierBoxX + tierBoxW / 2, badgeY + badgeH / 2 + 1);
+      ctx.textBaseline = 'alphabetic';
+
+      cardBadgeHitAreas.push({
+        x: badgeX, y: badgeY, w: codeBoxW, h: badgeH,
+        label: RARITY_LABELS[rarity] || 'Common',
+      });
+      cardBadgeHitAreas.push({
+        x: tierBoxX, y: badgeY, w: tierBoxW, h: badgeH,
+        label: `Tier ${tier}`,
+      });
+    }
 
     // Subtype label (bottom-left), colored with the frame-echo color so it
     // matches the description box outline.
@@ -4957,9 +5636,11 @@ function drawCombat() {
   // Background
   drawEncounterBg();
 
-  // Clear log card hit areas at the start of the frame so panel/log pushes
-  // (made later in this frame) are read fresh by the hover pass at the end.
+  // Clear hit-area registries at the start of the frame so per-frame pushes
+  // (panels, log, full preview icons) are read fresh by the hover pass.
   logCardHitAreas.length = 0;
+  iconHitAreas.length = 0;
+  cardBadgeHitAreas.length = 0;
 
   // --- Layout panel backgrounds (subtle dividers to delimit sections) ---
   // Right column background (log + buttons)
@@ -5015,6 +5696,18 @@ function drawCombat() {
     hoveredCardPreview = null;
     hoveredPowerPreview = null;
     hoveredCreaturePreview = null;
+  }
+
+  // --- Player Allies ---
+  // Drawn BEFORE the hand so when a player has many allies (up to 12 fills
+  // a 2-row grid that drops below the row, overlapping the hand area), the
+  // hand cards stay visible on top. Allies still register hover hit areas
+  // so the player can peek their stats by hovering an unobscured edge.
+  if (player.creatures.length > 0) {
+    const allyRectsEarly = getPlayerCreatureRects();
+    for (let i = 0; i < player.creatures.length; i++) {
+      drawCreatureCard(player.creatures[i], allyRectsEarly[i], true);
+    }
   }
 
   // (Log/panel hover detection runs at the end of drawCombat after everything is populated.)
@@ -5083,15 +5776,6 @@ function drawCombat() {
     const preview = card.copy ? card.copy() : card;
     preview.exhausted = false;
     hoveredCardPreview = preview;
-  }
-
-  // --- Player Allies ---
-  if (player.creatures.length > 0) {
-    // Allies are drawn as mini cards in 1 row of 6 to the right of the player character card
-    const allyRects = getPlayerCreatureRects();
-    for (let i = 0; i < player.creatures.length; i++) {
-      drawCreatureCard(player.creatures[i], allyRects[i], true);
-    }
   }
 
   // --- Player Power ---
@@ -5183,11 +5867,25 @@ function drawCombat() {
       const r = allyRects[idx];
       drawTargetingArrow(r.x + r.w / 2, r.y + r.h / 2, mouseX, mouseY, Colors.RED);
     }
-  } else if (state === GameState.MULTI_TARGETING && multiCardIndex >= 0) {
-    const handRects = getHandCardRects(player.deck.hand);
-    if (handRects[multiCardIndex]) {
-      const r = handRects[multiCardIndex];
-      const sx = r.x + r.w / 2, sy = r.y + r.h / 2 - 20;
+  } else if (state === GameState.MULTI_TARGETING) {
+    // Arrow source: the ally creature for ally multi-attack (Raena), or the
+    // hand card for normal multi-target plays.
+    let sx, sy;
+    if (multiAllyAttacker) {
+      const allyRects = getPlayerCreatureRects();
+      const idx = player.creatures.indexOf(multiAllyAttacker);
+      if (idx !== -1 && allyRects[idx]) {
+        const r = allyRects[idx];
+        sx = r.x + r.w / 2; sy = r.y + r.h / 2;
+      }
+    } else if (multiCardIndex >= 0) {
+      const handRects = getHandCardRects(player.deck.hand);
+      if (handRects[multiCardIndex]) {
+        const r = handRects[multiCardIndex];
+        sx = r.x + r.w / 2; sy = r.y + r.h / 2 - 20;
+      }
+    }
+    if (sx !== undefined) {
       // Arrows to already-picked targets (gold, persist until done/cancel)
       for (const t of multiTargets) {
         let tx, ty;
@@ -5201,7 +5899,7 @@ function drawCombat() {
         }
         if (tx !== undefined) drawTargetingArrow(sx, sy, tx, ty, Colors.GOLD);
       }
-      // Arrow from hand card to cursor (only if we can still pick more)
+      // Arrow to cursor (only if we can still pick more)
       if (multiTargets.length < multiMaxTargets) {
         drawTargetingArrow(sx, sy, mouseX, mouseY, Colors.RED);
       }
@@ -5285,6 +5983,11 @@ function drawCombat() {
   // --- Card / power hover preview (follows cursor) ---
   if (combatIntroTimer <= 0 && !characterSplashCharacter) {
     drawHoverPreview();
+    // Buff-line / inline-icon tooltips (e.g. Armor, Shield) on the
+    // currently-rendered full preview. Runs even while shift-frozen so the
+    // player can move the cursor over the frozen card and hover its icons.
+    drawIconTooltip();
+    drawBadgeTooltip();
   }
 
   // --- Character card splash overlay ---
@@ -5505,13 +6208,61 @@ function drawCreaturePreviewCard(creature, x, y, w, h) {
   ctx.fillStyle = Colors.WHITE;
   ctx.textAlign = 'left';
   ctx.fillText(`${creature.attack}`, boxX + 8 + 8, hpBarY + hpBarH / 2 + 1);
-  if (creature.poisonAttack) {
+  // Attack riders (Poison fang / Fire torch / Ice wisp) shown next to the
+  // attack stat — same set as the in-combat mini card.
+  {
     const atkTextW = ctx.measureText(`${creature.attack}`).width;
-    const poisonImg = images['icon_poison'];
-    const pIconSize = Math.max(12, Math.floor(statsRowH * 0.75));
-    const px = boxX + 8 + 8 + atkTextW + 3;
-    const py = hpBarY + (hpBarH - pIconSize) / 2;
-    if (poisonImg) ctx.drawImage(poisonImg, px, py, pIconSize, pIconSize);
+    const iconSize = Math.max(12, Math.floor(statsRowH * 0.75));
+    let iconX = boxX + 8 + 8 + atkTextW + 3;
+    const iconY = hpBarY + (hpBarH - iconSize) / 2;
+    const drawRider = (iconKey) => {
+      const img = images[iconKey];
+      if (img) ctx.drawImage(img, iconX, iconY, iconSize, iconSize);
+      iconX += iconSize + 2;
+    };
+    if (creature.poisonAttack) drawRider('icon_poison');
+    if (creature.fireAttack > 0) drawRider('icon_fire');
+    if (creature.iceAttack > 0) drawRider('icon_ice');
+  }
+
+  // Buff line: passive states (armor, shield, heroism, rage) drawn just
+  // above the black description box, like the badges on the live combat
+  // mini-card. Lays out left-to-right with a small gap between each.
+  // Each icon emits a keyword hit area so it's hoverable for a tooltip
+  // even while shift-frozen on the full preview.
+  const buffEntries = [];
+  if (creature.armor > 0) buffEntries.push({ icon: 'icon_armor', value: creature.armor, color: '#cccccc', keyword: 'armor' });
+  if (creature.shield > 0) buffEntries.push({ icon: 'icon_shield', value: creature.shield, color: '#9ad6ff', keyword: 'shield' });
+  if (creature.heroism > 0) buffEntries.push({ icon: 'icon_heroism', value: creature.heroism, color: Colors.GOLD, keyword: 'heroism' });
+  if (creature.rage > 0) buffEntries.push({ icon: 'icon_rage', value: creature.rage, color: '#ff7878', keyword: 'rage' });
+  if (buffEntries.length > 0) {
+    const bIconSize = Math.max(14, Math.floor(w * 0.085));
+    const bFontSize = Math.max(11, Math.floor(w * 0.07));
+    const bGap = 6;
+    const bRowY = boxY - bIconSize - 4;
+    let bx = boxX + 4;
+    ctx.font = `bold ${bFontSize}px sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (const e of buffEntries) {
+      const startX = bx;
+      const img = images[e.icon];
+      if (img) {
+        ctx.drawImage(img, bx, bRowY, bIconSize, bIconSize);
+        bx += bIconSize + 2;
+      }
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.95)';
+      ctx.shadowBlur = 3;
+      ctx.shadowOffsetY = 1;
+      ctx.fillStyle = e.color;
+      ctx.fillText(`${e.value}`, bx, bRowY + bIconSize / 2 + 1);
+      ctx.restore();
+      bx += ctx.measureText(`${e.value}`).width + bGap;
+      iconHitAreas.push({
+        x: startX, y: bRowY, w: bx - startX - bGap, h: bIconSize, keyword: e.keyword,
+      });
+    }
   }
 
   ctx.textAlign = 'left';
@@ -5799,27 +6550,28 @@ function drawCombatIntro() {
   ctx.fillStyle = `rgba(0,0,0,${0.78 * alpha})`;
   ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-  // Get monster art (try multiple keys: enemy name lowercased, monster portraits in card art)
-  const enemyArtIds = [
-    enemy.name.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
-    enemy.name.toLowerCase().replace(/ /g, '_').replace(/'/g, ''),
-  ];
-  let art = null;
-  for (const id of enemyArtIds) {
-    art = getCardArt(id);
-    if (art) break;
-  }
-  // Fallback: try common monster portraits
+  // Get monster art. Some enemies share an art key with a card/power
+  // (e.g. wolf_pack → wolf_pack power card), so name-based remaps
+  // need to win over the generic name → id slugify path.
+  const NAME_REMAP = {
+    'Wolf Pack':    'wolf',              // WolfInSnow.jpg
+    'Giant Rat':    'giant_rat',
+    'Bone Pile':    'bone_pile_monster',
+    'Slime':        'slime_monster',
+    'Kobold Warden':'kobold_warden',
+    'Dire Rat':     'dire_rat',
+    'Kobold Patrol':'kobold_patrol',
+  };
+  let art = NAME_REMAP[enemy.name] ? getCardArt(NAME_REMAP[enemy.name]) : null;
   if (!art) {
-    const fallbacks = {
-      'Giant Rat': 'giant_rat',
-      'Bone Pile': 'bone_pile_monster',
-      'Slime': 'slime_monster',
-      'Kobold Warden': 'kobold_warden',
-      'Dire Rat': 'dire_rat',
-      'Kobold Patrol': 'kobold_patrol',
-    };
-    if (fallbacks[enemy.name]) art = getCardArt(fallbacks[enemy.name]);
+    const enemyArtIds = [
+      enemy.name.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+      enemy.name.toLowerCase().replace(/ /g, '_').replace(/'/g, ''),
+    ];
+    for (const id of enemyArtIds) {
+      art = getCardArt(id);
+      if (art) break;
+    }
   }
 
   if (art) {
@@ -5852,26 +6604,16 @@ function drawCombatIntro() {
   ctx.shadowOffsetX = 2;
   ctx.shadowOffsetY = 3;
   ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
-  // Wrap long titles (e.g. "Combat with Kobold Patrol!") to 2 lines
-  // when they exceed ~80% of screen width.
-  const maxMsgW = SCREEN_WIDTH * 0.8;
-  if (ctx.measureText(combatIntroMessage).width > maxMsgW) {
-    const words = combatIntroMessage.split(' ');
-    let best = words.length;
-    for (let i = 1; i < words.length; i++) {
-      const l1 = words.slice(0, i).join(' ');
-      const l2 = words.slice(i).join(' ');
-      if (ctx.measureText(l1).width <= maxMsgW && ctx.measureText(l2).width <= maxMsgW) {
-        best = i; break;
-      }
-    }
-    const line1 = words.slice(0, best).join(' ');
-    const line2 = words.slice(best).join(' ');
-    ctx.fillText(line1, SCREEN_WIDTH / 2, msgY - 24);
-    ctx.fillText(line1, SCREEN_WIDTH / 2, msgY - 24);
-    if (line2) { ctx.fillText(line2, SCREEN_WIDTH / 2, msgY + 24); ctx.fillText(line2, SCREEN_WIDTH / 2, msgY + 24); }
+  // Two-line layout: "Combat with" on top, "{enemy name}!" beneath.
+  // Splits at the first occurrence of " with " so any enemy name fits
+  // (e.g. "Combat with Bone Amalgam!" no longer crowds the screen).
+  const splitIdx = combatIntroMessage.indexOf(' with ');
+  if (splitIdx >= 0) {
+    const line1 = combatIntroMessage.slice(0, splitIdx + 5); // "Combat with"
+    const line2 = combatIntroMessage.slice(splitIdx + 6);    // "{enemy}!"
+    ctx.fillText(line1, SCREEN_WIDTH / 2, msgY - 26);
+    ctx.fillText(line2, SCREEN_WIDTH / 2, msgY + 26);
   } else {
-    ctx.fillText(combatIntroMessage, SCREEN_WIDTH / 2, msgY);
     ctx.fillText(combatIntroMessage, SCREEN_WIDTH / 2, msgY);
   }
   ctx.restore();
@@ -5921,10 +6663,15 @@ function drawTooltipBox(card, x, y) {
       lines.push({ text: desc, font: '11px sans-serif', color: '#aaa' });
     }
   }
-  // Modal modes
+  // Modal modes — pure modal cards prompt "Choose one"; dual-type cards
+  // (top-level effects + a defense block-mode) label the modes as defense options.
   if (card.isModal && card.modes) {
+    const isDualType = card.effects && card.effects.length > 0;
     lines.push({ text: '', font: '8px sans-serif', color: Colors.GRAY });
-    lines.push({ text: 'Choose one:', font: 'bold 11px sans-serif', color: Colors.GOLD });
+    lines.push({
+      text: isDualType ? 'When defending:' : 'Choose one:',
+      font: 'bold 11px sans-serif', color: Colors.GOLD,
+    });
     for (const mode of card.modes) {
       lines.push({ text: `• ${mode.description}`, font: '11px sans-serif', color: '#ccc' });
     }
@@ -5977,6 +6724,7 @@ function getSummonPreview(card) {
     thorb_card_2: { name: 'Thorb', atk: 2, hp: 5, abilities: 'Sentinel, Companion' },
     summon_treants: { name: 'Treant', atk: 2, hp: 3 },
     magma_mephit_summon: { name: 'Magma Mephit', atk: 2, hp: 5, abilities: 'Fire Immune' },
+    large_boulder: { name: 'Large Boulder', atk: 6, hp: 4, abilities: '1 Armor, Self-Destruct' },
   };
   return previews[card.id] || null;
 }
@@ -6038,9 +6786,15 @@ function drawCharacterPanel(character, side) {
   }
 
   // Portrait art fills the card
-  const portraitArtId = isPlayer
-    ? `${selectedClass.toLowerCase()}_class`
-    : character.name.toLowerCase().replace(/ /g, '_');
+  let portraitArtId;
+  if (isPlayer) {
+    portraitArtId = `${selectedClass.toLowerCase()}_class`;
+  } else {
+    portraitArtId = character.name.toLowerCase().replace(/ /g, '_');
+    // Wolf Pack uses the lone wolf portrait (WolfInSnow.jpg). Without
+    // this the name → art id collides with the wolf_pack power card.
+    if (portraitArtId === 'wolf_pack') portraitArtId = 'wolf';
+  }
   const portrait = getCardArt(portraitArtId);
   const hasArt = !!portrait;
 
@@ -6227,22 +6981,50 @@ function drawCharacterPanel(character, side) {
 
   // HP bar at the bottom of the card (green). Up 4 px and shrunk 8 px off
   // each side so it fits comfortably inside the frame's bottom filigree.
-  const hp = getHP(character);
-  const maxHp = getMaxHP(character);
+  // For survival fights the enemy's HP bar is replaced with a "Survive: N
+  // Rounds" gold-fill bar (mirrors Python). Kill-count fights show a red
+  // "Kill N Enemies" bar instead.
   const barX = rect.x + 18, barW = rect.w - 36, barH = 22;
   const barY = rect.y + rect.h - barH - 14;
   ctx.fillStyle = '#222';
   ctx.fillRect(barX, barY, barW, barH);
-  const hpPct = maxHp > 0 ? hp / maxHp : 0;
-  ctx.fillStyle = hpPct > 0.5 ? Colors.GREEN : (hpPct > 0.25 ? Colors.GOLD : Colors.RED);
-  ctx.fillRect(barX, barY, barW * hpPct, barH);
-  ctx.strokeStyle = Colors.WHITE;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(barX, barY, barW, barH);
-  ctx.fillStyle = Colors.WHITE;
-  ctx.font = 'bold 14px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(`HP: ${hp}/${maxHp}`, barX + barW / 2, barY + 16);
+  if (!isPlayer && survivalRounds > 0) {
+    const pct = survivalRounds > 0 ? survivalRoundsRemaining / survivalRounds : 0;
+    ctx.fillStyle = Colors.GOLD;
+    ctx.fillRect(barX, barY, barW * pct, barH);
+    ctx.strokeStyle = Colors.WHITE;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barW, barH);
+    ctx.fillStyle = Colors.WHITE;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Survive: ${survivalRoundsRemaining} Rounds`, barX + barW / 2, barY + 16);
+  } else if (!isPlayer && killTarget > 0) {
+    const remaining = Math.max(0, killTarget - killCount);
+    const pct = killTarget > 0 ? remaining / killTarget : 0;
+    ctx.fillStyle = Colors.RED;
+    ctx.fillRect(barX, barY, barW * pct, barH);
+    ctx.strokeStyle = Colors.WHITE;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barW, barH);
+    ctx.fillStyle = Colors.WHITE;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Kill ${remaining} Enemies`, barX + barW / 2, barY + 16);
+  } else {
+    const hp = getHP(character);
+    const maxHp = getMaxHP(character);
+    const hpPct = maxHp > 0 ? hp / maxHp : 0;
+    ctx.fillStyle = hpPct > 0.5 ? Colors.GREEN : (hpPct > 0.25 ? Colors.GOLD : Colors.RED);
+    ctx.fillRect(barX, barY, barW * hpPct, barH);
+    ctx.strokeStyle = Colors.WHITE;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barW, barH);
+    ctx.fillStyle = Colors.WHITE;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`HP: ${hp}/${maxHp}`, barX + barW / 2, barY + 16);
+  }
 
   ctx.textAlign = 'left';
 }
@@ -6280,6 +7062,39 @@ function drawCreatureCard(creature, rect, isPlayer, isPreview = false) {
     ctx.strokeStyle = Colors.GREEN;
     ctx.lineWidth = 3;
     ctx.strokeRect(rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6);
+  }
+  // Sentinel halo: drawn whenever the player is in any targeting state and
+  // this creature is a living sentinel guarding the row. A brighter pulse
+  // fires on top while sentinelFlashTimer > 0 (rejected click feedback).
+  if (!isPreview && !isPlayer && creature.sentinel && creature.isAlive) {
+    const inTargeting = state === GameState.TARGETING ||
+      state === GameState.MULTI_TARGETING ||
+      state === GameState.POWER_TARGETING ||
+      state === GameState.ALLY_TARGETING;
+    if (inTargeting) {
+      // Soft ambient pulse so the sentinel is always visibly the must-hit
+      // target during target picking.
+      const pulse = (Math.sin(performance.now() / 280) + 1) / 2; // 0..1
+      const baseA = 0.45 + 0.35 * pulse;
+      ctx.save();
+      ctx.shadowColor = Colors.GOLD;
+      ctx.shadowBlur = 14;
+      ctx.strokeStyle = `rgba(255,215,0,${baseA})`;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(rect.x - 4, rect.y - 4, rect.w + 8, rect.h + 8);
+      ctx.restore();
+    }
+    // Rejection flash on top — bright + thicker, decays with the timer.
+    if (sentinelFlashTimer > 0) {
+      const a = Math.min(1, sentinelFlashTimer / 300);
+      ctx.save();
+      ctx.shadowColor = Colors.GOLD;
+      ctx.shadowBlur = 20;
+      ctx.strokeStyle = `rgba(255,215,0,${a})`;
+      ctx.lineWidth = 5;
+      ctx.strokeRect(rect.x - 5, rect.y - 5, rect.w + 10, rect.h + 10);
+      ctx.restore();
+    }
   }
 
   // Try creature art first (image keyed off snake-cased creature name).
@@ -6370,20 +7185,23 @@ function drawCreatureCard(creature, rect, isPlayer, isPreview = false) {
   ctx.fillStyle = Colors.WHITE;
   ctx.textAlign = 'left';
   ctx.fillText(`${creature.attack}`, rect.x + 6 + 8, hpBarY + hpBarH / 2 + 1);
-  // Poison-attack indicator (icon beside the attack number)
-  if (creature.poisonAttack) {
+  // Attack riders displayed beside the attack number: poison fang (Pet
+  // Spider), fire torch (Kobold Slinger), ice wisp (frost drake). Mirrors
+  // PY's per-creature attack icon next to the swing damage.
+  {
     const atkTextW = ctx.measureText(`${creature.attack}`).width;
-    const poisonImg = images['icon_poison'];
-    const pIconSize = 14;
-    const px = rect.x + 6 + 8 + atkTextW + 2; // follow attack-number shift
-    const py = hpBarY + (hpBarH - pIconSize) / 2;
-    if (poisonImg) {
-      ctx.drawImage(poisonImg, px, py, pIconSize, pIconSize);
-    } else {
-      // Fallback dot
-      ctx.fillStyle = Colors.GREEN;
-      ctx.beginPath(); ctx.arc(px + 6, py + 7, 4, 0, Math.PI * 2); ctx.fill();
-    }
+    const iconSize = 14;
+    let iconX = rect.x + 6 + 8 + atkTextW + 2;
+    const iconY = hpBarY + (hpBarH - iconSize) / 2;
+    const drawRider = (iconKey, fallbackColor) => {
+      const img = images[iconKey];
+      if (img) ctx.drawImage(img, iconX, iconY, iconSize, iconSize);
+      else { ctx.fillStyle = fallbackColor; ctx.beginPath(); ctx.arc(iconX + 7, iconY + 7, 4, 0, Math.PI * 2); ctx.fill(); }
+      iconX += iconSize + 2;
+    };
+    if (creature.poisonAttack) drawRider('icon_poison', Colors.GREEN);
+    if (creature.fireAttack > 0) drawRider('icon_fire', Colors.ORANGE);
+    if (creature.iceAttack > 0) drawRider('icon_ice', Colors.ICE_BLUE);
   }
 
   // Status badges row (above HP/attack): shield, heroism, armor, fire/ice/poison.
@@ -6438,17 +7256,20 @@ function drawCreatureCard(creature, rect, isPlayer, isPreview = false) {
   drawCreatureStatus('icon_poison', creature.poisonStacks, Colors.GREEN);
   drawCreatureStatus('icon_shock', creature.shockStacks || 0, Colors.SHOCK_YELLOW);
 
-  // Exhausted overlay (Zzz) for any exhausted creature (player ally or
-  // freshly summoned enemy). Suppressed on side previews — the spider/slime
-  // shown next to a hovered card is informational, not a sleeping creature.
+  // Exhausted indicator: just the Zzz glyph — no dim overlay. Drop-shadowed
+  // so it's visible on bright art. Suppressed on side previews (the
+  // hovered-card preview creatures aren't actually sleeping).
   if (!isPreview && creature.exhausted) {
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.95)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
     ctx.fillStyle = Colors.ORANGE;
     ctx.font = 'bold 18px Georgia, serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('Zzz', rect.x + rect.w / 2, rect.y + rect.h / 2);
+    ctx.restore();
   }
 
   // Info badge for creatures with special abilities (centered, below the Zzz area)
@@ -6514,7 +7335,7 @@ function drawCombatLog() {
     for (let j = 0; j < lines.length; j++) {
       wrappedEntries.push({
         text: lines[j], color: entry.color, card: entry.card,
-        creature: entry.creature,
+        creature: entry.creature, buff: entry.buff,
         isFirstLine: j === 0, arrow: entry.arrow && j === 0,
       });
     }
@@ -6550,11 +7371,12 @@ function drawCombatLog() {
       ctx.fillStyle = e.color;
       ctx.fillText(e.text, logX + 6, y);
     }
-    if ((e.card || e.creature) && e.isFirstLine && y >= logY && y <= logY + logH) {
+    if ((e.card || e.creature || e.buff) && e.isFirstLine && y >= logY && y <= logY + logH) {
       logCardHitAreas.push({
         x: logX + 4, y: y - 12, w: maxWidth + 4, h: lineH,
         card: e.card || null,
         creature: e.creature || null,
+        buff: e.buff || null,
       });
     }
     y += lineH;
@@ -6652,6 +7474,7 @@ function drawCombatButtons() {
 
   // Help icon (right side, top row right)
   drawIconButton(rects.help, 'icon_help', () => {
+    playSound('book_open');
     previousState = state;
     helpScrollY = 0;
     state = GameState.HELP_SCREEN;
@@ -6897,8 +7720,15 @@ function handleCombatClick(x, y) {
         return;
       }
       selectedAlly = ally;
-      state = GameState.ALLY_TARGETING;
-      showStickyToast(`${ally.name}: Click an enemy target (or click elsewhere to cancel)`);
+      // Multi-attack ally (Raena etc.) → enter the axe-style multi-target
+      // picker with a Done button. Single-attack allies use the legacy
+      // single-target click path.
+      if ((ally.multiAttack || 1) > 1) {
+        enterAllyMultiTargeting(ally);
+      } else {
+        state = GameState.ALLY_TARGETING;
+        showStickyToast(`${ally.name}: Click an enemy target (or click elsewhere to cancel)`);
+      }
       return;
     }
   }
@@ -6928,9 +7758,29 @@ function handleCombatClick(x, y) {
         showToast('Defense cards are played when the enemy attacks.');
         return;
       }
+      // Companion / summon cards: refuse the play if the field is already
+      // at the 12-ally cap so the cost isn't wasted.
+      const summonsAlly = (card.effects || []).some(e => e && e.target === TargetType.SUMMON);
+      if (summonsAlly && !player.canSummonMore()) {
+        showToast(`Field is full — can't summon more allies.`);
+        return;
+      }
+      // Lucky Pebble (and any other on-discard relic) can't be played from
+      // hand directly — it only triggers when discarded as a recharge cost
+      // for another card or as deck damage. The passive draw fires from
+      // Character.takeDamageFromDeck.
+      if ((card.effects || []).some(e => e && e.effectType === 'on_discard_draw')) {
+        showToast(`${card.name} only triggers when discarded.`);
+        return;
+      }
       if (selectedCardIndex !== i) {
         selectedCardIndex = i;
-        if (card.isModal) {
+        playSound('click');
+        // Pure modal cards (e.g. Feral Swipe) have no top-level effects — open the
+        // mode picker. Dual-type cards (e.g. Sturdy Boots) have both top-level
+        // effects AND modes; the top-level effects fire on player turn and the
+        // modes are reserved as defense alternatives, so skip the picker here.
+        if (card.isModal && (!card.effects || card.effects.length === 0)) {
           modalCard = card;
           modalTarget = null;
           state = GameState.MODAL_SELECT;
@@ -7021,13 +7871,44 @@ function applyOnRechargeShield(card) {
     addLog(`  ${card.name}: +${granted} Shield (S:${player.shield})`, Colors.ALLY_BLUE);
     spawnTokenOnTarget(player, granted, 'Shield', Colors.ALLY_BLUE);
   }
+  // Piggyback the heroism variant so every callsite that recharges a
+  // card also fires Wolf Fang's on_recharge_heroism (and any future
+  // on_recharge_* effects).
+  applyOnRechargeHeroism(card);
 }
 function refundOnRechargeShield(card) {
-  if (!card || !card._onRechargeShieldGranted) return;
-  const amt = card._onRechargeShieldGranted;
-  player.shield = Math.max(0, player.shield - amt);
-  delete card._onRechargeShieldGranted;
-  addLog(`  ${card.name}: refund ${amt} Shield (S:${player.shield})`, Colors.GRAY);
+  if (!card) return;
+  if (card._onRechargeShieldGranted) {
+    const amt = card._onRechargeShieldGranted;
+    player.shield = Math.max(0, player.shield - amt);
+    delete card._onRechargeShieldGranted;
+    addLog(`  ${card.name}: refund ${amt} Shield (S:${player.shield})`, Colors.GRAY);
+  }
+  refundOnRechargeHeroism(card);
+}
+
+// Wolf Fang relic: when this card lands in the recharge pile (paid as
+// cost for another card/power, or self-recharged at end of turn), the
+// player gains N Heroism. Tracked on the card so cancel-flow can refund.
+function applyOnRechargeHeroism(card) {
+  if (!card || !Array.isArray(card.currentEffects)) return;
+  let granted = 0;
+  for (const eff of card.currentEffects) {
+    if (eff.effectType === 'on_recharge_heroism') granted += eff.value;
+  }
+  if (granted > 0) {
+    player.heroism = (player.heroism || 0) + granted;
+    card._onRechargeHeroismGranted = granted;
+    addLog(`  ${card.name}: +${granted} Heroism (H:${player.heroism})`, Colors.GOLD);
+    spawnTokenOnTarget(player, granted, 'Heroism', Colors.GOLD);
+  }
+}
+function refundOnRechargeHeroism(card) {
+  if (!card || !card._onRechargeHeroismGranted) return;
+  const amt = card._onRechargeHeroismGranted;
+  player.heroism = Math.max(0, (player.heroism || 0) - amt);
+  delete card._onRechargeHeroismGranted;
+  addLog(`  ${card.name}: refund ${amt} Heroism (H:${player.heroism})`, Colors.GRAY);
 }
 
 function handleCardRechargeClick(x, y) {
@@ -7036,10 +7917,9 @@ function handleCardRechargeClick(x, y) {
   for (let i = handRects.length - 1; i >= 0; i--) {
     if (i === selectedCardIndex) continue;
     if (hitTest(x, y, getHandCardHoverRect(handRects, i))) {
+      playSound('click');
       const card = player.deck.hand[i];
-      // Remember exhausted state so cancelling restores it (addToRechargePile resets it)
       card._preRechargeExhausted = !!card.exhausted;
-      // Move to recharge pile (held until end of turn, then flushed under the deck)
       player.deck.hand.splice(i, 1);
       player.deck.addToRechargePile(card);
       applyOnRechargeShield(card); // Dwarven Greaves etc.
@@ -7057,7 +7937,7 @@ function handleCardRechargeClick(x, y) {
         if (canPlayWithoutTarget(selectedCard)) {
           hideToast();
           playCardSelf(selectedCardIndex);
-          for (const n of pendingRechargeNames) addLog(`  Recharge: ${n}`);
+          for (const c of cardRechargedCards) addLog(`  Recharge: ${c.name}`, Colors.GRAY, c);
           pendingRechargeNames = [];
           cardRechargedCards = [];
         } else if (cardIsMultiTarget(selectedCard)) {
@@ -7092,7 +7972,16 @@ function handleDefendingClick(x, y) {
       showToast('Only defense cards can be played here.');
       return;
     }
-    // Play the defense card (or the block-mode of a modal card)
+    // Play the defense card (or the block-mode of a modal card).
+    // Per-card override (e.g. Dwarven Greaves / Sturdy Boots →
+    // boots_flesh) wins over the subtype-based block_* sound.
+    const defSub = (card.subtype || '').toLowerCase();
+    const defSfx = getWeaponSfxKeys(card);
+    if (defSfx && defSfx.defense) playSound(defSfx.defense, 0.7);
+    else if (defSub === 'heavy_armor') playSound('block_heavy');
+    else if (defSub === 'light_armor' || defSub === 'armor') playSound('block_light');
+    else if (defSub === 'clothing') playSound('block_clothing');
+    else playSound('click');
     player.deck.playCard(card);
     addLog(`You play ${card.name}`, Colors.GREEN, card);
     // Recharge-cost defense cards self-recharge when played, so any
@@ -7257,7 +8146,7 @@ function handleTargetingClick(x, y) {
       if (i < barrageCardIndex) barrageCardIndex--;
       selectedCardIndex = barrageCardIndex;
       barrageRechargedCard = payCard;
-      addLog(`  Recharge: ${payCard.name}`);
+      addLog(`  Recharge: ${payCard.name}`, Colors.GRAY, payCard);
       barrageShotsLeft = 3;
       barrageShotsFired = 0;
       showStyledToast(`Magic Missiles: 3 shots left — click a target (or Done)`, 'multi');
@@ -7269,7 +8158,12 @@ function handleTargetingClick(x, y) {
   // Normal targeting: click enemy character
   const enemyCardRect = getCharacterCardRect(false);
   if (hitTest(x, y, enemyCardRect)) {
-    const names = pendingRechargeNames.slice();
+    if (enemy._invulnerable) {
+      showStyledToast(`${enemy.name} is invulnerable!`, 'recharge', 1500);
+      return;
+    }
+    if (!isSentinelLegalTarget(enemy)) { triggerSentinelFlash(); return; }
+    const rechargedCards = cardRechargedCards.slice();
     cardRechargedCards = [];
     pendingRechargeNames = [];
     // Snapshot is only for cancel; successful play consumes it.
@@ -7277,7 +8171,7 @@ function handleTargetingClick(x, y) {
     hideToast();
     barrageMode = false;
     playCardOnEnemy(selectedCardIndex);
-    for (const n of names) addLog(`  Recharge: ${n}`);
+    for (const c of rechargedCards) addLog(`  Recharge: ${c.name}`, Colors.GRAY, c);
     return;
   }
 
@@ -7285,14 +8179,16 @@ function handleTargetingClick(x, y) {
   const creatureRects = getEnemyCreatureRects();
   for (let i = 0; i < creatureRects.length; i++) {
     if (hitTest(x, y, creatureRects[i])) {
-      const names = pendingRechargeNames.slice();
+      const t = enemy.creatures[i];
+      if (!isSentinelLegalTarget(t)) { triggerSentinelFlash(); return; }
+      const rechargedCards = cardRechargedCards.slice();
       cardRechargedCards = [];
       pendingRechargeNames = [];
       _handOrderSnapshot = null;
       hideToast();
       barrageMode = false;
-      playCardOnCreature(selectedCardIndex, enemy.creatures[i]);
-      for (const n of names) addLog(`  Recharge: ${n}`);
+      playCardOnCreature(selectedCardIndex, t);
+      for (const c of rechargedCards) addLog(`  Recharge: ${c.name}`, Colors.GRAY, c);
       return;
     }
   }
@@ -7325,31 +8221,64 @@ function getClickedEnemyTarget(x, y) {
   return null;
 }
 
+// Returns the array of living Sentinel creatures on the enemy side, or [] if
+// none. While any are alive, the player can only target Sentinel creatures
+// (the enemy character + non-sentinel allies are off-limits) unless the card
+// is an attack-all effect.
+function getLivingSentinels() {
+  return (enemy && enemy.creatures || []).filter(c => c.isAlive && c.sentinel);
+}
+
+// True if `target` is a legal target right now: sentinels OK, anything else
+// blocked while sentinels are alive.
+function isSentinelLegalTarget(target) {
+  const sentinels = getLivingSentinels();
+  if (sentinels.length === 0) return true;
+  return target instanceof Creature && target.sentinel && target.isAlive;
+}
+
+// Pulse-flash the sentinel creatures + nudge the player so they understand
+// why the click was rejected. Mirrors PY's trigger_sentinel_flash.
+function triggerSentinelFlash() {
+  sentinelFlashTimer = 750; // ms
+  showStyledToast('Must target Sentinel units first!', 'recharge', 1500);
+}
+
 // Resolve one barrage shot on a target
 function resolveBarrageShot(target) {
   barrageShotsLeft--;
   barrageShotsFired++;
   attacksThisTurn++;
-  const dmg = 1 + player.heroism + getDamageModifier(player);
+  // Stamp the in-hand Magic Missiles card so the weapon-SFX classifier
+  // routes each shot through the missile_flesh override. Cleared at
+  // the end of this shot — finishBarrage / cancelBarrage also clear.
+  if (barrageCardIndex >= 0 && barrageCardIndex < player.deck.hand.length) {
+    _activePlayCard = player.deck.hand[barrageCardIndex];
+  }
+  let dmg = 1 + player.heroism + getDamageModifier(player);
   if (player.heroism > 0) {
     addLog(`  (Heroism +${player.heroism})`, Colors.GOLD);
     player.heroism = 0;
   }
+  dmg = consumeIceForAttack(player, dmg);
   addLog(`  Shot ${barrageShotsFired}:`, Colors.GRAY);
   if (target === enemy) {
     enemyAutoPlayDefenses(dmg);
     const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
     if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
+    playAttackHitSfx(dmg, taken);
     const bs = blocked > 0 ? ` (blocked ${blocked})` : '';
     addLog(`  ${enemy.name}: ${taken} dmg${bs}`, Colors.RED);
   } else if (target.isAlive) {
     const actual = target.takeDamage(dmg);
     if (actual > 0) spawnDamageOnTarget(target, actual);
+    playAttackHitSfx(dmg, actual);
     addLog(`  ${target.name}: ${actual} dmg`, Colors.RED);
-    if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); }
+    if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); }
   }
   countAndRemoveDeadCreatures();
 
+  _activePlayCard = null;
   if (barrageShotsLeft <= 0 || checkCombatEnd()) {
     finishBarrage();
   } else {
@@ -7405,6 +8334,10 @@ function cancelBarrage() {
 
 let attacksThisTurn = 0; // for sneak_attack scaling
 let _activePlayCard = null; // the card currently being resolved (set during playCardSelf/etc.)
+// Creature whose swing we're currently resolving — set by the ally-attack
+// paths (manual + auto). Lets the weapon SFX classifier route per-ally
+// (e.g. Thorb → 1-handed axe sounds). Cleared right after the swing.
+let _activeAttacker = null;
 
 // Returns the recharge_extra cost for a card (number of cards to recharge as cost beyond base)
 function getCardRechargeExtra(card) {
@@ -7489,6 +8422,8 @@ function resolveEffect(eff, caster, target) {
       const heroism = caster.heroism;
       if (heroism > 0) { addLog(`  (Heroism +${heroism})`, Colors.GOLD); caster.heroism = 0; }
       let dmg = Math.max(0, eff.value + heroism + caster.rage + getDamageModifier(caster));
+      // Ice on the attacker reduces this attack and consumes 1 stack.
+      dmg = consumeIceForAttack(caster, dmg);
       const incomingMod = getIncomingDamageModifier(target instanceof Creature ? enemy : target);
       dmg += incomingMod;
       dmg = Math.max(0, dmg);
@@ -7507,12 +8442,13 @@ function resolveEffect(eff, caster, target) {
         } else {
           const actual = target.takeDamage(dmg);
           if (actual > 0) spawnDamageOnTarget(target, actual);
+          playAttackHitSfx(dmg, actual);
           const blocked = Math.max(0, dmg - actual);
           const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
           addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
           consumePoisonBuff(caster, target, actual);
         }
-        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); countAndRemoveDeadCreatures(); }
       } else {
         if (unpreventable) {
           target.takeDamageFromDeck(dmg);
@@ -7522,6 +8458,7 @@ function resolveEffect(eff, caster, target) {
         } else {
           const [blocked, taken] = target.takeDamageWithDefense(dmg);
           if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          playAttackHitSfx(dmg, taken);
           const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
           addLog(`  ${target.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
           consumePoisonBuff(caster, target, taken);
@@ -7536,6 +8473,7 @@ function resolveEffect(eff, caster, target) {
       const heroism = caster.heroism;
       if (heroism > 0) { addLog(`  (Heroism +${heroism})`, Colors.GOLD); caster.heroism = 0; }
       let dmg = Math.max(0, eff.value + heroism + caster.rage + getDamageModifier(caster));
+      dmg = consumeIceForAttack(caster, dmg);
       const incomingMod = getIncomingDamageModifier(target instanceof Creature ? enemy : target);
       dmg = Math.max(0, dmg + incomingMod);
       const unpreventable = consumeUnpreventableBuff(caster);
@@ -7551,12 +8489,13 @@ function resolveEffect(eff, caster, target) {
         } else {
           const actual = target.takeDamage(dmg);
           if (actual > 0) spawnDamageOnTarget(target, actual);
+          playAttackHitSfx(dmg, actual);
           const blocked = Math.max(0, dmg - actual);
           const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
           addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
           consumePoisonBuff(caster, target, actual);
         }
-        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); countAndRemoveDeadCreatures(); }
       } else {
         if (unpreventable) {
           target.takeDamageFromDeck(dmg);
@@ -7566,6 +8505,7 @@ function resolveEffect(eff, caster, target) {
         } else {
           const [blocked, taken] = target.takeDamageWithDefense(dmg);
           if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          playAttackHitSfx(dmg, taken);
           const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
           addLog(`  ${target.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
           consumePoisonBuff(caster, target, taken);
@@ -7589,7 +8529,7 @@ function resolveEffect(eff, caster, target) {
         spawnDamageOnTarget(target, dmg, Colors.ORANGE);
         addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
         consumePoisonBuff(caster, target, dmg);
-        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); countAndRemoveDeadCreatures(); }
       } else {
         target.takeDamageFromDeck(dmg);
         spawnDamageOnTarget(target, dmg, Colors.ORANGE);
@@ -7623,12 +8563,13 @@ function resolveEffect(eff, caster, target) {
         } else {
           const actual = target.takeDamage(dmg);
           if (actual > 0) spawnDamageOnTarget(target, actual);
+          playAttackHitSfx(dmg, actual);
           const absorbed = dmg - actual;
           const bs = absorbed > 0 ? ` (${absorbed} absorbed)` : '';
           addLog(`  ${target.name}: ${actual} dmg${bs}`, Colors.RED);
           consumePoisonBuff(caster, target, actual);
         }
-        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); countAndRemoveDeadCreatures(); }
       } else {
         if (unpreventable) {
           target.takeDamageFromDeck(dmg);
@@ -7639,6 +8580,7 @@ function resolveEffect(eff, caster, target) {
           if (target === enemy) enemyAutoPlayDefenses(dmg);
           const [blocked, taken] = target.takeDamageWithDefense(dmg);
           if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          playAttackHitSfx(dmg, taken);
           const bs = blocked > 0 ? ` (${blocked} absorbed)` : '';
           addLog(`  ${target.name}: ${taken} dmg${bs}`, Colors.RED);
           consumePoisonBuff(caster, target, taken);
@@ -7662,10 +8604,11 @@ function resolveEffect(eff, caster, target) {
         } else {
           const actual = target.takeDamage(dmg);
           if (actual > 0) spawnDamageOnTarget(target, actual);
+          playAttackHitSfx(dmg, actual);
           addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
           consumePoisonBuff(caster, target, actual);
         }
-        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); countAndRemoveDeadCreatures(); }
       } else {
         if (unpreventable) {
           target.takeDamageFromDeck(dmg);
@@ -7675,6 +8618,7 @@ function resolveEffect(eff, caster, target) {
         } else {
           const [blocked, taken] = target.takeDamageWithDefense(dmg);
           if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          playAttackHitSfx(dmg, taken);
           addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
           consumePoisonBuff(caster, target, taken);
         }
@@ -7701,10 +8645,11 @@ function resolveEffect(eff, caster, target) {
         } else {
           const actual = target.takeDamage(dmg);
           if (actual > 0) spawnDamageOnTarget(target, actual);
+          playAttackHitSfx(dmg, actual);
           addLog(`  ${target.name}: ${actual} dmg`, Colors.RED);
           consumePoisonBuff(caster, target, actual);
         }
-        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); countAndRemoveDeadCreatures(); }
+        if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); countAndRemoveDeadCreatures(); }
       } else {
         if (unpreventable) {
           target.takeDamageFromDeck(dmg);
@@ -7714,6 +8659,7 @@ function resolveEffect(eff, caster, target) {
         } else {
           const [blocked, taken] = target.takeDamageWithDefense(dmg);
           if (taken > 0) { spawnDamageOnTarget(target, taken); triggerSplitPower(target); }
+          playAttackHitSfx(dmg, taken);
           const bs = blocked > 0 ? ` (blocked ${blocked})` : '';
           addLog(`  ${target.name}: ${taken} dmg${bs}`, Colors.RED);
           consumePoisonBuff(caster, target, taken);
@@ -7729,6 +8675,9 @@ function resolveEffect(eff, caster, target) {
       let hits = 0;
       const maxT = eff.maxTargets || 2;
       const unpreventable = consumeUnpreventableBuff(caster);
+      // 120 ms between target hits keeps each thud audible without
+      // dragging the swing out — feels like a quick chained strike.
+      const SFX_STAGGER_MS = 120;
       // Hit the clicked target first
       if (target instanceof Creature) {
         if (unpreventable) {
@@ -7736,12 +8685,14 @@ function resolveEffect(eff, caster, target) {
           if (dmg > 0) spawnDamageOnTarget(target, dmg, Colors.ORANGE);
           addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
           consumePoisonBuff(caster, target, dmg);
+          playAttackHitSfx(dmg, dmg, hits * SFX_STAGGER_MS);
         } else {
           const actual = target.takeDamage(dmg);
           addLog(`  ${actual} dmg to ${target.name}`, Colors.RED);
           consumePoisonBuff(caster, target, actual);
+          playAttackHitSfx(dmg, actual, hits * SFX_STAGGER_MS);
         }
-        if (!target.isAlive) addLog(`  ${target.name} destroyed!`, Colors.GOLD);
+        if (!target.isAlive) addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target);
         hits++;
       } else {
         if (unpreventable) {
@@ -7749,10 +8700,12 @@ function resolveEffect(eff, caster, target) {
           if (dmg > 0) { spawnDamageOnTarget(target, dmg, Colors.ORANGE); triggerSplitPower(target); }
           addLog(`  ${dmg} true dmg to ${target.name}`, Colors.ORANGE);
           consumePoisonBuff(caster, target, dmg);
+          playAttackHitSfx(dmg, dmg, hits * SFX_STAGGER_MS);
         } else {
           const [blocked, taken] = target.takeDamageWithDefense(dmg);
           addLog(`  ${taken} dmg to ${target.name}`, Colors.RED);
           consumePoisonBuff(caster, target, taken);
+          playAttackHitSfx(dmg, taken, hits * SFX_STAGGER_MS);
         }
         hits++;
       }
@@ -7763,20 +8716,24 @@ function resolveEffect(eff, caster, target) {
         if (unpreventable) {
           c.takeUnpreventableDamage(dmg);
           addLog(`  ${dmg} true dmg to ${c.name}`, Colors.ORANGE);
+          playAttackHitSfx(dmg, dmg, hits * SFX_STAGGER_MS);
         } else {
           const actual = c.takeDamage(dmg);
           addLog(`  ${actual} dmg to ${c.name}`, Colors.RED);
+          playAttackHitSfx(dmg, actual, hits * SFX_STAGGER_MS);
         }
-        if (!c.isAlive) addLog(`  ${c.name} destroyed!`, Colors.GOLD);
+        if (!c.isAlive) addLog(`  ${c.name} destroyed!`, Colors.GOLD, null, null, c);
         hits++;
       }
       if (hits < maxT && !(target === enemy)) {
         if (unpreventable) {
           enemy.takeDamageFromDeck(dmg);
           addLog(`  ${dmg} true dmg to ${enemy.name}`, Colors.ORANGE);
+          playAttackHitSfx(dmg, dmg, hits * SFX_STAGGER_MS);
         } else {
           const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
           addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
+          playAttackHitSfx(dmg, taken, hits * SFX_STAGGER_MS);
         }
       }
       countAndRemoveDeadCreatures();
@@ -7790,18 +8747,24 @@ function resolveEffect(eff, caster, target) {
       const secondary = (eff.value % 10) + caster.heroism;
       if (caster.heroism > 0) { addLog(`  (Heroism +${caster.heroism})`, Colors.GOLD); caster.heroism = 0; }
       const maxT = eff.maxTargets || 3;
+      const SFX_STAGGER_MS = 120;
+      let hitIdx = 0;
       const hitOne = (t, dmg) => {
+        const delay = hitIdx * SFX_STAGGER_MS;
         if (t instanceof Creature) {
           const actual = t.takeDamage(dmg);
           if (actual > 0) spawnDamageOnTarget(t, actual);
+          playAttackHitSfx(dmg, actual, delay);
           addLog(`  ${actual} dmg to ${t.name}`, Colors.RED);
-          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
         } else {
           if (t === enemy) enemyAutoPlayDefenses(dmg);
           const [blocked, taken] = t.takeDamageWithDefense(dmg);
           if (taken > 0) { spawnDamageOnTarget(t, taken); triggerSplitPower(t); }
+          playAttackHitSfx(dmg, taken, delay);
           addLog(`  ${t.name}: ${taken} dmg`, Colors.RED);
         }
+        hitIdx++;
       };
       // Primary
       hitOne(target, primary);
@@ -7911,6 +8874,8 @@ function resolveEffect(eff, caster, target) {
         }
       }
       if (appliedIce > 0) spawnTokenOnTarget(target, appliedIce, 'Ice', Colors.ICE_BLUE);
+      // Sound is now tied to the card play (ID override), not the
+      // apply effect, to avoid double-up across damage + apply.
       break;
     }
     case 'apply_fire': {
@@ -7969,6 +8934,31 @@ function resolveEffect(eff, caster, target) {
     case 'heal':
       healPlayer(eff.value);
       break;
+    case 'heal_all': {
+      // Player heal first (clears poison 1:1 then heals cards from discard).
+      healPlayer(eff.value);
+      // Each ally regains up to N HP. Poison stacks are cured 1:1 with the
+      // heal, mirroring Python's heal_all flow.
+      for (const ally of (caster.creatures || [])) {
+        if (!ally.isAlive) continue;
+        let remaining = eff.value;
+        if (ally.poisonStacks > 0) {
+          const cured = Math.min(remaining, ally.poisonStacks);
+          ally.poisonStacks -= cured;
+          remaining -= cured;
+        }
+        if (remaining > 0) {
+          const before = ally.currentHp;
+          ally.currentHp = Math.min(ally.maxHp, ally.currentHp + remaining);
+          const healed = ally.currentHp - before;
+          if (healed > 0) {
+            spawnHealOnTarget(ally, healed);
+            addLog(`  ${ally.name}: +${healed} HP`, Colors.GREEN);
+          }
+        }
+      }
+      break;
+    }
     case 'discard_deck': {
       // Lose N cards from the top of the draw pile (Bad Rations side-effect)
       const before = player.deck.drawPile.length + player.deck.rechargePile.length;
@@ -7995,10 +8985,13 @@ function resolveEffect(eff, caster, target) {
     }
     case 'grant_potency_buff': {
       // Scroll of Potency: +1 Heroism at start of turn for N turns.
+      // Description is rendered by the perk-style tokenizer, so the
+      // "Start of Turn:" prefix becomes a pill. Turn count is already
+      // shown on the buff icon — no need to repeat it inline.
       caster.addCombatBuff(new CombatBuff({
         id: 'scroll_of_potency_buff',
         name: 'Scroll of Potency',
-        description: `+1 Heroism at start of turn (${eff.value} turns)`,
+        description: 'Start of Turn: +1 Heroism',
         imageId: 'scroll_of_potency',
         effectType: 'gain_heroism',
         effectValue: 1,
@@ -8046,6 +9039,12 @@ function resolveEffect(eff, caster, target) {
       for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
     }
+    case 'on_discard_draw': {
+      // Marker effect — the actual draw is fired by Character.takeDamageFromDeck
+      // when the card lands in the discard pile passively (deck damage, hand
+      // discard effects, etc.). Playing the card does nothing.
+      break;
+    }
     case 'gain_heroism':
       caster.heroism += eff.value;
       addLog(`  +${eff.value} Heroism`, Colors.GOLD);
@@ -8080,6 +9079,19 @@ function resolveEffect(eff, caster, target) {
       addLog(`  Thorb joins the fight!`, Colors.GREEN);
       break;
     }
+    case 'summon_raena': {
+      const raena = new Creature({
+        name: 'Raena', attack: 2, maxHp: 3, multiAttack: 2, isCompanion: true,
+        description: 'Attacks 2 targets.',
+      });
+      raena.sourceCard = _activePlayCard || null;
+      raena._sourceRarity = 'rare';
+      raena._sourceSubtype = 'allies';
+      if (_activePlayCard) _activePlayCard._routeToPlayPile = true;
+      player.addCreature(raena);
+      addLog(`  Raena joins the fight!`, Colors.GREEN);
+      break;
+    }
     case 'summon_thorb_upgraded': {
       const thorb = new Creature({
         name: 'Thorb', attack: 2, maxHp: 5, sentinel: true, isCompanion: true,
@@ -8092,18 +9104,23 @@ function resolveEffect(eff, caster, target) {
       break;
     }
     case 'summon_tamed_rat': {
-      const count = Math.floor(Math.random() * 2) + 1;
+      const want = Math.floor(Math.random() * 2) + 1;
+      let summoned = 0;
       let lastRat;
-      for (let i = 0; i < count; i++) {
-        lastRat = new Creature({ name: 'Tamed Rat', attack: 1, maxHp: 1 });
-        player.addCreature(lastRat);
+      for (let i = 0; i < want; i++) {
+        const rat = new Creature({ name: 'Tamed Rat', attack: 1, maxHp: 1 });
+        if (!player.addCreature(rat)) break; // hit the 12-ally cap
+        lastRat = rat;
+        summoned++;
       }
-      // Pass creature for hover preview in the log
-      addLog(`  ${count} Tamed Rat${count > 1 ? 's' : ''} summoned`, Colors.ORANGE);
-      // Add a hoverable entry for the creature
-      if (lastRat) {
-        const lastEntry = combatLog[combatLog.length - 1];
-        if (lastEntry) lastEntry.creature = lastRat;
+      if (summoned === 0) {
+        addLog(`  No room for a Tamed Rat (field is full).`, Colors.GRAY);
+      } else {
+        addLog(`  ${summoned} Tamed Rat${summoned > 1 ? 's' : ''} summoned${summoned < want ? ` (${want - summoned} blocked — field full)` : ''}`, Colors.ORANGE);
+        if (lastRat) {
+          const lastEntry = combatLog[combatLog.length - 1];
+          if (lastEntry) lastEntry.creature = lastRat;
+        }
       }
       break;
     }
@@ -8143,12 +9160,17 @@ function resolveEffect(eff, caster, target) {
       const dmg = eff.value + caster.heroism;
       if (caster.heroism > 0) { caster.heroism = 0; }
       const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+      if (taken > 0) spawnDamageOnTarget(enemy, taken);
+      playAttackHitSfx(dmg, taken);
       addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
+      let anyLanded = (taken > 0);
       for (const c of [...enemy.creatures]) {
         const actual = c.takeDamage(dmg);
+        if (actual > 0) { spawnDamageOnTarget(c, actual); anyLanded = true; }
         addLog(`  ${actual} dmg to ${c.name}`, Colors.RED);
-        if (!c.isAlive) addLog(`  ${c.name} destroyed!`, Colors.GOLD);
+        if (!c.isAlive) addLog(`  ${c.name} destroyed!`, Colors.GOLD, null, null, c);
       }
+      if (!anyLanded) playAttackHitSfx(dmg, 0);
       countAndRemoveDeadCreatures();
       attacksThisTurn++;
       break;
@@ -8159,7 +9181,7 @@ function resolveEffect(eff, caster, target) {
       addLog(`  +1 Heroism`, Colors.GOLD);
       caster.addCombatBuff(new CombatBuff({
         id: 'scroll_of_potency', name: 'Scroll of Potency',
-        description: '+1 Heroism per turn', imageId: 'scroll_of_potency',
+        description: 'Start of Turn: +1 Heroism', imageId: 'scroll_of_potency',
         effectType: 'gain_heroism', effectValue: 1,
         trigger: 'start_of_turn', combatsRemaining: 99, turnsRemaining: eff.value,
       }));
@@ -8248,7 +9270,9 @@ function liftCardFromHand(handIndex) {
 function playCardSelf(handIndex) {
   const card = player.deck.hand[handIndex];
   const stays = cardStaysInHand(card);
-  _activePlayCard = card; // visible to summon effects (e.g. summon_thorb)
+  _activePlayCard = card;
+  playSound('card_play');
+  playCardAmbient(card);
   if (stays) {
     card.exhausted = true;
     addLog(`You use ${card.name} (stays in hand)`, Colors.GREEN, card);
@@ -8285,6 +9309,8 @@ function playCardSelf(handIndex) {
 function playCardOnEnemy(handIndex) {
   const card = player.deck.hand[handIndex];
   const stays = cardStaysInHand(card);
+  _activePlayCard = card;
+  playCardAmbient(card);
   if (stays) {
     card.exhausted = true;
     addLog(`You use ${card.name} (stays in hand)`, Colors.GREEN, card);
@@ -8307,6 +9333,7 @@ function playCardOnEnemy(handIndex) {
 
   if (!stays) player.deck.placeByCost(card);
 
+  _activePlayCard = null;
   modalCard = null;
   modalTarget = null;
   selectedCardIndex = -1;
@@ -8317,6 +9344,8 @@ function playCardOnEnemy(handIndex) {
 function playCardOnCreature(handIndex, creature) {
   const card = player.deck.hand[handIndex];
   const stays = cardStaysInHand(card);
+  _activePlayCard = card;
+  playCardAmbient(card);
   if (stays) {
     card.exhausted = true;
     addLog(`You use ${card.name} on ${creature.name} (stays in hand)`, Colors.GREEN, card);
@@ -8342,6 +9371,7 @@ function playCardOnCreature(handIndex, creature) {
 
   if (!stays) player.deck.placeByCost(card);
 
+  _activePlayCard = null;
   modalCard = null;
   modalTarget = null;
   selectedCardIndex = -1;
@@ -8358,7 +9388,7 @@ function dealDamageToEnemy(amount, target) {
       const actual = c.takeDamage(amount);
       if (actual > 0) spawnDamageOnTarget(c, actual);
       addLog(`  ${actual} dmg to ${c.name}`, Colors.RED);
-      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
+      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD, null, null, c); }
     }
     countAndRemoveDeadCreatures();
   } else {
@@ -8397,6 +9427,7 @@ function healPlayer(amount) {
     healed++;
   }
   if (healed > 0) {
+    playSound('heal');
     spawnHealOnTarget(player, healed);
     if (state !== GameState.COMBAT) showStyledToast(`+${healed} Healed`, 'heal', 2000);
   } else if (poisonCleared === 0 && amount > 0) {
@@ -8418,9 +9449,9 @@ function handlePowerClick(power) {
     return;
   }
 
+  playSound('click');
   selectedPower = power;
   if (power.rechargeCost > 0) {
-    // Enter recharge mode
     powerRechargeMode = true;
     _handOrderSnapshot = [...player.deck.hand];
     powerRechargeCardsNeeded = power.rechargeCost;
@@ -8442,14 +9473,14 @@ function handlePowerRechargeClick(x, y) {
   const handRects = getHandCardRects(player.deck.hand);
   for (let i = handRects.length - 1; i >= 0; i--) {
     if (hitTest(x, y, getHandCardHoverRect(handRects, i))) {
+      playSound('click');
       const card = player.deck.hand[i];
-      // Remove card from hand and recharge/discard it
       player.deck.hand.splice(i, 1);
       // Remember pre-cost exhausted flag so cancelling restores it
       card._preRechargeExhausted = !!card.exhausted;
       card.exhausted = false; // leaving hand clears stay-in-hand exhaust
       if (selectedPower.costIsDiscard) {
-        player.deck.discardPile.push(card);
+        player.deck.discardCard(card);
       } else {
         player.deck.addToRechargePile(card); // held until end of turn
         applyOnRechargeShield(card); // Dwarven Greaves etc. — only on Recharge cost, not Discard
@@ -8575,6 +9606,7 @@ function onPowerChoicePicked(choice) {
     powerChoices = [];
     powerChoiceRects = [];
     power.use();
+    playSound('cat_form_attack', 0.7);
     addLog(`Used power: ${power.name}`, Colors.GREEN, power);
     addLog(`  Mode: Feline Form`);
     player.heroism += 1;
@@ -8592,6 +9624,7 @@ function onPowerChoicePicked(choice) {
     powerChoices = [];
     powerChoiceRects = [];
     power.use();
+    playSound('bear_form_attack', 0.7);
     addLog(`Used power: ${power.name}`, Colors.GREEN, power);
     addLog(`  Mode: Bear Form`);
     player.shield += 1;
@@ -8728,6 +9761,11 @@ function cardIsFeralSwipe(card) {
 
 function enterFeralSwipeTargeting(handIndex) {
   const card = player.deck.hand[handIndex];
+  // Stamp the active card so the SFX classifier reads the feral_swipe
+  // override (bear growl on cast + per-target swing). Cleared in
+  // resolveMultiTargeting once the swipe wraps up.
+  _activePlayCard = card;
+  playCardAmbient(card);
   // Grant shield first (from gain_shield effects on the card)
   let shieldGain = 0;
   for (const eff of card.currentEffects || []) {
@@ -8782,6 +9820,16 @@ function enterMultiTargeting(handIndex) {
 }
 
 function cancelMultiTargeting() {
+  // Ally multi-attack cancel: just drop the picker, ally stays ready.
+  if (multiAllyAttacker) {
+    multiAllyAttacker = null;
+    multiTargets = [];
+    multiMaxTargets = 0;
+    selectedAlly = null;
+    state = GameState.COMBAT;
+    hideToast();
+    return;
+  }
   if (cardRechargedCards.length > 0) {
     cancelCardRecharge();
   }
@@ -8853,9 +9901,21 @@ function handleMultiTargetingClick(x, y) {
     return;
   }
 
+  // Sentinel rule for multi-target: as long as any unselected sentinel is
+  // alive, only sentinels can be picked. Once they're all selected the rest
+  // of the row opens up.
+  const livingSentinels = getLivingSentinels();
+  const remainingSentinels = livingSentinels.filter(s => !multiTargets.includes(s));
+  const sentinelLockActive = remainingSentinels.length > 0;
+
   // Click enemy character
   const enemyCardRect = getCharacterCardRect(false);
   if (hitTest(x, y, enemyCardRect)) {
+    if (enemy._invulnerable) {
+      showStyledToast(`${enemy.name} is invulnerable!`, 'recharge', 1500);
+      return;
+    }
+    if (sentinelLockActive) { triggerSentinelFlash(); return; }
     if (multiTargets.length < multiMaxTargets && !multiTargets.includes(enemy)) {
       multiTargets.push(enemy);
       // Auto-fire when max targets reached
@@ -8872,6 +9932,7 @@ function handleMultiTargetingClick(x, y) {
   for (let i = 0; i < creatureRects.length; i++) {
     if (hitTest(x, y, creatureRects[i])) {
       const c = enemy.creatures[i];
+      if (sentinelLockActive && !c.sentinel) { triggerSentinelFlash(); return; }
       if (multiTargets.length < multiMaxTargets && !multiTargets.includes(c)) {
         multiTargets.push(c);
         if (multiTargets.length >= multiMaxTargets) {
@@ -8913,6 +9974,41 @@ function checkMultiAutoFire() {
 }
 
 function resolveMultiTargeting() {
+  // Ally swing branch (Raena etc.): one resolveAllyAttack per picked target.
+  // After resolution, the ally exhausts (handled inside resolveAllyAttack).
+  if (multiAllyAttacker) {
+    const ally = multiAllyAttacker;
+    const targets = multiTargets.slice();
+    // Reset multi-target state up front so resolveAllyAttack's own state
+    // resets don't fight with us.
+    multiAllyAttacker = null;
+    multiTargets = [];
+    multiMaxTargets = 0;
+    selectedAlly = ally;
+    if (targets.length === 0) {
+      cancelAllyTargeting();
+      return;
+    }
+    // Resolve each strike. resolveAllyAttack normally exhausts on first call;
+    // override exhaustion afterwards so all picks land before the ally is
+    // marked spent.
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      if (!t) continue;
+      // Re-ready for each subsequent swing; final exhaust is set by the
+      // last call's resolveAllyAttack tail.
+      ally.exhausted = false;
+      // Suppress the stat bonuses on follow-up strikes — heroism / rage are
+      // applied once on the first hit (consumed there). We mimic that by
+      // zeroing them on the ally before subsequent calls.
+      if (i > 0) { ally.heroism = 0; }
+      const wasMulti = ally.multiAttack;
+      ally.multiAttack = 1; // each call hits exactly the target it's given
+      resolveAllyAttack(ally, t);
+      ally.multiAttack = wasMulti;
+    }
+    return;
+  }
   if (multiCardIndex < 0 || multiCardIndex >= player.deck.hand.length) {
     cancelMultiTargeting();
     return;
@@ -8924,33 +10020,46 @@ function resolveMultiTargeting() {
   addLog(`You play ${card.name}`, Colors.GREEN, card);
 
   if (feralSwipeMode) {
-    // Feral Swipe: 1 damage + heroism per target
+    // Feral Swipe: 1 damage + heroism per target. _activePlayCard was
+    // stamped in enterFeralSwipeTargeting so the SFX classifier still
+    // sees the card here.
     let heroismBonus = player.heroism;
     if (heroismBonus > 0) {
       player.heroism = 0;
       addLog(`  Heroism! +${heroismBonus} damage per hit`, Colors.GOLD);
     }
     const hitDmg = 1 + heroismBonus;
-    for (const t of targets) {
+    const SFX_STAGGER_MS = 120;
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      const delay = i * SFX_STAGGER_MS;
+      let dmgLanded = 0;
       if (t === enemy) {
         const [blocked, taken] = enemy.takeDamageWithDefense(hitDmg);
         if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
         const bs = blocked > 0 ? ` (blocked ${blocked})` : '';
         addLog(`  -> Feral Swipe: ${enemy.name} takes ${taken} dmg${bs}`, Colors.WHITE);
+        dmgLanded = taken;
       } else {
         const actual = t.takeDamage(hitDmg);
         if (actual > 0) spawnDamageOnTarget(t, actual);
         const bs = Math.max(0, hitDmg - actual) > 0 ? ` (blocked ${hitDmg - actual})` : '';
         addLog(`  -> Feral Swipe: ${t.name} takes ${actual} dmg${bs}`, Colors.WHITE);
-        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
+        dmgLanded = actual;
       }
+      playAttackHitSfx(hitDmg, dmgLanded, delay);
     }
     showToast(`Feral Swipe hits ${targets.length} target(s)!`);
     attacksThisTurn++;
     feralSwipeMode = false;
     feralSwipeShieldGranted = 0;
+    _activePlayCard = null;
   } else {
-    // Normal multi_damage (Wooden Axe etc.)
+    // Normal multi_damage (Wooden Axe etc.). _activePlayCard lets the
+    // weapon SFX classifier route per-card (axe → axe sounds etc.).
+    _activePlayCard = card;
+    const SFX_STAGGER_MS = 120;
     let dmg = 0;
     for (const eff of card.currentEffects) {
       if (eff.effectType === 'multi_damage') {
@@ -8963,28 +10072,33 @@ function resolveMultiTargeting() {
       }
     }
     let hitEnemy = false;
-    for (const t of targets) {
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      const delay = i * SFX_STAGGER_MS;
       if (t === enemy) {
         if (!hitEnemy) { enemyAutoPlayDefenses(dmg); hitEnemy = true; }
         const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
         if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
         const bs = blocked > 0 ? ` (blocked ${blocked})` : '';
         addLog(`  ${enemy.name}: ${taken} dmg${bs}`, Colors.RED);
+        playAttackHitSfx(dmg, taken, delay);
       } else {
         const actual = t.takeDamage(dmg);
         if (actual > 0) spawnDamageOnTarget(t, actual);
         const bs = Math.max(0, dmg - actual) > 0 ? ` (blocked ${dmg - actual})` : '';
         addLog(`  ${t.name}: ${actual} dmg${bs}`, Colors.RED);
-        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+        playAttackHitSfx(dmg, actual, delay);
+        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
       }
     }
     attacksThisTurn++;
+    _activePlayCard = null;
   }
   countAndRemoveDeadCreatures();
 
   player.deck.placeByCost(card);
 
-  for (const n of pendingRechargeNames) addLog(`  Recharge: ${n}`);
+  for (const c of cardRechargedCards) addLog(`  Recharge: ${c.name}`, Colors.GRAY, c);
   pendingRechargeNames = [];
   cardRechargedCards = [];
 
@@ -9005,11 +10119,30 @@ function cancelAllyTargeting() {
   hideToast();
 }
 
+// Multi-attack ally (Raena etc.): enter the axe-style picker. The player
+// picks up to ally.multiAttack distinct targets (sentinel rule respected by
+// handleMultiTargetingClick) and clicks Done — or auto-fires when full.
+function enterAllyMultiTargeting(ally) {
+  multiAllyAttacker = ally;
+  multiCardIndex = -1;
+  multiTargets = [];
+  multiMaxTargets = ally.multiAttack || 1;
+  selectedCardIndex = -1;
+  selectedAlly = ally;
+  state = GameState.MULTI_TARGETING;
+  showStyledToast(`${ally.name}: pick up to ${multiMaxTargets} targets, then Done (or Cancel)`, 'multi');
+}
+
 function handleAllyTargetingClick(x, y) {
   if (!selectedAlly) { state = GameState.COMBAT; return; }
   // Click enemy character → ally hits enemy
   const enemyCardRect = getCharacterCardRect(false);
   if (hitTest(x, y, enemyCardRect)) {
+    if (enemy._invulnerable) {
+      showStyledToast(`${enemy.name} is invulnerable!`, 'recharge', 1500);
+      return;
+    }
+    if (!isSentinelLegalTarget(enemy)) { triggerSentinelFlash(); return; }
     resolveAllyAttack(selectedAlly, enemy);
     return;
   }
@@ -9017,7 +10150,9 @@ function handleAllyTargetingClick(x, y) {
   const creatureRects = getEnemyCreatureRects();
   for (let i = 0; i < creatureRects.length; i++) {
     if (hitTest(x, y, creatureRects[i])) {
-      resolveAllyAttack(selectedAlly, enemy.creatures[i]);
+      const t = enemy.creatures[i];
+      if (!isSentinelLegalTarget(t)) { triggerSentinelFlash(); return; }
+      resolveAllyAttack(selectedAlly, t);
       return;
     }
   }
@@ -9026,41 +10161,100 @@ function handleAllyTargetingClick(x, y) {
 }
 
 function resolveAllyAttack(ally, target) {
-  const dmg = ally.attack;
-  addLog(`${ally.name} attacks`, Colors.GREEN, ally.sourceCard || null);
-  if (target === enemy) {
-    if (ally.unpreventable) {
-      // Bypass shield/armor/block — go straight to deck damage. Mirrors the
-      // unpreventable branch in processPlayerAllyAttacks (auto-attack path).
-      const taken = enemy.takeDamageFromDeck(dmg);
-      if (taken > 0) { spawnDamageOnTarget(enemy, taken, Colors.ORANGE); triggerSplitPower(enemy); }
-      addLog(`  ${enemy.name}: ${taken} unpreventable dmg`, Colors.ORANGE);
-      maybeApplyAttackPoison(ally, enemy, dmg);
-    } else {
-      if (dmg > 0) enemyAutoPlayDefenses(dmg);
-      const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
-      const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
-      addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
-      if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
-      maybeApplyAttackPoison(ally, enemy, taken);
+  // Apply rage (persistent) and heroism (consumed on attack), matching Python.
+  const rageBonus = ally.rage || 0;
+  const heroismBonus = ally.heroism || 0;
+  let dmg = ally.attack + rageBonus + heroismBonus;
+  if (heroismBonus > 0) ally.heroism = 0;
+  addLog(`${ally.name} attacks`, Colors.GREEN, ally.sourceCard || null, null, ally);
+  if (rageBonus > 0) addLog(`  Rage! +${rageBonus} damage`, Colors.RED);
+  if (heroismBonus > 0) addLog(`  Heroism! +${heroismBonus} damage`, Colors.GOLD);
+  // Ice on the attacker reduces this swing and burns 1 stack.
+  dmg = consumeIceForAttack(ally, dmg);
+
+  // Build the strike list. multiAttack > 1 → also hit additional random
+  // distinct targets. Sentinels must be hit first; once every sentinel has
+  // been targeted, the rest of the row (including the enemy character)
+  // becomes valid for follow-up strikes.
+  const targets = [target];
+  const extraStrikes = Math.max(0, (ally.multiAttack || 1) - 1);
+  if (extraStrikes > 0) {
+    for (let i = 0; i < extraStrikes; i++) {
+      const sentinels = getLivingSentinels().filter(s => !targets.includes(s));
+      let pool;
+      if (sentinels.length > 0) {
+        pool = sentinels;
+      } else {
+        pool = enemy.creatures.filter(c => c.isAlive && !targets.includes(c));
+        if (enemy.isAlive && !enemy._invulnerable && !targets.includes(enemy)) pool.push(enemy);
+      }
+      if (pool.length === 0) break;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      targets.push(pick);
     }
-  } else {
-    if (ally.unpreventable) {
-      const actual = target.takeUnpreventableDamage(dmg);
-      if (actual > 0) spawnDamageOnTarget(target, actual, Colors.ORANGE);
-      addLog(`  ${target.name}: ${actual} unpreventable dmg`, Colors.ORANGE);
-      maybeApplyAttackPoison(ally, target, dmg);
-    } else {
-      const actual = target.takeDamage(dmg);
-      if (actual > 0) spawnDamageOnTarget(target, actual);
-      const blocked = Math.max(0, dmg - actual);
-      const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
-      addLog(`  ${target.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
-      maybeApplyAttackPoison(ally, target, actual);
-    }
-    if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); }
-    countAndRemoveDeadCreatures();
   }
+
+  // Stamp the attacker so getWeaponSfxKeys() can route per-ally; cleared
+  // after the swing so unrelated effects don't pick it up.
+  _activeAttacker = ally;
+  const SFX_STAGGER_MS = 120;
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i];
+    const delay = i * SFX_STAGGER_MS;
+    if (t === enemy) {
+      if (ally.unpreventable) {
+        const taken = enemy.takeDamageFromDeck(dmg);
+        if (taken > 0) { spawnDamageOnTarget(enemy, taken, Colors.ORANGE); triggerSplitPower(enemy); }
+        addLog(`  ${enemy.name}: ${taken} unpreventable dmg`, Colors.ORANGE);
+        playAttackHitSfx(dmg, taken, delay);
+        maybeApplyAttackPoison(ally, enemy, dmg);
+      } else {
+        if (dmg > 0) enemyAutoPlayDefenses(dmg);
+        const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
+        if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
+        playAttackHitSfx(dmg, taken, delay);
+        maybeApplyAttackPoison(ally, enemy, taken);
+      }
+    } else if (t && t.isAlive) {
+      if (ally.unpreventable) {
+        const actual = t.takeUnpreventableDamage(dmg);
+        if (actual > 0) spawnDamageOnTarget(t, actual, Colors.ORANGE);
+        addLog(`  ${t.name}: ${actual} unpreventable dmg`, Colors.ORANGE);
+        playAttackHitSfx(dmg, actual, delay);
+        maybeApplyAttackPoison(ally, t, dmg);
+      } else {
+        const actual = t.takeDamage(dmg);
+        if (actual > 0) spawnDamageOnTarget(t, actual);
+        const blocked = Math.max(0, dmg - actual);
+        const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
+        addLog(`  ${t.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
+        playAttackHitSfx(dmg, actual, delay);
+        maybeApplyAttackPoison(ally, t, actual);
+      }
+      if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
+    }
+  }
+  // Sound-only padding for multiAttack allies (Raena's double bow shot
+  // etc.) when fewer targets were available than the planned strikes —
+  // the double-attack still reads audibly. Captures sfx before
+  // _activeAttacker clears.
+  const plannedStrikes = ally.multiAttack || 1;
+  if (plannedStrikes > targets.length) {
+    const sfx = getWeaponSfxKeys();
+    const key = sfx && sfx.flesh ? sfx.flesh : null;
+    if (key) {
+      for (let j = targets.length; j < plannedStrikes; j++) {
+        const d = j * SFX_STAGGER_MS;
+        if (d > 0) setTimeout(() => playSound(key, 0.7), d);
+        else playSound(key, 0.7);
+      }
+    }
+  }
+  _activeAttacker = null;
+  countAndRemoveDeadCreatures();
+
   ally.exhaust();
   selectedAlly = null;
   state = GameState.COMBAT;
@@ -9097,6 +10291,11 @@ function handlePowerTargetingClick(x, y) {
   // Click on enemy character → add as target
   const enemyCardRect = getCharacterCardRect(false);
   if (hitTest(x, y, enemyCardRect)) {
+    if (enemy._invulnerable) {
+      showStyledToast(`${enemy.name} is invulnerable!`, 'recharge', 1500);
+      return;
+    }
+    if (!isSentinelLegalTarget(enemy)) { triggerSentinelFlash(); return; }
     if (!powerTargets.includes(enemy)) {
       powerTargets.push(enemy);
       checkPowerTargetingComplete();
@@ -9108,6 +10307,7 @@ function handlePowerTargetingClick(x, y) {
   for (let i = 0; i < creatureRects.length; i++) {
     if (hitTest(x, y, creatureRects[i])) {
       const c = enemy.creatures[i];
+      if (!isSentinelLegalTarget(c)) { triggerSentinelFlash(); return; }
       if (!powerTargets.includes(c)) {
         powerTargets.push(c);
         checkPowerTargetingComplete();
@@ -9152,6 +10352,13 @@ function resolvePowerTargeting() {
 
   power.use();
   addLog(`Used power: ${power.name}`, Colors.GREEN, power);
+  // Stamp the power as the active card so the SFX classifier picks
+  // up its id-based override (cleave → axe, quick_strike → dagger,
+  // aimed_shot → bow + bow_draw, battle_fury → warrior grunt). Cleared
+  // at the end of the function.
+  _activePlayCard = power;
+  // Ambient "play" cue (Aimed Shot bow draw, Battle Fury grunt).
+  playCardAmbient(power);
 
   if (power.id === 'cleave') {
     attacksThisTurn++;
@@ -9159,7 +10366,10 @@ function resolvePowerTargeting() {
     if (player.heroism > 0) { addLog(`  (Heroism +${player.heroism})`, Colors.GOLD); player.heroism = 0; }
     const unpreventable = consumeUnpreventableBuff(player);
     let poisonApplied = false;
-    for (const t of targets) {
+    const SFX_STAGGER_MS = 120;
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      const delay = i * SFX_STAGGER_MS;
       let dmgLanded = 0;
       if (t === enemy) {
         if (unpreventable) {
@@ -9180,7 +10390,7 @@ function resolvePowerTargeting() {
           t.takeUnpreventableDamage(dmg);
           if (dmg > 0) { spawnDamageOnTarget(t, dmg, Colors.ORANGE); triggerSplitPower(t); }
           addLog(`  ${t.name}: ${dmg} true dmg`, Colors.ORANGE);
-          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
           dmgLanded = dmg;
         } else {
           const actual = t.takeDamage(dmg);
@@ -9188,39 +10398,45 @@ function resolvePowerTargeting() {
           const blocked = Math.max(0, dmg - actual);
           const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
           addLog(`  ${t.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
-          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+          if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
           dmgLanded = actual;
         }
       }
+      // Cleave's axe-cleave sound — staggered across the targets so the
+      // multi-target swing audibly chains.
+      playAttackHitSfx(dmg, dmgLanded, delay);
       if (!poisonApplied) { consumePoisonBuff(player, t, dmgLanded); poisonApplied = true; }
     }
     countAndRemoveDeadCreatures();
   } else if (power.id === 'elemental_infusion') {
-    // Apply Fire or Ice based on the picked choice
+    // Apply Fire or Ice based on the picked choice. Status is tweaked
+    // directly here (not via case 'apply_*'), so play the apply cue
+    // inline. Only when the stack actually lands (not cancel-first).
     const t = targets[0];
     const isIce = chosenPowerEffect === 'ice_token';
+    let landed = false;
     if (isIce) {
       addLog(`  Mode: Ice`);
-      // Ice cancels fire first
       if (t === enemy) {
         const fire = enemy.getStatus('FIRE') || 0;
         if (fire > 0) { enemy.removeStatus('FIRE', 1); addLog(`  Ice cancels 1 Fire on ${enemy.name}`, Colors.ICE_BLUE); }
-        else { enemy.applyStatus('ICE', 1); addLog(`  +1 Ice on ${enemy.name}`, Colors.ICE_BLUE); }
+        else { enemy.applyStatus('ICE', 1); addLog(`  +1 Ice on ${enemy.name}`, Colors.ICE_BLUE); landed = true; }
       } else {
         if (t.fireStacks > 0) { t.fireStacks--; addLog(`  Ice cancels 1 Fire on ${t.name}`, Colors.ICE_BLUE); }
-        else { t.iceStacks = (t.iceStacks || 0) + 1; addLog(`  +1 Ice on ${t.name}`, Colors.ICE_BLUE); }
+        else { t.iceStacks = (t.iceStacks || 0) + 1; addLog(`  +1 Ice on ${t.name}`, Colors.ICE_BLUE); landed = true; }
       }
+      if (landed) playSound('ice_apply', 0.7);
     } else {
       addLog(`  Mode: Fire`);
-      // Fire cancels ice first
       if (t === enemy) {
         const ice = enemy.getStatus('ICE') || 0;
         if (ice > 0) { enemy.removeStatus('ICE', 1); addLog(`  Fire cancels 1 Ice on ${enemy.name}`, Colors.ORANGE); }
-        else { enemy.applyStatus('FIRE', 1); addLog(`  +1 Fire on ${enemy.name}`, Colors.RED); }
+        else { enemy.applyStatus('FIRE', 1); addLog(`  +1 Fire on ${enemy.name}`, Colors.RED); landed = true; }
       } else {
         if (t.iceStacks > 0) { t.iceStacks--; addLog(`  Fire cancels 1 Ice on ${t.name}`, Colors.ORANGE); }
-        else { t.fireStacks = (t.fireStacks || 0) + 1; addLog(`  +1 Fire on ${t.name}`, Colors.RED); }
+        else { t.fireStacks = (t.fireStacks || 0) + 1; addLog(`  +1 Fire on ${t.name}`, Colors.RED); landed = true; }
       }
+      if (landed) playSound('fire_apply', 0.7);
     }
     chosenPowerEffect = null;
   } else if (power.id === 'quick_strike') {
@@ -9230,12 +10446,14 @@ function resolvePowerTargeting() {
     if (player.heroism > 0) { addLog(`  (Heroism +${player.heroism})`, Colors.GOLD); player.heroism = 0; }
     const unpreventable = consumeUnpreventableBuff(player);
     const t = targets[0];
+    let dmgLanded = 0;
     if (t === enemy) {
       if (unpreventable) {
         enemy.takeDamageFromDeck(dmg);
         if (dmg > 0) { spawnDamageOnTarget(t, dmg, Colors.ORANGE); triggerSplitPower(t); }
         addLog(`  ${enemy.name}: ${dmg} true dmg`, Colors.ORANGE);
         consumePoisonBuff(player, t, dmg);
+        dmgLanded = dmg;
       } else {
         enemyAutoPlayDefenses(dmg);
         const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
@@ -9243,6 +10461,7 @@ function resolvePowerTargeting() {
         const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
         addLog(`  ${enemy.name}: ${taken} dmg${blockedSuffix}`, Colors.RED);
         consumePoisonBuff(player, t, taken);
+        dmgLanded = taken;
       }
     } else {
       if (unpreventable) {
@@ -9250,7 +10469,8 @@ function resolvePowerTargeting() {
         if (dmg > 0) { spawnDamageOnTarget(t, dmg, Colors.ORANGE); triggerSplitPower(t); }
         addLog(`  ${t.name}: ${dmg} true dmg`, Colors.ORANGE);
         consumePoisonBuff(player, t, dmg);
-        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
+        dmgLanded = dmg;
       } else {
         const actual = t.takeDamage(dmg);
         if (actual > 0) { spawnDamageOnTarget(t, actual); triggerSplitPower(t); }
@@ -9258,14 +10478,18 @@ function resolvePowerTargeting() {
         const blockedSuffix = blocked > 0 ? ` (blocked ${blocked})` : '';
         addLog(`  ${t.name}: ${actual} dmg${blockedSuffix}`, Colors.RED);
         consumePoisonBuff(player, t, actual);
-        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD); }
+        if (!t.isAlive) { spawnDeathAnimation(t); addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t); }
+        dmgLanded = actual;
       }
     }
+    // Dagger swing — quick_strike id override routes to dagger sounds.
+    playAttackHitSfx(dmg, dmgLanded);
     countAndRemoveDeadCreatures();
     const drawn = player.deck.draw(1, MAX_HAND_SIZE);
     for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
   }
 
+  _activePlayCard = null;
   selectedPower = null;
   checkCombatEnd();
 }
@@ -9273,6 +10497,10 @@ function resolvePowerTargeting() {
 function executePower(power) {
   power.use();
   addLog(`Used power: ${power.name}`, Colors.GREEN, power);
+  // Same SFX-routing pattern as resolvePowerTargeting — stamp the
+  // power so id-based overrides fire, and play the ambient cue.
+  _activePlayCard = power;
+  playCardAmbient(power);
 
   switch (power.id) {
     case 'cleave': {
@@ -9284,7 +10512,7 @@ function executePower(power) {
         if (hits >= 2) break;
         const actual = c.takeDamage(dmg);
         addLog(`  ${actual} dmg to ${c.name}`, Colors.RED);
-        if (!c.isAlive) { addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
+        if (!c.isAlive) { addLog(`  ${c.name} destroyed!`, Colors.GOLD, null, null, c); }
         hits++;
       }
       if (hits < 2 && enemy.isAlive) {
@@ -9318,8 +10546,11 @@ function executePower(power) {
       const dmg = 1 + player.heroism;
       if (player.heroism > 0) { addLog(`  (Heroism +${player.heroism})`, Colors.GOLD); player.heroism = 0; }
       const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
+      if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
       if (blocked > 0) addLog(`  (${blocked} blocked)`, Colors.BLUE);
       addLog(`  ${taken} dmg to ${enemy.name}`, Colors.RED);
+      // Dagger swing SFX (the quick_strike id override routes here).
+      playAttackHitSfx(dmg, taken);
       const drawn = player.deck.draw(1, MAX_HAND_SIZE);
       for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
       break;
@@ -9335,18 +10566,26 @@ function executePower(power) {
       break;
     }
     case 'feral_form': {
+      // Pick the chosen form's sound: bear growl for Bear Form,
+      // lion roar for Feline Form. The choice id is stamped on
+      // chosenPowerEffect when the player picks the modal option.
+      const isBear = chosenPowerEffect === 'bear_form_token';
+      playSound(isBear ? 'bear_form_attack' : 'cat_form_attack', 0.7);
+      addLog(`  Mode: ${isBear ? 'Bear Form' : 'Feline Form'}`);
       // Simplified: gain 1 heroism + draw 1 (cat form default)
       player.heroism += 1;
-      addLog(`  Feline Form! +1 Heroism`, Colors.GOLD);
+      addLog(`  +1 Heroism`, Colors.GOLD);
       spawnTokenOnTarget(player, 1, 'Heroism', Colors.GOLD);
       const drawn = player.deck.draw(1, MAX_HAND_SIZE);
       for (const d of drawn) addLog(`  Draw: ${d.name}`, Colors.BLUE, d);
+      chosenPowerEffect = null;
       break;
     }
     default:
       addLog(`  (Power effect not yet implemented)`, Colors.GRAY);
   }
 
+  _activePlayCard = null;
   selectedPower = null;
   checkCombatEnd();
 }
@@ -9385,14 +10624,30 @@ function autoMitigateDamage(dmg) {
 // Entry point: player is taking `dmg` incoming damage.
 function startIncomingDamage(dmg, label = 'damage to you') {
   if (dmg <= 0) return;
+  // Reset the per-event pain-cue flag so the next phase entry plays.
+  _painPlayedForCurrentDamageEvent = false;
   addLog(`  ${dmg} ${label}`, Colors.RED);
   showStyledToast(`Incoming ${dmg} damage!`, 'damage');
   const remaining = autoMitigateDamage(dmg);
   if (remaining <= 0) {
+    // All passively absorbed — no defense card was played, so nothing
+    // else has played a sound. Prefer the attacker's weapon-specific
+    // block cue stashed at swing time (e.g. Large Boulder → heavy
+    // debris); fall back to the live attacker, then the generic thud.
+    const sfx = _pendingHitSfx || getWeaponSfxKeys();
+    playSound((sfx && sfx.blocked) || 'hit_blocked', 0.7);
+    _pendingHitSfx = null;
     addLog(`  All damage absorbed!`);
     hideToast();
     return;
   }
+  // Per-swing flesh sound is played in routeEnemyDamageToTarget at
+  // arrow-fire time. The block path above only fires when the whole
+  // aggregated bundle is fully absorbed by passive shield/armor.
+  // Hero pain cue is deferred to enterTakeDamagePhase so it lands at
+  // the moment the player actually starts paying for the hit (after
+  // any defense cards have been played).
+  _pendingHitSfx = null;
   pendingIncomingDamage = remaining;
   // Phase 2: defending (if defense cards available)
   if (player.deck.hand.some(c => c.cardType === CardType.DEFENSE)) {
@@ -9403,6 +10658,12 @@ function startIncomingDamage(dmg, label = 'damage to you') {
   // No defenses → straight to take-damage choice
   enterTakeDamagePhase();
 }
+
+// Tracks whether the hero pain cue has fired for the current damage
+// event. enterTakeDamagePhase runs repeatedly (once per click while
+// the player picks each card to discard), so we gate the cue to fire
+// exactly once when the phase is first entered.
+let _painPlayedForCurrentDamageEvent = false;
 
 function enterTakeDamagePhase() {
   if (pendingIncomingDamage <= 0) {
@@ -9416,10 +10677,14 @@ function enterTakeDamagePhase() {
     state = GameState.COMBAT;
     hideToast();
     addLog('DEFEATED!', Colors.RED);
+    playSound('defeat');
     state = GameState.GAME_OVER;
     return;
   }
   state = GameState.DAMAGE_SOURCE;
+  // Pain cue is fired in handleDamageSourceClick (when the player
+  // actually clicks "take from deck" or a hand card to discard) so it
+  // lands with the floating damage number, not when the prompt opens.
   if (deckAvail === 0) {
     showStyledToast(`Deck empty! Discard ${pendingIncomingDamage} from hand.`, 'damage');
   } else {
@@ -9429,6 +10694,8 @@ function enterTakeDamagePhase() {
 
 function finishIncomingDamage() {
   pendingIncomingDamage = 0;
+  _pendingHitSfx = null;
+  _painPlayedForCurrentDamageEvent = false;
   hideToast();
   state = GameState.COMBAT;
   if (checkCombatEnd()) return;
@@ -9444,7 +10711,16 @@ function handleDamageSourceClick(x, y) {
   // Single click takes ALL remaining damage from the deck (or as much as the deck has).
   const deckBtn = getTakeFromDeckBtnRect();
   const deckAvail = player.deck.deckDamageAvailable();
+  // Pain cue lands at the same beat as the first floating damage
+  // number — fires once per damage event regardless of how many
+  // sub-clicks the player makes while picking each point.
+  const firePainOnce = () => {
+    if (_painPlayedForCurrentDamageEvent) return;
+    playHeroPainSound(pendingIncomingDamage);
+    _painPlayedForCurrentDamageEvent = true;
+  };
   if (hitTest(x, y, deckBtn) && deckAvail > 0) {
+    firePainOnce();
     const toTake = Math.min(pendingIncomingDamage, deckAvail);
     const milled = [];
     for (let i = 0; i < toTake; i++) {
@@ -9457,6 +10733,17 @@ function handleDamageSourceClick(x, y) {
       spawnDamageOnTarget(player, milled.length);
       addLog(`  Took ${milled.length} from deck:`);
       for (const c of milled) addLog(`  Discarded: ${c.name}`, Colors.WHITE, c);
+      // damageFromDrawPile pushes the card straight into discardPile (no
+      // discardCard helper), so the on-discard-draw passive (Lucky Pebble)
+      // never fired from this path. Re-check each milled card here.
+      for (const c of milled) {
+        if ((c.effects || []).some(e => e && e.effectType === 'on_discard_draw')) {
+          const drawn = player.deck.draw(1, MAX_HAND_SIZE);
+          if (drawn.length > 0) {
+            addLog(`  ${c.name} draws ${drawn[0].name}!`, Colors.GOLD, c);
+          }
+        }
+      }
     }
     if (pendingIncomingDamage <= 0) finishIncomingDamage();
     else enterTakeDamagePhase();
@@ -9466,10 +10753,11 @@ function handleDamageSourceClick(x, y) {
   const handRects = getHandCardRects(player.deck.hand);
   for (let i = handRects.length - 1; i >= 0; i--) {
     if (!hitTest(x, y, getHandCardHoverRect(handRects, i))) continue;
+    firePainOnce();
     const card = player.deck.hand[i];
     player.deck.hand.splice(i, 1);
     card.exhausted = false;
-    player.deck.discardPile.push(card);
+    player.deck.discardCard(card);
     spawnDamageOnTarget(player, 1);
     addLog(`  Discarded: ${card.name}`, Colors.WHITE, card);
     pendingIncomingDamage--;
@@ -9538,7 +10826,8 @@ function drawDamageSourceOverlay() {
 
 function endPlayerTurn() {
   if (!isPlayerTurn) return;
-  if (powerRechargeMode) return; // can't end turn mid-recharge
+  if (powerRechargeMode) return;
+  playSound('click');
   addLog('--- End of Your Turn ---', Colors.GRAY);
 
   // Player allies do NOT auto-attack — the player must click them and pick a target.
@@ -9546,6 +10835,8 @@ function endPlayerTurn() {
 
   // Process status effects on player
   processStatusEffects(player, 'You');
+  // Ice ticks at the end of the iced character's own turn.
+  decayIceAtTurnEnd(player, 'You');
   if (checkCombatEnd()) return;
 
   // Thorb gains +1 Shield at end of player's turn (matches PY behavior).
@@ -9566,7 +10857,7 @@ function endPlayerTurn() {
   const toDraw = Math.max(0, handSize - player.deck.hand.length);
   if (toDraw > 0) {
     const drawn = player.deck.draw(toDraw, MAX_HAND_SIZE);
-    if (drawn.length > 0) addLog(`You draw ${drawn.length} card${drawn.length > 1 ? 's' : ''}`, Colors.GREEN);
+    if (drawn.length > 0) { addLog(`You draw ${drawn.length} card${drawn.length > 1 ? 's' : ''}`, Colors.GREEN); playDrawSounds(drawn.length); }
   }
 
   selectedCardIndex = -1;
@@ -9595,12 +10886,10 @@ function processStatusEffects(character, label) {
     spawnDamageOnTarget(character, poison);
     addLog(`  ${label} takes ${poison} Poison damage!`, Colors.GREEN);
   }
-  // Ice: reduces damage dealt by stacks, decays by 1 each turn
-  const ice = character.getStatus('ICE');
-  if (ice > 0) {
-    addLog(`  ${label} is Iced (-${ice} damage dealt)`, Colors.ICE_BLUE);
-    character.removeStatus('ICE', 1);
-  }
+  // Ice decay is NOT done here — it runs from decayIceAtTurnEnd() at
+  // the end of the affected character's own turn (mirrors PY help text
+  // "-1 per attack and end of turn"). Per-attack reduction still
+  // happens via consumeIceForAttack at the damage site.
   // Shock: -1 damage dealt AND +1 damage taken per stack, decays by 1
   const shock = character.getStatus('SHOCK');
   if (shock > 0) {
@@ -9617,7 +10906,7 @@ function processStatusEffects(character, label) {
       const bs = absorbed > 0 ? ` (${absorbed} absorbed)` : '';
       addLog(`  ${c.name} takes ${actual} Fire damage!${bs}`, Colors.RED);
       c.fireStacks = Math.max(0, c.fireStacks - 1);
-      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
+      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD, null, null, c); }
     }
     if (c.poisonStacks > 0) {
       const dmg = c.poisonStacks;
@@ -9625,18 +10914,56 @@ function processStatusEffects(character, label) {
       spawnDamageOnTarget(c, dmg);
       addLog(`  ${c.name} takes ${dmg} Poison damage!`, Colors.GREEN);
       // Stacks persist — only healing removes Poison. Enemies/creatures never heal, so it's permanent for them.
-      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD); }
+      if (!c.isAlive) { spawnDeathAnimation(c); addLog(`  ${c.name} destroyed!`, Colors.GOLD, null, null, c); }
     }
   }
   // Remove and count dead creatures (kill-count encounters rely on countAndRemoveDeadCreatures)
   countAndRemoveDeadCreatures();
 }
 
+// Decay ICE by 1 at the end of the iced character's own turn (and on
+// each of their creatures). Mirrors PY: per-attack reduction is handled
+// by consumeIceForAttack; this is the end-of-turn tick. Called from
+// endPlayerTurn (player) and completePlayerTurnTransition (enemy).
+function decayIceAtTurnEnd(character, label) {
+  if (!character) return;
+  const ice = character.getStatus ? (character.getStatus('ICE') || 0) : 0;
+  if (ice > 0) {
+    character.removeStatus('ICE', 1);
+    const remaining = character.getStatus('ICE') || 0;
+    if (remaining > 0) addLog(`  ${label}'s ice fades (Ice:${remaining})`, Colors.ICE_BLUE);
+    else addLog(`  ${label}'s ice melts away`, Colors.ICE_BLUE);
+  }
+  for (const c of (character.creatures || [])) {
+    if (c.iceStacks > 0 && c.isAlive) {
+      c.iceStacks -= 1;
+    }
+  }
+}
+
 // Get damage modifier from ice/shock for a character
 function getDamageModifier(character) {
-  const ice = character.getStatus('ICE') || 0;
+  // Shock applies as a flat per-attack penalty (also decays at end of turn).
+  // Ice is intentionally NOT included here — it's a per-attack stack consumed
+  // by consumeIceForAttack at the damage site (mirrors PY: min(ice, dmg)
+  // reduction, -1 stack per attack).
   const shock = character.getStatus('SHOCK') || 0;
-  return -(ice + shock); // negative = less damage dealt
+  return -shock;
+}
+
+// Apply Ice's per-attack reduction to a raw damage value. Mirrors PY:
+//   reduction = min(ice_stacks, raw_damage); damage -= reduction; -1 stack.
+// Logs the reduction line and returns the adjusted damage.
+function consumeIceForAttack(attacker, rawDamage, label = null) {
+  if (!attacker || rawDamage <= 0) return rawDamage;
+  const ice = (attacker.getStatus ? (attacker.getStatus('ICE') || 0) : (attacker.iceStacks || 0));
+  if (ice <= 0) return rawDamage;
+  const reduction = Math.min(ice, rawDamage);
+  if (attacker.removeStatus) attacker.removeStatus('ICE', 1);
+  else if (typeof attacker.iceStacks === 'number') attacker.iceStacks = Math.max(0, attacker.iceStacks - 1);
+  const remaining = (attacker.getStatus ? (attacker.getStatus('ICE') || 0) : (attacker.iceStacks || 0));
+  addLog(`  ${label || attacker.name}: Ice -${reduction} dmg (Ice:${remaining})`, Colors.ICE_BLUE);
+  return rawDamage - reduction;
 }
 
 function getIncomingDamageModifier(character) {
@@ -9650,35 +10977,49 @@ function processPlayerAllyAttacks() {
     if (!ally.isAlive || ally.exhausted) continue;
     // Allow 0-attack allies if they have a poisonAttack (Pet Spider).
     if ((ally.attack || 0) <= 0 && !ally.poisonAttack) continue;
+    // Apply rage (persistent) and heroism (consumed on attack), matching Python.
+    const rageBonus = ally.rage || 0;
+    const heroismBonus = ally.heroism || 0;
+    let dmg = ally.attack + rageBonus + heroismBonus;
+    if (heroismBonus > 0) ally.heroism = 0;
+    if (rageBonus > 0) addLog(`  ${ally.name}: Rage! +${rageBonus} damage`, Colors.RED);
+    if (heroismBonus > 0) addLog(`  ${ally.name}: Heroism! +${heroismBonus} damage`, Colors.GOLD);
+    dmg = consumeIceForAttack(ally, dmg);
     const targets = enemy.creatures.filter(c => c.isAlive);
+    _activeAttacker = ally;
     if (targets.length > 0) {
       const target = targets[Math.floor(Math.random() * targets.length)];
       if (ally.unpreventable) {
-        target.takeUnpreventableDamage(ally.attack);
-        if (ally.attack > 0) spawnDamageOnTarget(target, ally.attack);
-        addLog(`  ${ally.name} attacks ${target.name} for ${ally.attack} unpreventable!`, Colors.ORANGE);
-        maybeApplyAttackPoison(ally, target, ally.attack);
+        target.takeUnpreventableDamage(dmg);
+        if (dmg > 0) spawnDamageOnTarget(target, dmg);
+        addLog(`  ${ally.name} attacks ${target.name} for ${dmg} unpreventable!`, Colors.ORANGE);
+        playAttackHitSfx(dmg, dmg);
+        maybeApplyAttackPoison(ally, target, dmg);
       } else {
-        const actual = target.takeDamage(ally.attack);
+        const actual = target.takeDamage(dmg);
         if (actual > 0) spawnDamageOnTarget(target, actual);
         addLog(`  ${ally.name} attacks ${target.name} for ${actual}!`, Colors.GREEN);
+        playAttackHitSfx(dmg, actual);
         maybeApplyAttackPoison(ally, target, actual);
       }
-      if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); }
+      if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); }
     } else if (enemy.isAlive) {
       if (ally.unpreventable) {
-        enemy.takeDamageFromDeck(ally.attack);
-        if (ally.attack > 0) spawnDamageOnTarget(enemy, ally.attack);
-        addLog(`  ${ally.name} attacks ${enemy.name} for ${ally.attack} unpreventable!`, Colors.ORANGE);
+        enemy.takeDamageFromDeck(dmg);
+        if (dmg > 0) spawnDamageOnTarget(enemy, dmg);
+        addLog(`  ${ally.name} attacks ${enemy.name} for ${dmg} unpreventable!`, Colors.ORANGE);
         triggerSplitPower(enemy);
-        maybeApplyAttackPoison(ally, enemy, ally.attack);
+        playAttackHitSfx(dmg, dmg);
+        maybeApplyAttackPoison(ally, enemy, dmg);
       } else {
-        const [blocked, taken] = enemy.takeDamageWithDefense(ally.attack);
+        const [blocked, taken] = enemy.takeDamageWithDefense(dmg);
         if (taken > 0) { spawnDamageOnTarget(enemy, taken); triggerSplitPower(enemy); }
         addLog(`  ${ally.name} attacks ${enemy.name} for ${taken}!`, Colors.GREEN);
+        playAttackHitSfx(dmg, taken);
         maybeApplyAttackPoison(ally, enemy, taken);
       }
     }
+    _activeAttacker = null;
     ally.exhaust();
   }
   countAndRemoveDeadCreatures();
@@ -9686,6 +11027,11 @@ function processPlayerAllyAttacks() {
 
 // --- Enemy AI ---
 let enemyDamageAccumulator = 0; // total damage from enemy attacks this turn (cards + creatures)
+// Last-attacker weapon SFX keys, stashed when an enemy queues damage to the
+// player. Read by startIncomingDamage so the auto-mitigated block thud
+// matches the swinging weapon (Large Boulder → boulder_blocked etc.).
+// Cleared after the damage flow resolves.
+let _pendingHitSfx = null;
 
 // Enemy attack arrow animation — shows an arrow from the enemy to the target
 // for ~800ms before the damage resolves. Pauses the enemy action queue.
@@ -9728,6 +11074,13 @@ function getEnemyCenter() {
 function pickEnemyAttackTarget() {
   if (!player) return null;
   const aliveAllies = (player.creatures || []).filter(a => a.isAlive);
+  if (aliveAllies.length === 0) return player;
+  // Mirror PY: if the player has sentinel allies, the enemy must hit a
+  // sentinel first. Otherwise weighted player(2) + each ally(1).
+  const sentinels = aliveAllies.filter(a => a.sentinel);
+  if (sentinels.length > 0) {
+    return sentinels[Math.floor(Math.random() * sentinels.length)];
+  }
   const PLAYER_WEIGHT = 2;
   const totalWeight = PLAYER_WEIGHT + aliveAllies.length;
   let r = Math.random() * totalWeight;
@@ -9748,9 +11101,10 @@ function applyDamageToAlly(ally, dmg) {
   addLog(`  ${ally.name}: ${actual} damage${blockedSuffix}`, Colors.RED);
   if (!ally.isAlive) {
     spawnDeathAnimation(ally);
-    addLog(`  ${ally.name} destroyed!`, Colors.GOLD);
+    addLog(`  ${ally.name} destroyed!`, Colors.GOLD, null, null, ally);
     player.removeDeadCreatures();
   }
+  return actual;
 }
 
 // Route incoming enemy damage to either the player (accumulated for the damage
@@ -9760,7 +11114,13 @@ function applyDamageToAlly(ally, dmg) {
 function routeEnemyDamage(dmg, sourceLabel, sourceCreature = null) {
   if (dmg <= 0) return;
   const target = pickEnemyAttackTarget();
-  // Arrow from attacker to target
+  routeEnemyDamageToTarget(target, dmg, sourceLabel, sourceCreature);
+}
+
+// Same as routeEnemyDamage but with the target pre-picked. Lets a single card
+// play deliver damage and side effects (apply_ice, etc.) to the same target.
+function routeEnemyDamageToTarget(target, dmg, sourceLabel, sourceCreature = null) {
+  if (dmg <= 0) return;
   let src;
   if (sourceCreature) {
     const creatureRects = getEnemyCreatureRects();
@@ -9772,16 +11132,101 @@ function routeEnemyDamage(dmg, sourceLabel, sourceCreature = null) {
   }
   if (!src) src = getEnemyCenter();
   const dst = getTargetCenter(target);
-  const arrowDur = sourceCreature ? 550 : ENEMY_ARROW_DURATION; // faster arrows for summons
+  const arrowDur = sourceCreature ? 550 : ENEMY_ARROW_DURATION;
   enemyArrow = { x1: src.x, y1: src.y, x2: dst.x, y2: dst.y, timer: arrowDur, sourceCreature: sourceCreature || null };
   screenFlashTimer = 150;
 
   if (target === player) {
+    // Play the attacker's flesh cue right here — the arrow is firing
+    // visually NOW, even though the actual damage gets aggregated and
+    // resolved later in startIncomingDamage. This makes the audio
+    // line up with the swing animation. We still stash the SFX keys
+    // for the block path (in case the aggregated total is fully
+    // mitigated, startIncomingDamage plays a single block thud).
+    const sfx = getWeaponSfxKeys();
+    if (sfx && sfx.flesh) playSound(sfx.flesh, 0.7);
+    if (!_pendingHitSfx) _pendingHitSfx = sfx;
     enemyDamageAccumulator += dmg;
     addLog(`  ${dmg} damage incoming`, Colors.RED);
   } else {
-    applyDamageToAlly(target, dmg);
+    // Synchronous ally hit — fire the flesh-or-blocked sound at swing
+    // time using the actual damage that landed.
+    const actual = applyDamageToAlly(target, dmg);
+    playAttackHitSfx(dmg, actual);
   }
+}
+
+// Apply Ice stacks to a target (player Character or ally Creature). Ice
+// cancels Fire first, then any remainder applies as Ice. Mirrors the
+// player-side handler in resolveEffectOnTarget.
+function applyIceToTarget(target, amount) {
+  if (!target || amount <= 0) return;
+  let applied = 0;
+  if (target instanceof Creature) {
+    const cancel = Math.min(target.fireStacks, amount);
+    if (cancel > 0) {
+      target.fireStacks -= cancel;
+      addLog(`  Ice cancels ${cancel} Fire on ${target.name}`, Colors.ICE_BLUE);
+    }
+    const remaining = amount - cancel;
+    if (remaining > 0) {
+      target.iceStacks += remaining;
+      addLog(`  +${remaining} Ice on ${target.name}`, Colors.ICE_BLUE);
+      applied = remaining;
+    }
+  } else {
+    const fire = target.getStatus('FIRE') || 0;
+    const cancel = Math.min(fire, amount);
+    if (cancel > 0) {
+      target.removeStatus('FIRE', cancel);
+      addLog(`  Ice cancels ${cancel} Fire on ${target.name}`, Colors.ICE_BLUE);
+    }
+    const remaining = amount - cancel;
+    if (remaining > 0) {
+      target.applyStatus('ICE', remaining);
+      addLog(`  +${remaining} Ice on ${target.name}`, Colors.ICE_BLUE);
+      applied = remaining;
+    }
+  }
+  if (applied > 0) spawnTokenOnTarget(target, applied, 'Ice', Colors.ICE_BLUE);
+}
+
+// Apply Fire stacks (cancels Ice 1:1 first). Used by Kobold Slinger's
+// fireAttack rider, Magma drake fire breath, etc. Mirrors applyIceToTarget.
+function applyFireToTarget(target, amount) {
+  if (!target || amount <= 0) return;
+  if (target.fireImmune) {
+    addLog(`  ${target.name} is immune to Fire!`, Colors.ORANGE);
+    return;
+  }
+  let applied = 0;
+  if (target instanceof Creature) {
+    const cancel = Math.min(target.iceStacks, amount);
+    if (cancel > 0) {
+      target.iceStacks -= cancel;
+      addLog(`  Fire melts ${cancel} Ice on ${target.name}`, Colors.ORANGE);
+    }
+    const remaining = amount - cancel;
+    if (remaining > 0) {
+      target.fireStacks += remaining;
+      addLog(`  +${remaining} Fire on ${target.name}`, Colors.ORANGE);
+      applied = remaining;
+    }
+  } else {
+    const ice = target.getStatus('ICE') || 0;
+    const cancel = Math.min(ice, amount);
+    if (cancel > 0) {
+      target.removeStatus('ICE', cancel);
+      addLog(`  Fire melts ${cancel} Ice on ${target.name}`, Colors.ORANGE);
+    }
+    const remaining = amount - cancel;
+    if (remaining > 0) {
+      target.applyStatus('FIRE', remaining);
+      addLog(`  +${remaining} Fire on ${target.name}`, Colors.ORANGE);
+      applied = remaining;
+    }
+  }
+  if (applied > 0) spawnTokenOnTarget(target, applied, 'Fire', Colors.ORANGE);
 }
 let awaitingEnemyDamage = false; // true while the player is resolving enemy damage flow
 
@@ -9802,6 +11247,64 @@ function startEnemyTurn() {
         const guard = new Creature({ name: 'Kobold Guard', attack: 2, maxHp: 1, shield: 1 });
         enemy.addCreature(guard);
         addLog(`  Kobold Backup! A new guard joins the fight.`, Colors.RED);
+        playSound('kobold_attack', 0.6);
+      } else if (power.id === 'amalgam') {
+        // Per PY: if any living Bone Amalgam ally exists, buff each by
+        // +1 atk and +1 max HP (also healing the new HP). Otherwise
+        // summon a fresh 3/3 Bone Amalgam (with summoning sickness).
+        const existing = enemy.creatures.filter(
+          c => c.isAlive && c.name === 'Bone Amalgam'
+        );
+        if (existing.length > 0) {
+          for (const c of existing) {
+            c.attack = (c.attack || 0) + 1;
+            c.maxHp = (c.maxHp || 0) + 1;
+            c.currentHp = Math.min(c.maxHp, (c.currentHp || 0) + 1);
+            spawnTokenOnTarget(c, 1, 'Atk', Colors.RED);
+          }
+          addLog(`  Amalgam grows! Bone Amalgam allies +1 Atk / +1 HP.`, Colors.ORANGE);
+        } else {
+          const fresh = new Creature({
+            name: 'Bone Amalgam', attack: 3, maxHp: 3,
+            description: 'A mass of fused bones.',
+          });
+          enemy.addCreature(fresh);
+          addLog(`  Bone Amalgam rises! (3/3)`, Colors.ORANGE);
+        }
+      } else if (power.id === 'kobold_army') {
+        // Mirrors PY: top up to a target of 4-6 allies with Guards, always
+        // add 1 Slinger, and 30 % chance for an extra Dragonshield.
+        const currentAllies = enemy.creatures.filter(c => c.isAlive).length;
+        const targetAllies = 4 + Math.floor(Math.random() * 3); // 4..6
+        const numGuards = Math.max(0, targetAllies - currentAllies);
+        const spawnDragonshield = Math.random() < 0.3;
+        for (let i = 0; i < numGuards; i++) {
+          enemy.addCreature(new Creature({ name: 'Kobold Guard', attack: 2, maxHp: 1, shield: 1 }));
+        }
+        enemy.addCreature(new Creature({ name: 'Kobold Slinger', attack: 2, maxHp: 1, fireAttack: 1 }));
+        if (spawnDragonshield) {
+          enemy.addCreature(new Creature({
+            name: 'Kobold Dragonshield', attack: 2, maxHp: 2, shield: 2, sentinel: true,
+            description: 'Sentinel: Must be targeted first.',
+          }));
+        }
+        const parts = [`${numGuards} Guard${numGuards === 1 ? '' : 's'}`, '1 Slinger'];
+        if (spawnDragonshield) parts.push('1 Dragonshield');
+        addLog(`  Kobold Army! ${parts.join(', ')} join the fight!`, Colors.ORANGE);
+        playSound('kobold_attack', 0.7);
+      } else if (power.id === 'wolf_pack') {
+        // Mirrors PY: while the pack is small (<5 alive), 3-4 fresh wolves
+        // emerge from the blizzard each turn; once they're swarming
+        // (5+ alive) only 1-2 trickle in to keep pressure up without
+        // overwhelming the screen.
+        const aliveWolves = enemy.creatures.filter(c => c.isAlive).length;
+        const num = aliveWolves < 5
+          ? 3 + Math.floor(Math.random() * 2)  // 3..4
+          : 1 + Math.floor(Math.random() * 2); // 1..2
+        for (let i = 0; i < num; i++) {
+          enemy.addCreature(new Creature({ name: 'Wolf', attack: 2, maxHp: 2 }));
+        }
+        addLog(`  Wolf Pack! ${num} wolves emerge from the blizzard!`, Colors.ORANGE);
       }
     }
   }
@@ -9836,6 +11339,11 @@ function startEnemyTurn() {
     } else if (card.cardType === CardType.CREATURE) {
       enemyActions.push({ type: 'play', card, action: 'summon' });
       hasAttackOrSummon = true;
+    } else if (card.cardType === CardType.ABILITY) {
+      // Buff/utility cards (Defensive Formation, etc.) — enemy plays them
+      // for self-shield / team-shield / heroism / draw side effects.
+      enemyActions.push({ type: 'play', card, action: 'ability' });
+      hasAttackOrSummon = true;
     }
   }
 
@@ -9866,6 +11374,34 @@ function startEnemyTurn() {
   enemyActionTimer = 625; // ms before first action
 }
 
+// Queue any newly-drawn enemy cards (from card draw effects) for play on the
+// SAME turn. Splices the new actions in before the trailing creature_attacks
+// and end marker so they fire next. Skips DEFENSE cards (reactive only).
+function queueEnemyDrawnCards(cards) {
+  if (!cards || cards.length === 0) return;
+  const newActions = [];
+  for (const c of cards) {
+    if (!c) continue;
+    if (c.cardType === CardType.DEFENSE) continue;
+    if (c.cardType === CardType.ATTACK) {
+      newActions.push({ type: 'play', card: c, action: 'attack' });
+    } else if (c.cardType === CardType.CREATURE) {
+      newActions.push({ type: 'play', card: c, action: 'summon' });
+    }
+  }
+  if (newActions.length === 0) return;
+  // Find the first creature_attack or end action and splice before it so the
+  // newly-played cards fire before any minion attacks resolve.
+  let insertAt = enemyActions.length;
+  for (let i = enemyActionIndex; i < enemyActions.length; i++) {
+    if (enemyActions[i].type === 'creature_attack' || enemyActions[i].type === 'end') {
+      insertAt = i;
+      break;
+    }
+  }
+  enemyActions.splice(insertAt, 0, ...newActions);
+}
+
 function updateEnemyTurn(dt) {
   if (isPlayerTurn) return;
   if (enemyActionIndex >= enemyActions.length) return;
@@ -9893,28 +11429,90 @@ function updateEnemyTurn(dt) {
     enemyActionTimer = 250; // faster for summons
     const c = action.creature;
     if (c.isAlive && !c.exhausted) {
-      addLog(`${c.name} attacks`, Colors.RED);
+      // Stamp the swinging creature so weapon-SFX detection (Large
+      // Boulder, future enemy creatures with _weaponSfx) routes
+      // correctly. Cleared at the bottom of this branch.
+      _activeAttacker = c;
+      addLog(`${c.name} attacks`, Colors.RED, null, null, c);
+      // Apply rage (persistent) and heroism (consumed on attack), matching
+      // Python — Warden's Whip / similar rallies grant heroism to the army,
+      // and the bonus has to land on this swing to be useful.
+      const rageBonus = c.rage || 0;
+      const heroismBonus = c.heroism || 0;
+      let raw = c.attack + rageBonus + heroismBonus;
+      if (heroismBonus > 0) c.heroism = 0;
+      if (rageBonus > 0) addLog(`  Rage! +${rageBonus} damage`, Colors.RED);
+      if (heroismBonus > 0) addLog(`  Heroism! +${heroismBonus} damage`, Colors.GOLD);
+      // Ice on the attacking creature reduces this swing and consumes 1 stack.
+      const swingDmg = consumeIceForAttack(c, raw);
+      // Pick the target once so the swing AND the riders (Fire / Poison)
+      // land on the same target, mirroring PY's creature attack flow.
+      const target = pickEnemyAttackTarget();
       if (c.unpreventable) {
         // Unpreventable: bypass defense flow, deal directly to deck/hand
-        const target = pickEnemyAttackTarget();
         const src2 = (() => { const cr = getEnemyCreatureRects(); const ci = enemy.creatures.indexOf(c); return ci !== -1 && cr[ci] ? { x: cr[ci].x + cr[ci].w / 2, y: cr[ci].y + cr[ci].h / 2 } : getEnemyCenter(); })();
         const dst2 = getTargetCenter(target);
         enemyArrow = { x1: src2.x, y1: src2.y, x2: dst2.x, y2: dst2.y, timer: 550, sourceCreature: c };
         screenFlashTimer = 150;
+        // Bypassing routeEnemyDamageToTarget means the swing-time flesh
+        // SFX hook never fires — play it inline so unpreventable
+        // attackers (Slime split spawns, Pet Slime etc.) still squelch.
+        const sfx = getWeaponSfxKeys();
+        if (sfx && sfx.flesh) playSound(sfx.flesh, 0.7);
         if (target === player) {
-          player.takeDamageFromDeck(c.attack);
-          spawnDamageOnTarget(player, c.attack, Colors.ORANGE);
-          addLog(`  ${c.attack} unpreventable damage!`, Colors.ORANGE);
+          player.takeDamageFromDeck(swingDmg);
+          spawnDamageOnTarget(player, swingDmg, Colors.ORANGE);
+          addLog(`  ${swingDmg} unpreventable damage!`, Colors.ORANGE);
         } else {
-          target.takeUnpreventableDamage(c.attack);
-          spawnDamageOnTarget(target, c.attack, Colors.ORANGE);
-          addLog(`  ${target.name}: ${c.attack} unpreventable dmg`, Colors.ORANGE);
-          if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD); player.removeDeadCreatures(); }
+          target.takeUnpreventableDamage(swingDmg);
+          spawnDamageOnTarget(target, swingDmg, Colors.ORANGE);
+          addLog(`  ${target.name}: ${swingDmg} unpreventable dmg`, Colors.ORANGE);
+          if (!target.isAlive) { spawnDeathAnimation(target); addLog(`  ${target.name} destroyed!`, Colors.GOLD, null, null, target); player.removeDeadCreatures(); }
         }
       } else {
-        routeEnemyDamage(c.attack, c.name, c);
+        routeEnemyDamageToTarget(target, swingDmg, c.name, c);
+      }
+      // Attack-effect riders: Fire (Slinger), Ice (frost drake), Poison
+      // (spider). All land on the same target as the swing.
+      if (c.fireAttack > 0) {
+        applyFireToTarget(target, c.fireAttack);
+      }
+      if (c.iceAttack > 0) {
+        // Ice breath hits the player AND every player ally.
+        applyIceToTarget(player, c.iceAttack);
+        for (const ally of (player.creatures || [])) {
+          if (ally.isAlive) applyIceToTarget(ally, c.iceAttack);
+        }
       }
       c.exhaust();
+      // Self-destruct: creature crumbles after attacking. Mirrors PY's
+      // selfDestruct branch — current_hp goes to 0 and on_death_damage (if any)
+      // explodes for 1..N to a random player ally (or player if none alive).
+      if (c.selfDestruct && c.isAlive) {
+        c.currentHp = 0;
+        if (c.onDeathDamage > 0) {
+          const explosion = Math.floor(Math.random() * c.onDeathDamage) + 1;
+          const allies = (player.creatures || []).filter(a => a.isAlive);
+          if (allies.length > 0) {
+            const t = allies[Math.floor(Math.random() * allies.length)];
+            const actual = t.takeDamage(explosion);
+            if (actual > 0) spawnDamageOnTarget(t, actual, Colors.ORANGE);
+            addLog(`  ${c.name} explodes! ${actual} damage to ${t.name}!`, Colors.ORANGE);
+            if (!t.isAlive) {
+              spawnDeathAnimation(t);
+              addLog(`  ${t.name} destroyed!`, Colors.GOLD, null, null, t);
+              player.removeDeadCreatures();
+            }
+          } else {
+            enemyDamageAccumulator += explosion;
+            addLog(`  ${c.name} explodes! ${explosion} damage incoming.`, Colors.ORANGE);
+          }
+        }
+        spawnDeathAnimation(c);
+        addLog(`  ${c.name} crumbles!`, Colors.GOLD);
+        enemy.removeDeadCreatures();
+      }
+      _activeAttacker = null;
     }
     return;
   }
@@ -9948,9 +11546,15 @@ function updateEnemyTurn(dt) {
     // Resolve effect — for chunky_bite (Big Bite), deal 3 damage to a chosen target
     if (power.id === 'chunky_bite') {
       let dmg = 3 + (enemy.rage || 0) + getDamageModifier(enemy);
+      dmg = consumeIceForAttack(enemy, dmg);
       dmg += getIncomingDamageModifier(player);
       dmg = Math.max(0, dmg);
+      // Stamp the power as the active card so the SFX classifier sees
+      // its id (chunky_bite → big_bite). Routing fires the swing-time
+      // flesh sound from inside routeEnemyDamageToTarget.
+      _activePlayCard = power;
       routeEnemyDamage(dmg, power.name);
+      _activePlayCard = null;
     }
     return;
   }
@@ -9973,33 +11577,144 @@ function updateEnemyTurn(dt) {
 
   enemy.deck.playCard(card);
 
-  // Pay extra recharge cost from remaining hand
+  // Pay extra recharge cost from remaining hand. Log one card per line so
+  // each entry is hoverable for preview.
   if (extraCost > 0) {
     const recharged = [];
     for (let i = 0; i < extraCost; i++) {
       if (enemy.deck.hand.length === 0) break;
       const c = enemy.deck.hand.shift();
       enemy.deck.addToRechargePile(c);
-      recharged.push(c.name);
+      recharged.push(c);
     }
-    if (recharged.length > 0) addLog(`  Recharge: ${recharged.join(', ')}`);
+    for (const c of recharged) addLog(`  Recharge: ${c.name}`, Colors.GRAY, c);
   }
 
   if (action.action === 'attack') {
     addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
+    // Stamp the played card so the weapon-SFX classifier (e.g. an enemy
+    // "Throw Rock" card → rocks_shatter) can route per-card. Cleared
+    // after the effect loop.
+    _activePlayCard = card;
+    playCardAmbient(card);
+    // Pick the target ONCE so all card effects (damage, apply_ice, etc.)
+    // hit the same target. Mirrors Python's enemy card flow.
+    const cardTarget = pickEnemyAttackTarget();
     for (const eff of card.currentEffects) {
       if (eff.effectType === 'damage') {
         let dmg = Math.max(0, eff.value + enemy.heroism + enemy.rage + getDamageModifier(enemy));
+        dmg = consumeIceForAttack(enemy, dmg);
         dmg += getIncomingDamageModifier(player);
         dmg = Math.max(0, dmg);
         if (enemy.heroism > 0) enemy.heroism = 0;
-        // Pick a target — player (accumulated) or an ally (immediate)
-        routeEnemyDamage(dmg, card.name);
+        routeEnemyDamageToTarget(cardTarget, dmg, card.name);
       } else if (eff.effectType === 'unpreventable_damage') {
-        // Unpreventable damage bypasses defense flow
+        // Unpreventable damage bypasses defense flow + the normal
+        // routeEnemyDamageToTarget path, so the active card's flesh
+        // SFX (e.g. Slime Appendage → ooze squelch) won't fire from
+        // the swing-time hook. Play it inline here.
+        const sfx = getWeaponSfxKeys();
+        if (sfx && sfx.flesh) playSound(sfx.flesh, 0.7);
         player.takeDamageFromDeck(eff.value);
         spawnDamageOnTarget(player, eff.value, Colors.ORANGE);
         addLog(`  ${eff.value} true damage to you!`, Colors.ORANGE);
+      } else if (eff.effectType === 'apply_ice') {
+        applyIceToTarget(cardTarget, eff.value);
+      } else if (eff.effectType === 'apply_ice_all') {
+        applyIceToTarget(player, eff.value);
+        for (const ally of player.creatures) {
+          if (ally.isAlive) applyIceToTarget(ally, eff.value);
+        }
+      } else if (eff.effectType === 'draw') {
+        // Enemy card with a draw effect (mirror of the player-side handler).
+        // Newly-drawn ATTACK/CREATURE cards are queued for play this same turn
+        // so chained-draw decks resolve naturally instead of stalling.
+        const drawn = enemy.deck.draw(eff.value, enemy._handSize || 10);
+        for (const d of drawn) addLog(`  Draws ${d.name}`, Colors.GRAY, d);
+        queueEnemyDrawnCards(drawn);
+      } else if (eff.effectType === 'buff_allies_heroism') {
+        // Warden's Whip: every living enemy ally gains N Heroism.
+        let buffed = 0;
+        for (const a of enemy.creatures) {
+          if (!a.isAlive) continue;
+          a.heroism = (a.heroism || 0) + eff.value;
+          spawnTokenOnTarget(a, eff.value, 'Heroism', Colors.GOLD);
+          buffed++;
+        }
+        if (buffed > 0) addLog(`  Allies gain +${eff.value} Heroism!`, Colors.GOLD);
+      }
+    }
+    _activePlayCard = null;
+  } else if (action.action === 'ability') {
+    // ABILITY cards (Defensive Formation, etc.) — utility plays. Mirrors PY's
+    // enemy ABILITY-card handler at game.py:13823.
+    addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
+    playCardAmbient(card);
+    for (const eff of card.currentEffects) {
+      if (eff.effectType === 'gain_shield') {
+        enemy.shield += eff.value;
+        addLog(`  +${eff.value} Shield (S:${enemy.shield})`, Colors.ALLY_BLUE);
+        spawnTokenOnTarget(enemy, eff.value, 'Shield', Colors.ALLY_BLUE);
+      } else if (eff.effectType === 'team_shield') {
+        enemy.shield += eff.value;
+        addLog(`  +${eff.value} Shield (S:${enemy.shield})`, Colors.ALLY_BLUE);
+        spawnTokenOnTarget(enemy, eff.value, 'Shield', Colors.ALLY_BLUE);
+        let buffed = 0;
+        for (const a of enemy.creatures) {
+          if (!a.isAlive) continue;
+          a.shield = (a.shield || 0) + eff.value;
+          spawnTokenOnTarget(a, eff.value, 'Shield', Colors.ALLY_BLUE);
+          buffed++;
+        }
+        if (buffed > 0) addLog(`  All allies gain +${eff.value} Shield!`, Colors.ALLY_BLUE);
+      } else if (eff.effectType === 'gain_heroism') {
+        enemy.heroism = (enemy.heroism || 0) + eff.value;
+        addLog(`  +${eff.value} Heroism (H:${enemy.heroism})`, Colors.GOLD);
+        spawnTokenOnTarget(enemy, eff.value, 'Heroism', Colors.GOLD);
+      } else if (eff.effectType === 'buff_allies_heroism') {
+        let buffed = 0;
+        for (const a of enemy.creatures) {
+          if (!a.isAlive) continue;
+          a.heroism = (a.heroism || 0) + eff.value;
+          spawnTokenOnTarget(a, eff.value, 'Heroism', Colors.GOLD);
+          buffed++;
+        }
+        if (buffed > 0) addLog(`  Allies gain +${eff.value} Heroism!`, Colors.GOLD);
+      } else if (eff.effectType === 'draw') {
+        const drawn = enemy.deck.draw(eff.value, enemy._handSize || 10);
+        for (const d of drawn) addLog(`  Draws ${d.name}`, Colors.GRAY, d);
+        queueEnemyDrawnCards(drawn);
+      } else if (eff.effectType === 'bone_storm') {
+        // Bone Storm: strip shields from the player + every player ally,
+        // then deal `eff.value` damage to all of them, then buff every
+        // enemy creature with +1 atk / +1 maxHp / +1 shield. Mirrors PY.
+        if (player.shield > 0) {
+          addLog(`  Player loses ${player.shield} Shield`, Colors.ALLY_BLUE);
+          player.shield = 0;
+        }
+        for (const a of (player.creatures || [])) {
+          if (!a.isAlive) continue;
+          if ((a.shield || 0) > 0) a.shield = 0;
+        }
+        const taken = player.takeDamageFromDeck(eff.value);
+        addLog(`  ${taken} dmg to ${player.name || 'you'}`, Colors.RED);
+        for (const a of [...(player.creatures || [])]) {
+          if (!a.isAlive) continue;
+          const actual = a.takeDamage(eff.value);
+          addLog(`  ${actual} dmg to ${a.name}`, Colors.RED);
+        }
+        countAndRemoveDeadCreatures();
+        let buffed = 0;
+        for (const c of enemy.creatures) {
+          if (!c.isAlive) continue;
+          c.attack = (c.attack || 0) + 1;
+          c.maxHp = (c.maxHp || 0) + 1;
+          c.currentHp = Math.min(c.maxHp, (c.currentHp || 0) + 1);
+          c.shield = (c.shield || 0) + 1;
+          spawnTokenOnTarget(c, 1, 'Shield', Colors.ALLY_BLUE);
+          buffed++;
+        }
+        if (buffed > 0) addLog(`  Allies gain +1 Atk / +1 HP / +1 Shield.`, Colors.ORANGE);
       }
     }
   } else if (action.action === 'defend') {
@@ -10012,6 +11727,14 @@ function updateEnemyTurn(dt) {
     }
   } else if (action.action === 'summon') {
     addLog(`${enemy.name} plays ${card.name}`, Colors.RED, card);
+    // Stamp the played card so the SFX classifier sees rat-screech /
+    // future enemy summon cards. Cleared at the bottom of the branch.
+    _activePlayCard = card;
+    // Some summon cards have an on-cast cue (rat screeches play a flesh
+    // sample when the screech goes out). Reuse the flesh entry so the
+    // codex Sounds row is the same one that fires here.
+    const sfx = getWeaponSfxKeys();
+    if (sfx && sfx.flesh) playSound(sfx.flesh, 0.7);
     for (const eff of card.currentEffects) {
       if (eff.effectType === 'summon_random') {
         const count = Math.floor(Math.random() * eff.value) + 1;
@@ -10029,8 +11752,19 @@ function updateEnemyTurn(dt) {
           const lastEntry = combatLog[combatLog.length - 1];
           if (lastEntry) lastEntry.creature = lastCreature;
         }
+      } else if (eff.effectType === 'summon_large_boulder') {
+        // Stone Giant: heave another Large Boulder onto the battlefield.
+        const boulder = new Creature({
+          name: 'Large Boulder', attack: 6, maxHp: 4, armor: 1, selfDestruct: true,
+        });
+        enemy.addCreature(boulder);
+        addLog(`  Large Boulder rolls in!`, Colors.ORANGE);
+        playSound('boulder_flesh', 0.7);
+        const lastEntry = combatLog[combatLog.length - 1];
+        if (lastEntry) lastEntry.creature = boulder;
       }
     }
+    _activePlayCard = null;
   }
 
   checkCombatEnd();
@@ -10060,6 +11794,12 @@ function finishEnemyTurn() {
 function completePlayerTurnTransition() {
   awaitingEnemyDamage = false;
 
+  // Ice ticks at the end of the iced character's own turn — for the
+  // enemy that's right here, after they've had their attacks resolve
+  // (consumeIceForAttack already shaved per-attack stacks during the
+  // turn).
+  if (enemy) decayIceAtTurnEnd(enemy, enemy.name);
+
   // End-of-enemy-turn passive powers. Dire Fury: +1 Rage per turn, stacking
   // so the Dire Rat's attacks grow stronger the longer the fight drags on.
   if (enemy && Array.isArray(enemy.powers)) {
@@ -10068,6 +11808,18 @@ function completePlayerTurnTransition() {
         enemy.rage = (enemy.rage || 0) + 1;
         addLog(`  ${enemy.name}'s fury grows! (R:${enemy.rage})`, Colors.RED);
       }
+    }
+  }
+
+  // Survival fights: tick the rounds-remaining counter. Mirrors PY's flow —
+  // each completed enemy turn drops the counter; victory at 0.
+  if (survivalRounds > 0) {
+    survivalRoundsRemaining = Math.max(0, survivalRoundsRemaining - 1);
+    if (survivalRoundsRemaining <= 0) {
+      checkCombatEnd();
+      if (state === GameState.VICTORY || state === GameState.ENCOUNTER_LOOT) return;
+    } else {
+      addLog(`Rounds remaining: ${survivalRoundsRemaining}`, Colors.GOLD);
     }
   }
 
@@ -10090,7 +11842,7 @@ function completePlayerTurnTransition() {
   // Process combat buffs at start of player turn
   const buffLogs = player.processCombatBuffs();
   for (const log of buffLogs) {
-    addLog(log.text, log.color, log.card || null);
+    addLog(log.text, log.color, log.card || null, log.buff || null);
     if (log.healed) spawnHealOnTarget(player, log.healed);
     if (log.token) spawnTokenOnTarget(player, log.tokenAmount, log.token, log.tokenColor);
   }
@@ -10105,12 +11857,20 @@ function checkCombatEnd() {
   // Kill count victory (wolf pack, etc.)
   if (killTarget > 0 && killCount >= killTarget) {
     addLog(`VICTORY! Killed ${killCount}/${killTarget}!`, Colors.GOLD);
+    // Boss-end cue for kill-count fights — same name-keyed lookup as
+    // regular boss death. Wolf Pack → distant howl.
+    const endKey = getDeathSfxKey(enemy);
+    if (endKey) playSound(endKey, 0.7);
     combatVictory();
     return true;
   }
   // Survival victory (stone giant)
-  if (survivalRounds > 0 && enemyTurnNumber >= survivalRounds) {
+  if (survivalRounds > 0 && survivalRoundsRemaining <= 0) {
     addLog(`VICTORY! Survived ${survivalRounds} rounds!`, Colors.GOLD);
+    // Stone Giant rumbles off — same rolling-rocks cue as fight start.
+    if (enemy && (enemy.name || '').toLowerCase() === 'stone giant') {
+      playSound('stone_giant_roll', 0.7);
+    }
     combatVictory();
     return true;
   }
@@ -10118,11 +11878,16 @@ function checkCombatEnd() {
   // (matches py game's check_enemy_defeated). Skipped if the boss is invulnerable.
   if (!enemy._invulnerable && !enemy.isAlive) {
     addLog('VICTORY!', Colors.GOLD);
+    // Boss-specific death cue (Giant Rat / Dire Rat squeak etc.).
+    const deathKey = getDeathSfxKey(enemy);
+    if (deathKey) playSound(deathKey, 0.7);
+    playSound('victory');
     combatVictory();
     return true;
   }
   if (!player.isAlive) {
     addLog('DEFEATED!', Colors.RED);
+    playSound('defeat');
     state = GameState.GAME_OVER;
     return true;
   }
@@ -10176,39 +11941,84 @@ function triggerSplitPower(character) {
       const slime = new Creature({ name: 'Slime', attack: 1, maxHp: 1, unpreventable: true });
       character.addCreature(slime);
       addLog(`  -> ${character.name} splits! Slime spawns!`, Colors.ORANGE);
+      playSound('ooze_attack', 0.7);
       break;
     }
   }
 }
 
+// Returns a SOUND_MAP key for the death cue of a given character/creature,
+// or null when nothing's wired. Used by countAndRemoveDeadCreatures and
+// the boss-death branch of checkCombatEnd. Easy to extend for future
+// monster death sounds (slime burst, bone shatter, dragon roar, etc.).
+function getDeathSfxKey(c) {
+  if (!c) return null;
+  const name = (c.name || '').toLowerCase();
+  if (name === 'rat' || name === 'tamed rat' ||
+      name === 'giant rat' || name === 'dire rat') {
+    return 'rat_screech';
+  }
+  // Bone-family death rattle (Bone Pile boss, Bone Amalgam boss + the
+  // 3/3 amalgam creatures it summons, Restless Bone summons).
+  if (name === 'bone pile' || name === 'bone amalgam' ||
+      name === 'restless bone') {
+    return 'bones_clatter';
+  }
+  // Kobold Warden death — louder hiss to bookend the fight.
+  if (name === 'kobold warden') return 'warden_hiss';
+  // Kobold Patrol death — generic kobold hiss.
+  if (name === 'kobold patrol') return 'kobold_attack';
+  // General Zhost (army wave + boss phase) — beefier hiss.
+  if (name === "general zhost's army" || name === 'general zhost') {
+    return 'zhost_hiss';
+  }
+  // Stone Giant — heavy rocks tumble at death (matches fight start).
+  if (name === 'stone giant') return 'stone_giant_roll';
+  // Wolf Pack — distant pack howl on the boss-end (fight start uses the
+  // same key, see getFightStartSfxKey).
+  if (name === 'wolf pack') return 'wolf_howl';
+  return null;
+}
+
+// Per-enemy splash cue at combat start. Mirrors the inlined logic that
+// used to live in startCombat — kept here so the codex Sounds section
+// can show the same value next to a character card.
+function getFightStartSfxKey(rawName) {
+  const name = (rawName || '').toLowerCase();
+  if (name === 'slime') return 'ooze_attack';
+  if (name === 'giant rat' || name === 'dire rat') return 'rat_screech';
+  if (name === 'bone pile' || name === 'bone amalgam') return 'bones_clatter';
+  if (name === 'kobold warden') return 'warden_hiss';
+  if (name === 'kobold patrol') return 'kobold_attack';
+  if (name === "general zhost's army" || name === 'general zhost') {
+    return 'zhost_hiss';
+  }
+  if (name === 'stone giant') return 'stone_giant_roll';
+  if (name === 'wolf pack') return 'wolf_howl';
+  return null;
+}
+
 function countAndRemoveDeadCreatures() {
   const deadBefore = enemy.creatures.filter(c => !c.isAlive).length;
-  // Before removing dead player creatures, handle companion card flow:
-  // companion's sourceCard moves from playPile → discardPile (costs HP).
+  // Log a "card goes to discard" line for any dying companion before the
+  // creature is removed (Character.removeDeadCreatures handles the actual
+  // playPile → discardPile move).
   for (const c of player.creatures) {
-    if (!c.isAlive && c.isCompanion && c.sourceCard && player.deck) {
-      if (player.deck.playPileToDiscard(c.sourceCard)) {
-        addLog(`  ${c.name}'s card goes to discard.`, Colors.RED);
-      }
+    if (!c.isAlive && c.isCompanion && c.sourceCard) {
+      addLog(`  ${c.name}'s card goes to discard.`, Colors.RED);
     }
+  }
+  // Play death-specific cues for any creature about to be removed.
+  for (const c of [...enemy.creatures, ...player.creatures]) {
+    if (c.isAlive) continue;
+    const key = getDeathSfxKey(c);
+    if (key) playSound(key, 0.7);
   }
   enemy.removeDeadCreatures();
   player.removeDeadCreatures();
   if (deadBefore > 0 && killTarget > 0) {
     killCount += deadBefore;
     addLog(`  Kill count: ${killCount}/${killTarget}`, Colors.GOLD);
-    // Respawn creatures for kill-count encounters
-    if (killCount < killTarget && enemy._invulnerable) {
-      const deficit = Math.max(0, 2 - enemy.creatures.length);
-      for (let i = 0; i < deficit; i++) {
-        const name = enemy.name === 'Wolf Pack' ? 'Wolf' : 'Creature';
-        const atk = enemy.name === 'Wolf Pack' ? 2 : 1;
-        const hp = enemy.name === 'Wolf Pack' ? 2 : 1;
-        const c = new Creature({ name, attack: atk, maxHp: hp });
-        c.ready();
-        enemy.addCreature(c);
-      }
-    }
   }
 }
 
@@ -10255,11 +12065,23 @@ function drawVictory() {
 }
 
 function drawGameOver() {
-  ctx.fillStyle = '#1a0a0a';
-  ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  if (images.game_end_bg) {
+    ctx.drawImage(images.game_end_bg, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    // Slight darkening overlay so the gold/red text stays readable over
+    // any bright spots in the art.
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  } else {
+    ctx.fillStyle = '#1a0a0a';
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  }
+  ctx.textAlign = 'center';
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 3;
   ctx.fillStyle = Colors.RED;
   ctx.font = 'bold 64px serif';
-  ctx.textAlign = 'center';
   ctx.fillText('Defeated', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 40);
   ctx.fillStyle = Colors.WHITE;
   ctx.font = '24px sans-serif';
@@ -10267,6 +12089,8 @@ function drawGameOver() {
   ctx.font = '18px sans-serif';
   ctx.fillStyle = Colors.GRAY;
   ctx.fillText('Click to return to menu', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 60);
+  ctx.restore();
+  ctx.textAlign = 'left';
 }
 
 // ============================================================
@@ -10292,6 +12116,7 @@ function handlePerkSelectClick(x, y) {
   const rects = getPerkRects();
   for (let i = 0; i < rects.length; i++) {
     if (hitTest(x, y, rects[i])) {
+      playSound('perk_pick', 0.7);
       const perk = perkChoices[i];
       player.perks.push(perk);
       addLog(`Perk gained: ${perk.name}!`, Colors.GOLD);
@@ -10761,19 +12586,22 @@ function getInvSections() {
   };
 }
 
-// Categorize a card into a filter type
+// Categorize a card into a filter type. Mirrors Python's deck_category() —
+// subtype is the source of truth (Pet Spider has cardType=CREATURE but
+// subtype='ability', so it lands in Abilities).
 function getCardFilterType(card) {
   const sub = (card.subtype || '').toLowerCase();
   const type = (card.cardType || '').toUpperCase();
   if (sub === 'relic') return 'Relics';
-  if (type === 'CREATURE' || sub === 'ally' || sub === 'companion') return 'Allies';
-  // Armor/weapon subtypes MUST be checked before cardType === 'ABILITY' so
-  // cards like Cracked Buckler (subtype='light_armor', cardType='ABILITY')
-  // land in Armor rather than Abilities.
+  // Subtype-driven categories first (matches Python deck_category).
+  if (sub === 'ability') return 'Abilities';
+  if (sub === 'ally' || sub === 'allies' || sub === 'companion') return 'Allies';
   if (sub.includes('armor') || sub === 'shield' || sub === 'clothing') return 'Armor';
   if (sub.includes('martial') || sub === 'weapon' || sub === 'simple' || sub.includes('2h') || sub === 'staff' || sub === 'wand' || sub === 'ranged') return 'Weapons';
-  if (type === 'ABILITY' || sub === 'ability') return 'Abilities';
   if (sub === 'item' || sub === 'potion' || sub === 'food' || sub === 'scroll') return 'Items';
+  // Fallbacks based on cardType when subtype is missing/unrecognized.
+  if (type === 'CREATURE') return 'Allies';
+  if (type === 'ABILITY') return 'Abilities';
   if (type === 'ATTACK') return 'Weapons';
   if (type === 'DEFENSE') return 'Armor';
   return 'Items';
@@ -10832,8 +12660,9 @@ function getBackpackCardRects() {
 // string or '' if valid. Lenient rule: if total available cards in a
 // category (deck + backpack) are fewer than the max, allow the shortfall.
 function validateRestDeck() {
-  // 1. Level-up bonus must be assigned (only during level-up rest).
-  if (pendingChapter2Transition && !_restBonusCat) {
+  // 1. Level-up bonus must be assigned (chapter-1 transition AND every
+  // mid-game level-up grant a +1 category pick).
+  if ((pendingChapter2Transition || _levelUpBonusPending) && !_restBonusCat) {
     return 'Assign your +1 deck limit bonus first.';
   }
   // 2. No invalid card types equipped.
@@ -10885,6 +12714,7 @@ function exitInventory() {
     player.deck.rebalance(getPlayerHandSize(), MAX_HAND_SIZE);
     restMode = false;
     _restBonusCat = null;
+    _levelUpBonusPending = false;
     _restErrorMsg = '';
     // Chapter 2 transition — the leave-prison flow funnels through here
     // after the level-up / perk / deck-tutorial / rest inventory sequence.
@@ -10898,6 +12728,10 @@ function exitInventory() {
       });
       return;
     }
+    // Level-up flow used heroic music; resume the node's ambience now
+    // that the rest is finished. Idempotent — no-op if music's already
+    // on the right track.
+    updateMusicForCurrentScene();
     if (currentEncounter && !currentEncounter.isComplete) {
       currentEncounter.advancePhase();
       advanceEncounterPhase();
@@ -11461,15 +13295,17 @@ function drawInventoryCharacter(rect) {
     else ctx.fillStyle = '#ffffff';
     const bonusStr = bonus > 0 ? ` (+${bonus})` : '';
     ctx.fillText(`${cat.label}`, limitsBaseX + 4, nextY);
-    // Right-aligned count/max. Reserve 18 px at the far right for the +/-
-    // button so the text doesn't butt against the panel edge.
-    const btnReserve = (restMode && pendingChapter2Transition) ? 18 : 0;
+    // Right-aligned count/max. When the +/− button is visible we reserve
+    // space at the far right so neither the text nor the button overlaps
+    // the panel's right edge / divider line.
+    const showBtn = restMode && (pendingChapter2Transition || _levelUpBonusPending);
+    const btnReserve = showBtn ? 20 : 0;
     const rightEdge = limitsBaseX + limitsW - 4 - btnReserve;
     ctx.textAlign = 'right';
     ctx.fillText(`${count} / ${max}${bonusStr}`, rightEdge, nextY);
     // In rest-level-up mode, show +/- buttons to assign the level-up
     // bonus (one +1 pick per level-up, max +3 per category).
-    if (restMode && pendingChapter2Transition) {
+    if (restMode && (pendingChapter2Transition || _levelUpBonusPending)) {
       const btnSize = 13;
       const btnX = rightEdge + 4;
       const btnY = nextY - 10;
@@ -11546,6 +13382,13 @@ function drawInventoryCharacter(rect) {
   ctx.font = 'bold 12px Georgia, serif';
   ctx.textAlign = 'left';
   ctx.fillText('Perks', limitsBaseX + 2, nextY);
+  // Hint that perk names are hoverable for details.
+  if (player.perks && player.perks.length > 0) {
+    const perksW = ctx.measureText('Perks').width;
+    ctx.fillStyle = '#888';
+    ctx.font = 'italic 10px sans-serif';
+    ctx.fillText('hover for details', limitsBaseX + 2 + perksW + 8, nextY);
+  }
   nextY += 16;
 
   if (player.perks && player.perks.length > 0) {
@@ -11567,16 +13410,29 @@ function drawInventoryCharacter(rect) {
       const text = label + suffix;
       ctx.font = '11px sans-serif';
       const tw = ctx.measureText(text).width;
+      const labelW = ctx.measureText(label).width;
       // Wrap to next line if needed
       if (cx + tw > maxX && cx > limitsBaseX + 4) {
         nextY += 14;
         cx = limitsBaseX + 4;
       }
       if (nextY > rect.y + rect.h - 20) break;
-      // Highlight on hover
+      // Highlight on hover. Resting color is a muted gold to read as
+      // interactive vs. plain body text.
       const isHov = hitTest(mouseX, mouseY, { x: cx, y: nextY - 10, w: tw, h: 14 });
-      ctx.fillStyle = isHov ? Colors.GOLD : '#ddd';
+      ctx.fillStyle = isHov ? Colors.GOLD : '#d4b673';
       ctx.fillText(text, cx, nextY);
+      // Dotted underline under the perk name (not the comma) — a visual
+      // affordance that this is hoverable for a tooltip.
+      ctx.save();
+      ctx.strokeStyle = isHov ? Colors.GOLD : '#8a7440';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([1.5, 2]);
+      ctx.beginPath();
+      ctx.moveTo(cx, nextY + 2);
+      ctx.lineTo(cx + labelW, nextY + 2);
+      ctx.stroke();
+      ctx.restore();
       if (isHov) hoveredCardPreview = perkToCardLike(perk);
       cx += tw;
     }
@@ -11703,7 +13559,8 @@ function commitSaveEditing() {
   const name = (saveEditingName || '').trim() || `Save ${saveEditingDisplayNum}`;
   const success = saveToSlot({
     selectedClass, gold, player, currentMap, visitedNodes, backpack,
-    kitchenChoiceMade, prisonBarrelLooted,
+    kitchenChoiceMade, prisonBarrelLooted, shownDeckTutorial,
+    calmGroveRaenaJoined, calmGroveBreadTaken,
   }, saveEditingSlot, name);
   if (success) {
     addLog(`Game saved: ${name}`, Colors.GREEN);
@@ -11787,6 +13644,7 @@ function handleSaveClick(x, y) {
   // Cancel button
   const cancelBtn = getLoadActionBtnRects().cancel;
   if (hitTest(x, y, cancelBtn)) {
+    playSound('book_close');
     cancelSaveEditing();
     state = saveLoadReturnState || GameState.MAP;
   }
@@ -11842,6 +13700,15 @@ function handleLoadClick(x, y) {
       previousState = null;
       saveLoadReturnState = null;
       loadSelectedIndex = -1;
+      // Music: drop whatever was playing (menu theme, prior-run loop)
+      // and let the scene system pick up the right area/node track for
+      // where the loaded save lands. Reset trackers so the crossfade
+      // actually fires on the next scene check.
+      _hasEnteredCombat = true;
+      _lastMusicArea = null;
+      _lastMusicNodeId = null;
+      stopMusic();
+      updateMusicForCurrentScene();
     }
     return;
   }
@@ -11850,6 +13717,7 @@ function handleLoadClick(x, y) {
     return;
   }
   if (hitTest(x, y, btns.cancel)) {
+    playSound('book_close');
     state = saveLoadReturnState || (player ? GameState.MAP : GameState.MENU);
     loadSelectedIndex = -1;
   }
@@ -12244,6 +14112,12 @@ function restoreFromSave(data) {
   // Restore story flags used by later encounters.
   kitchenChoiceMade = data.kitchenChoiceMade || null;
   prisonBarrelLooted = !!data.prisonBarrelLooted;
+  // Older saves may not have this — default to "tutorial seen" for any
+  // save loaded mid-run so we don't surprise the player with the help
+  // page after they're well past their first rest.
+  shownDeckTutorial = data.shownDeckTutorial !== undefined ? !!data.shownDeckTutorial : true;
+  calmGroveRaenaJoined = !!data.calmGroveRaenaJoined;
+  calmGroveBreadTaken = !!data.calmGroveBreadTaken;
 
   // Recreate map
   const MAP_CREATORS = {
@@ -12469,6 +14343,7 @@ function handleHelpClick(x, y) {
   const btnX = px + pw - btnW - 16;
   const btnY = py + ph - btnH - 12;
   if (hitTest(x, y, { x: btnX, y: btnY, w: btnW, h: btnH })) {
+    playSound('book_close');
     state = previousState || GameState.MAP;
   }
 }
@@ -12589,39 +14464,70 @@ function drawHelpScreen() {
 // ============================================================
 
 function handleOptionsClick(x, y) {
-  const boxW = 440, boxH = 300;
+  const boxW = 440, boxH = 540;
   const boxX = (SCREEN_WIDTH - boxW) / 2, boxY = (SCREEN_HEIGHT - boxH) / 2;
   const btnW = 280, btnH = 50;
   const btnX = boxX + (boxW - btnW) / 2;
+  const sliderX = btnX + 20, sliderW = btnW - 40;
+  const sliderH = 12;
 
+  // Sound toggle
+  const sndY = boxY + 80;
+  if (hitTest(x, y, { x: btnX, y: sndY, w: btnW, h: btnH })) {
+    toggleSound();
+    playSound('click');
+    return;
+  }
+  // SFX volume slider
+  const sfxSliderY = sndY + btnH + 16;
+  if (hitTest(x, y, { x: sliderX - 4, y: sfxSliderY - 4, w: sliderW + 8, h: sliderH + 8 })) {
+    const pct = Math.max(0, Math.min(1, (x - sliderX) / sliderW));
+    setSoundVolume(pct);
+    playSound('click');
+    return;
+  }
+  // Music toggle
+  const musY = sfxSliderY + sliderH + 38;
+  if (hitTest(x, y, { x: btnX, y: musY, w: btnW, h: btnH })) {
+    toggleMusic();
+    playSound('click');
+    return;
+  }
+  // Music volume slider
+  const musSliderY = musY + btnH + 16;
+  if (hitTest(x, y, { x: sliderX - 4, y: musSliderY - 4, w: sliderW + 8, h: sliderH + 8 })) {
+    const pct = Math.max(0, Math.min(1, (x - sliderX) / sliderW));
+    setMusicVolume(pct);
+    playSound('click');
+    return;
+  }
   // Run Fast toggle
-  const rfY = boxY + 100;
+  const rfY = musSliderY + sliderH + 38;
   if (hitTest(x, y, { x: btnX, y: rfY, w: btnW, h: btnH })) {
     runFast = !runFast;
+    playSound('click');
     return;
   }
   // Back button
   const backY = boxY + boxH - btnH - 20;
   if (hitTest(x, y, { x: btnX, y: backY, w: btnW, h: btnH })) {
+    playSound('book_close');
     state = optionsReturnState || GameState.MENU;
     return;
   }
 }
 
 function drawOptionsScreen() {
-  // Draw underlying state for context
   if (optionsReturnState === GameState.INGAME_MENU) {
     drawIngameMenu();
   } else if (optionsReturnState === GameState.MENU) {
     drawMenu();
   }
-  // Darken
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
   ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-  // Clear any button rects from underlying draws
   menuButtons.length = 0;
 
-  const boxW = 440, boxH = 300;
+  const boxW = 440, boxH = 540;
   const boxX = (SCREEN_WIDTH - boxW) / 2, boxY = (SCREEN_HEIGHT - boxH) / 2;
   ctx.fillStyle = 'rgba(45, 45, 55, 0.95)';
   ctx.fillRect(boxX, boxY, boxW, boxH);
@@ -12629,7 +14535,6 @@ function drawOptionsScreen() {
   ctx.lineWidth = 3;
   ctx.strokeRect(boxX, boxY, boxW, boxH);
 
-  // Title
   ctx.shadowColor = 'rgba(0,0,0,0.9)';
   ctx.shadowBlur = 6;
   ctx.shadowOffsetY = 2;
@@ -12643,9 +14548,59 @@ function drawOptionsScreen() {
 
   const btnW = 280, btnH = 50;
   const btnX = boxX + (boxW - btnW) / 2;
+  const sliderX = btnX + 20, sliderW = btnW - 40;
+  const sliderH = 12;
+
+  // Helper: draw a labelled volume bar with thumb at value 0..1.
+  const drawVolBar = (sx, sy, sw, sh, value, label) => {
+    ctx.fillStyle = '#333';
+    ctx.fillRect(sx, sy, sw, sh);
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.fillStyle = Colors.GOLD;
+    ctx.fillRect(sx, sy, sw * value, sh);
+    const thumb = sx + sw * value;
+    ctx.fillStyle = Colors.WHITE;
+    ctx.fillRect(thumb - 4, sy - 3, 8, sh + 6);
+    ctx.fillStyle = '#ccc';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, btnX + btnW / 2, sy + sh + 18);
+  };
+
+  // Sound toggle
+  const sndY = boxY + 80;
+  const sndLabel = isSoundEnabled() ? '✓ Sound On' : 'Sound Off';
+  drawStyledButton(btnX, sndY, btnW, btnH, sndLabel, null, 'large', 20);
+  menuButtons.pop();
+  if (isSoundEnabled()) {
+    ctx.strokeStyle = Colors.GREEN;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(btnX + 1, sndY + 1, btnW - 2, btnH - 2);
+  }
+  // SFX volume
+  const sfxSliderY = sndY + btnH + 16;
+  drawVolBar(sliderX, sfxSliderY, sliderW, sliderH, getSoundVolume(),
+             `SFX: ${Math.round(getSoundVolume() * 100)}%`);
+
+  // Music toggle
+  const musY = sfxSliderY + sliderH + 38;
+  const musLabel = isMusicEnabled() ? '✓ Music On' : 'Music Off';
+  drawStyledButton(btnX, musY, btnW, btnH, musLabel, null, 'large', 20);
+  menuButtons.pop();
+  if (isMusicEnabled()) {
+    ctx.strokeStyle = Colors.GREEN;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(btnX + 1, musY + 1, btnW - 2, btnH - 2);
+  }
+  // Music volume
+  const musSliderY = musY + btnH + 16;
+  drawVolBar(sliderX, musSliderY, sliderW, sliderH, getMusicVolume(),
+             `Music: ${Math.round(getMusicVolume() * 100)}%`);
 
   // Run Fast toggle
-  const rfY = boxY + 100;
+  const rfY = musSliderY + sliderH + 38;
   const rfLabel = runFast ? '✓ Run Fast' : 'Run Fast';
   drawStyledButton(btnX, rfY, btnW, btnH, rfLabel, null, 'large', 20);
   menuButtons.pop();
@@ -12688,20 +14643,25 @@ function handleIngameMenuClick(x, y) {
   for (const btn of getIngameMenuBtnRects()) {
     if (!hitTest(x, y, btn)) continue;
     if (btn.action === 'resume') {
+      playSound('book_close');
       state = previousState || GameState.MAP;
     } else if (btn.action === 'save' && btn.enabled) {
+      playSound('book_open');
       saveLoadReturnState = GameState.INGAME_MENU;
       state = GameState.SAVE_GAME;
     } else if (btn.action === 'load') {
+      playSound('book_open');
       saveLoadReturnState = GameState.INGAME_MENU;
       loadTab = 'manual';
       loadSelectedIndex = -1;
       refreshLoadEntries();
       state = GameState.LOAD_GAME;
     } else if (btn.action === 'options') {
-      optionsReturnState = state; // remember we came from INGAME_MENU
+      playSound('book_open');
+      optionsReturnState = state;
       state = GameState.OPTIONS_SCREEN;
     } else if (btn.action === 'help') {
+      playSound('book_open');
       helpScrollY = 0;
       state = GameState.HELP_SCREEN;
     } else if (btn.action === 'quit') {
@@ -12871,8 +14831,6 @@ const CHAPTER_END_TEXTS = [
   [
     'You start climbing down the mountain path toward the river. After hours of walking, you find a sheltered clearing with a small stream. Apple trees and berry bushes grow wild here.',
     'You gather food, light a small fire, and lay down your weary body. The warmth of the flames and the sound of flowing water eventually lull you to sleep...',
-    'You feel stronger. Your experiences in the prison have taught you much.',
-    'Level Up!',
   ],
 ];
 
@@ -12886,6 +14844,7 @@ function handleChapterEndClick(_x, _y) {
     // start). The existing handleAbilitySelectClick routes to PERK_SELECT
     // when level >= 2, and we hook the deck tutorial in at perk-pick time.
     abilityChoices = getAbilityChoices(selectedClass, 3);
+    playSound('level_up_screen', 0.7);
     state = GameState.ABILITY_SELECT;
   }
 }
@@ -13121,8 +15080,331 @@ function spawnDamageNumber(x, y, text, color = Colors.RED) {
   });
 }
 
+// Classify a card or creature (or, when both args are null, the active
+// attacker / active played card) and return { flesh, blocked }
+// SOUND_MAP keys for that weapon family. Returns null when there's no
+// override — caller falls back to 'hit_blocked' for blocked, silent for
+// landed.
+//
+// The two-arg form is used by the codex stats panel so it can preview
+// the wired sounds for any selected card/creature without disturbing
+// the live combat-state globals.
+function getWeaponSfxKeys(card = null, creature = null) {
+  // Creature-side detection first — companions (Thorb etc.) and special
+  // monsters (Large Boulder) carry a fixed weapon profile. Each creature
+  // can also carry an explicit `_weaponSfx` for future allies/monsters.
+  const atk = creature || _activeAttacker;
+  if (atk) {
+    if (atk._weaponSfx) return atk._weaponSfx;
+    const name = (atk.name || '').toLowerCase();
+    if (name === 'thorb') {
+      return { flesh: 'axe_1h_flesh', blocked: 'axe_blocked' };
+    }
+    if (name === 'large boulder') {
+      return { flesh: 'boulder_flesh', blocked: 'boulder_blocked' };
+    }
+    // Raena (player ranger companion) — bow swings on attack.
+    if (name === 'raena') {
+      return { flesh: 'bow_flesh', blocked: 'bow_blocked' };
+    }
+    // Elf Warriors (Zhost army reinforcements) — bow swings.
+    if (name === 'elf warrior') {
+      return { flesh: 'bow_flesh', blocked: 'bow_blocked' };
+    }
+    // Bone Amalgam (3/3 ally summoned by amalgam power) — same heavy
+    // skull crunch as the Big Bone card.
+    if (name === 'bone amalgam') {
+      return { flesh: 'big_bone_hit', blocked: 'big_bone_hit' };
+    }
+    // Slimes / oozes — gory squelch on swing, default thud on block.
+    if (name === 'slime' || name === 'pet slime' || name.includes('ooze')) {
+      return { flesh: 'ooze_attack' };
+    }
+    // Rats (player-summoned Tamed Rat, enemy summoned Rat) — quick chew.
+    if (name === 'rat' || name === 'tamed rat') {
+      return { flesh: 'rat_bite_flesh', blocked: 'rat_bite_flesh' };
+    }
+    // Restless Bone (enemy creature spawned by Loose Bone) — 1H blunt.
+    if (name === 'restless bone') {
+      return { flesh: 'blunt_1h_flesh', blocked: 'blunt_blocked' };
+    }
+    // Spiders (Pet Spider, Deathjump Spider, any future spider) —
+    // dry leaf-scuttle when they swing or move.
+    if (name.includes('spider')) {
+      return { flesh: 'spider_scuttle' };
+    }
+    // Kobold creatures (Guard, Slinger, Dragonshield, etc.) — hiss
+    // on every swing AND on block. The kobold "voice" plays for both
+    // outcomes so the family stays sonically distinct.
+    if (name.includes('kobold')) {
+      return { flesh: 'kobold_attack', blocked: 'kobold_attack' };
+    }
+    // Wolf creatures — same chunky chew on flesh and blocked.
+    if (name === 'wolf') {
+      return { flesh: 'wolf_attack', blocked: 'wolf_attack' };
+    }
+  }
+  const c = card || _activePlayCard;
+  if (!c) return null;
+  const id = (c.id || '').toLowerCase();
+  const sub = (c.subtype || '').toLowerCase();
+  // Explicit per-id overrides — wins over the substring heuristics so
+  // cards like "Rock Mace" route to blunt sounds (not rock shatter) and
+  // cards whose ids don't carry their family name ("white_claw" is
+  // really a sword, "big_bone" is really a 2H club) still classify.
+  const ID_OVERRIDES = {
+    white_claw:               { flesh: 'sword_1h_flesh', blocked: 'sword_blocked' },
+    white_claw_reforged:      { flesh: 'sword_1h_flesh', blocked: 'sword_blocked' },
+    rock_mace:                { flesh: 'blunt_1h_flesh', blocked: 'blunt_blocked' },
+    bone_club:                { flesh: 'blunt_2h_flesh', blocked: 'blunt_blocked' },
+    big_bone:                 { flesh: 'big_bone_hit',   blocked: 'big_bone_hit' },
+    partially_digested_bone:  { flesh: 'blunt_1h_flesh', blocked: 'blunt_blocked' },
+    // Spells — blocked deliberately reuses the flesh sample so a
+    // deflected fireball still sounds like a fireball, not a hammer
+    // hitting armor. Multi Shot is a ranger ability but classifies
+    // as a bow swing for sound purposes.
+    magic_missiles:           { flesh: 'missile_flesh', blocked: 'missile_flesh' },
+    fire_burst:               { flesh: 'fire_flesh',    blocked: 'fire_flesh' },
+    wand_of_fire:             { flesh: 'fire_flesh',    blocked: 'fire_flesh' },
+    ice_bolt:                 { flesh: 'ice_flesh',     blocked: 'ice_flesh' },
+    multi_shot:               { flesh: 'bow_flesh',     blocked: 'bow_blocked' },
+    // Boots-as-weapon. Dwarven Greaves keeps the default heavy_armor
+    // block_heavy sound (set automatically from subtype) — only
+    // Sturdy Boots overrides defense to the leather-step sample.
+    sturdy_boots:             { flesh: 'boots_flesh', defense: 'boots_flesh' },
+    // Shield bashes — distinct hit / blocked samples.
+    zhosts_buckler:           { flesh: 'shield_flesh', blocked: 'shield_blocked' },
+    // Kobold attack cards — blocked sample reuses the flesh sample so
+    // every kobold swing sounds the same whether or not it lands.
+    kobold_shield:            { flesh: 'shield_flesh', blocked: 'shield_flesh' },
+    kobold_spear:             { flesh: 'spear_flesh',  blocked: 'spear_flesh' },
+    // Warrior Shield Bash — gain shield + deal damage = shield. Use
+    // the same shield clang family as Buckler / Kobold Shield.
+    shield_bash:              { flesh: 'shield_flesh', blocked: 'shield_blocked' },
+    // Class powers — id matches the Power object's id, picked up when
+    // the power-driven attack stamps _activePlayCard = power before
+    // routing damage. Wizard's elemental_infusion is intentionally
+    // omitted — fire/ice apply cues already cover its sound.
+    cleave:                   { flesh: 'axe_2h_flesh',  blocked: 'axe_blocked' },
+    quick_strike:             { flesh: 'dagger_flesh',  blocked: 'dagger_blocked' },
+    aimed_shot:               { flesh: 'bow_flesh',     blocked: 'bow_blocked',
+                                play:  'aimed_shot' },
+    battle_fury:              { play: 'battle_fury' },
+    // Class cards
+    careful_strike:           { flesh: 'sword_1h_flesh', blocked: 'sword_blocked' },
+    // Wrath (druid) — leaf-fall on cast for both modal modes (3 dmg
+    // and 1 dmg + draw both share the same sound).
+    wrath:                    { flesh: 'wrath_cast', blocked: 'wrath_cast',
+                                play:  'wrath_cast' },
+    charge:                   { flesh: 'sword_1h_flesh', blocked: 'sword_blocked',
+                                play:  'battle_fury' },
+    // Rogue Sneak Attack — dagger family.
+    sneak_attack:             { flesh: 'dagger_flesh',  blocked: 'dagger_blocked' },
+    // Paladin Shield of Faith — bright spell ping on cast.
+    shield_of_faith:          { play: 'arcane_shield' },
+    // Warrior Reckless Strike — heavier 2H axe variant.
+    reckless_strike:          { flesh: 'reckless_axe_hit', blocked: 'axe_blocked' },
+    // Warrior/Paladin Heroic Strike — angelic buff cast.
+    heroic_strike:            { play: 'heroic_strike_cast' },
+    // Defensive Formation — protection buff cast (same family as
+    // Arcane Shield / Shield of Faith).
+    defensive_formation:      { play: 'arcane_shield' },
+    // Icy Breath enemy card — ice blast, same as the ice_bolt spell.
+    icy_breath:               { flesh: 'ice_flesh', blocked: 'ice_flesh' },
+    bear_form_token:          { flesh: 'bear_form_attack', blocked: 'bear_form_attack' },
+    cat_form_token:           { flesh: 'cat_form_attack',  blocked: 'cat_form_attack' },
+    // Mage Elemental Infusion choice tokens — same sample as the
+    // dedicated fire/ice cards for codex consistency.
+    fire_token:               { play: 'fire_flesh' },
+    ice_token:                { play: 'ice_flesh' },
+    // Feral Swipe (druid) — bear growl on cast, then per-target hits
+    // play the 1H blunt thwack (claw swipe = mace family).
+    feral_swipe:              { flesh: 'blunt_1h_flesh', blocked: 'blunt_blocked',
+                                play:  'bear_form_attack' },
+    // Arcane Shield (wizard) — bright spell ping on cast.
+    arcane_shield:            { play: 'arcane_shield' },
+    // Companion / token summon cards — play their creature's signature
+    // sound on cast.
+    pet_slime:                { play: 'ooze_attack' },
+    tamed_rat:                { play: 'rat_screech' },
+    // Companion ally cards — battle shouts on summon, the actual
+    // creature attack swings keep their own weapon-family sounds.
+    raena_card:               { play: 'raena_summon' },
+    raena_card_2:             { play: 'raena_summon' },
+    thorb_card:               { play: 'thorb_shout' },
+    thorb_card_2:             { play: 'thorb_shout' },
+    pet_spider:               { play: 'spider_scuttle' },
+    // Cracked Buckler — gain-shield-only play, no swing.
+    cracked_buckler:          { play: 'shield_grab' },
+    // Runeforged Buckler — physical buckler, gain-shield-only play.
+    runeforged_buckler:       { play: 'shield_grab' },
+    // Web (spider DEFENSE card) — same dry leaf-scuttle as the Pet
+    // Spider summon so the family stays consistent.
+    web_spider:               { play: 'spider_scuttle' },
+    // Kobold Backup / Kobold Army (passive powers) — start-of-turn
+    // summons with a kobold hiss so the codex reflects the in-game cue.
+    kobold_backup:            { play: 'kobold_attack' },
+    kobold_army:              { play: 'kobold_attack' },
+    // Split (passive power on Slime / others) — wet squelch each
+    // time it triggers (matches triggerSplitPower).
+    split:                    { play: 'ooze_attack' },
+    // Bone Wand — magical crystal twang on every cast.
+    bone_wand:                { flesh: 'bone_wand_cast', blocked: 'bone_wand_cast' },
+    // Rat screech summon cards (Giant Rat's Screech! / Dire Rat's
+    // Skreeeeeeeek!). Plays whenever the enemy fires the card.
+    skreeeeeeeek:             { flesh: 'rat_screech', blocked: 'rat_screech' },
+    dire_rat_screech:         { flesh: 'rat_screech', blocked: 'rat_screech' },
+    // Kobold Warden command cards — louder warden hiss.
+    guards:                   { flesh: 'warden_hiss', blocked: 'warden_hiss' },
+    hide_in_corner:           { flesh: 'warden_hiss', blocked: 'warden_hiss',
+                                play:  'warden_hiss' },
+    // Bite cards / Big Bite power. The chunky_bite "card" is actually
+    // a Power object — same id-based override catches it because the
+    // play handler stashes the power as the active card.
+    bite:                     { flesh: 'rat_bite_flesh', blocked: 'rat_bite_flesh' },
+    chunky_bite:              { flesh: 'big_bite',       blocked: 'big_bite' },
+    // Dire Rat Bite enemy attack — same beefier chew as Big Bite.
+    dire_rat_bite:            { flesh: 'big_bite',       blocked: 'big_bite' },
+    // Slime's swing card — wet squelch on hit and on block.
+    slime_appendage:          { flesh: 'ooze_attack',    blocked: 'ooze_attack' },
+    // Ambient on-play cues (no flesh/blocked — they're not attacks).
+    // The third channel `play` is consumed by the card-play handlers.
+    goodberry:                { play: 'eat' },
+    goodberries:              { play: 'goodberries_cast' },
+    chicken_leg:              { play: 'eat' },
+    bad_rations:              { play: 'eat' },
+    lambas_bread:             { play: 'eat' },
+    travel_rations:           { play: 'eat' },
+    // Cloth-flavored items.
+    bandages:                 { play: 'cloth_use' },
+    scraps:                   { play: 'cloth_use' },
+    // Bag / pouch shuffle.
+    sack:                     { play: 'bag_use' },
+    small_pouch:              { play: 'bag_use' },
+    // Stoppered jar / vial — pop the lid.
+    slime_jar:                { play: 'jar_use' },
+    vial_of_poison:           { play: 'jar_use' },
+    // Torch ignites with a whoosh.
+    torch:                    { play: 'torch_use' },
+    // Scroll of Potency unfurls.
+    scroll_of_potency:        { play: 'scroll_use' },
+    ale:                      { play: 'drink' },
+    dwarven_brew:             { play: 'drink' },
+    minor_healing_potion:     { play: 'drink' },
+    flash_heal:               { play: 'heal_spell' },
+    holy_light:               { play: 'heal_spell' },
+    regrowth:                 { play: 'heal_spell' },
+    small_faery:              { play: 'faery_cast' },
+  };
+  if (ID_OVERRIDES[id]) return ID_OVERRIDES[id];
+  // 2H is detected from subtype OR a "great*" prefix in the id.
+  const isTwoHanded = sub === 'martial_2h' || id.includes('great');
+  // Bows + crossbows. Subtype catches the ranger's Bow / Short Bow;
+  // id-substring catches outliers like Dwarven Crossbow whose subtype
+  // is 'simple'. "crossbow" already contains "bow", so a single check
+  // covers both.
+  if (sub === 'ranged' || sub === 'ranged_2h' || id.includes('bow')) {
+    return { flesh: 'bow_flesh', blocked: 'bow_blocked' };
+  }
+  // Staves & batons — subtype 'staff' covers Short Staff / Bone Staff /
+  // Quarterstaff / enemy staves; the id check picks up "baton" cards.
+  // No dedicated block sample → omit blocked (falls back to hit_blocked).
+  if (sub === 'staff' || id.includes('staff') || id.includes('baton')) {
+    return { flesh: 'staff_flesh' };
+  }
+  // Spears — thrown variants use a heavier flesh cue. Block falls back.
+  if (id.includes('spear')) {
+    const isThrown = id.includes('throw');
+    return { flesh: isThrown ? 'spear_throw_flesh' : 'spear_flesh' };
+  }
+  if (id.includes('dagger')) {
+    return { flesh: 'dagger_flesh', blocked: 'dagger_blocked' };
+  }
+  if (id.includes('whip')) {
+    return { flesh: 'whip_flesh', blocked: 'whip_flesh' };
+  }
+  // Heavy boulder wins over the generic rock catch.
+  if (id.includes('boulder')) {
+    return { flesh: 'boulder_flesh' };
+  }
+  if (id.includes('rock')) {
+    return { flesh: 'rock_flesh' };
+  }
+  if (id.includes('axe')) {
+    return {
+      flesh: isTwoHanded ? 'axe_2h_flesh' : 'axe_1h_flesh',
+      blocked: 'axe_blocked',
+    };
+  }
+  if (id.includes('sword')) {
+    return {
+      flesh: isTwoHanded ? 'sword_2h_flesh' : 'sword_1h_flesh',
+      blocked: 'sword_blocked',
+    };
+  }
+  // Blunts — mace, hammer, club. Greatclub picks 2H via the subtype/great
+  // check above; Bone Club routes via the explicit ID_OVERRIDES.
+  if (id.includes('mace') || id.includes('hammer') || id.includes('club')) {
+    return {
+      flesh: isTwoHanded ? 'blunt_2h_flesh' : 'blunt_1h_flesh',
+      blocked: 'blunt_blocked',
+    };
+  }
+  return null;
+}
+
+// Plays the right hit cue for the active player attack:
+//   - taken > 0   → weapon-specific flesh sound (or silent if unmapped)
+//   - taken == 0  → weapon-specific block thud (or generic hit_blocked)
+// `delay` is in ms — used by multi-target attacks to stagger the sounds
+// so each target hits with its own audible thud.
+// Plays the on-play ambient cue for cards that have one wired (eat,
+// drink, heal_spell, faery_cast). Called by the card-play handlers
+// after the card is lifted from hand. No-op if the card has no play
+// override or no card is given.
+function playCardAmbient(card) {
+  if (!card) return;
+  const sfx = getWeaponSfxKeys(card);
+  if (sfx && sfx.play) playSound(sfx.play, 0.7);
+}
+
+// Class → gender mapping for hero voice cues. Warrior / Wizard /
+// Paladin pull from the male grunts; Ranger / Rogue / Druid pull from
+// the female pain set. Damage tier picks the variant: 1–2 = low,
+// 3–5 = mid, 6+ = high.
+const HERO_FEMALE_CLASSES = new Set(['Ranger', 'Rogue', 'Druid']);
+function playHeroPainSound(damage) {
+  if (!damage || damage <= 0) return;
+  const isFemale = HERO_FEMALE_CLASSES.has(selectedClass);
+  const tier = damage >= 6 ? 'high' : (damage >= 3 ? 'mid' : 'low');
+  const key = isFemale ? `hero_female_pain_${tier}` : `hero_male_pain_${tier}`;
+  playSound(key, 0.7);
+}
+
+function playAttackHitSfx(originalDmg, taken, delay = 0) {
+  const sfx = getWeaponSfxKeys();
+  let key = null;
+  if (taken > 0) key = sfx ? sfx.flesh : null;
+  else if (originalDmg > 0) {
+    // Block path: prefer the weapon's own block cue when one is wired.
+    // Weapons without a dedicated *_blocked entry (spear, staff, whip,
+    // rocks, boulder) fall through to the generic 'hit_blocked' thud
+    // so blocked swings always make a distinct noise.
+    key = (sfx && sfx.blocked) ? sfx.blocked : 'hit_blocked';
+  } else if (sfx && sfx.flesh) {
+    // 0-damage swing (Pet Spider — 0 attack but applies poison) still
+    // gets its signature sound. The swing visually happens, so the
+    // audio should match.
+    key = sfx.flesh;
+  }
+  if (!key) return;
+  if (delay > 0) setTimeout(() => playSound(key, 0.7), delay);
+  else playSound(key, 0.7);
+}
+
 // Spawn a damage number anchored to the bottom of a target's card rect
 function spawnDamageOnTarget(target, amount, color = Colors.RED) {
+  playSound('damage', 0.6);
   let rect;
   if (target === player) {
     rect = getCharacterCardRect(true);
@@ -13352,6 +15634,17 @@ function gameLoop(timestamp) {
   const dt = timestamp - lastTime;
   lastTime = timestamp;
 
+  // Pause music while the player is in the pause-menu cluster (in-game
+  // menu + its sub-screens save/load/options spawned from there) OR
+  // browsing the codex (a quiet workspace). Resume otherwise. Both
+  // calls are idempotent.
+  const inPauseMenuCluster = state === GameState.INGAME_MENU ||
+    state === GameState.CODEX ||
+    ((state === GameState.SAVE_GAME || state === GameState.LOAD_GAME) && saveLoadReturnState === GameState.INGAME_MENU) ||
+    (state === GameState.OPTIONS_SCREEN && optionsReturnState === GameState.INGAME_MENU);
+  if (inPauseMenuCluster) pauseMusic();
+  else resumeMusic();
+
   // Update enemy turn timer
   if (!isPlayerTurn && (state === GameState.COMBAT || state === GameState.TARGETING)) {
     updateEnemyTurn(dt);
@@ -13380,6 +15673,7 @@ function gameLoop(timestamp) {
 
   // Update screen flash timer
   if (screenFlashTimer > 0) screenFlashTimer = Math.max(0, screenFlashTimer - dt);
+  if (sentinelFlashTimer > 0) sentinelFlashTimer = Math.max(0, sentinelFlashTimer - dt);
 
   draw();
 
@@ -13429,12 +15723,16 @@ let codexShowFull = false;         // false = small format, true = full preview
 let codexScrollY = 0;
 let codexClickAreas = [];          // refilled each frame (cards, tabs, filters, toggles)
 
-// Power creators (drawn as if they were ability cards via drawPowerCard)
+// Power creators (drawn as if they were ability cards via drawPowerCard).
+// The buildCodexSourceCache scan stamps source lines on enemy powers via
+// enemy.powers, but a power only becomes a codex *entry* (with art + stats)
+// once it's listed here — so any new player or enemy power must be added.
 const ALL_POWER_CREATORS = [
   createCleave, createAimedShot, createElementalInfusion,
   createQuickStrike, createBattleFury, createFeralForm,
   createChunkyBite, createDireFury, createSplit,
   () => createArmorPower(1),
+  createKoboldBackup, createKoboldArmy, createAmalgam,
 ];
 
 // Extra player-side cards not in CARD_REGISTRY because they're never
@@ -13446,6 +15744,12 @@ const ALL_EXTRA_CARD_CREATORS = [
   createGoodberry,
   createFireToken, createIceToken,
   createCatFormToken, createBearFormToken,
+  // Encounter buffs (Mountain Pass rockslide rewards) + buff pseudo-cards
+  // for each item that grants a CombatBuff (Vial of Poison, Slime Jar, etc.).
+  // These surface in the codex Buffs filter.
+  createBuffRunning, createBuffHiding, createBuffCalculating,
+  createBuffVialOfPoison, createBuffSlimeJar, createBuffScrollOfPotency,
+  createBuffAle, createBuffDwarvenBrew, createBuffRegrowth, createBuffElfReinforcements,
 ];
 
 // Class powers (player-side). Anything in ALL_POWER_CREATORS not in this set
@@ -13540,6 +15844,7 @@ function getCodexCardFilters() {
     { id: 'summons', label: 'Summons' },
     { id: 'powers',  label: 'Powers' },
     { id: 'tokens',  label: 'Tokens' },
+    { id: 'buffs',   label: 'Buffs' },
   ];
 }
 
@@ -13551,6 +15856,10 @@ function passesCodexCardFilter(entry, filter) {
   if (entry.kind !== 'card') return false;
   const c = entry.card;
   if (filter === 'tokens') return c.isToken === true;
+  // Buffs tab: ONLY the buff pseudo-cards (subtype='buff'). The source
+  // cards (Vial of Poison, Ale, etc.) keep showing in their normal
+  // categories — Buffs surfaces the granted buff itself.
+  if (filter === 'buffs') return (c.subtype || '').toLowerCase() === 'buff';
   // Subtype-based categories (weapons / armor / items / ability / relics / allies)
   const cat = CODEX_SUBTYPE_TO_CATEGORY[(c.subtype || '').toLowerCase()];
   return cat === filter;
@@ -13638,6 +15947,7 @@ function drawCodex() {
   else if (codexTab === 'loot')       drawCodexLootGrid(L);
   else if (codexTab === 'decks')      drawCodexDecksGrid(L);
   else if (codexTab === 'perks')      drawCodexPerkGrid(L);
+  else if (codexTab === 'sounds')     drawCodexSoundGrid(L);
   else                                drawCodexCardGrid(L);
 
   // Right-side stats panel
@@ -13658,6 +15968,7 @@ function drawCodexTabs(L) {
     { id: 'loot',       label: 'Loot Tables' },
     { id: 'decks',      label: 'Decks' },
     { id: 'perks',      label: 'Perks' },
+    { id: 'sounds',     label: 'Sounds' },
   ];
   // Dynamic tab width — fit all tabs across the full width. Added a 6th
   // tab (Perks), so the fixed 220 px width no longer fits; computes the
@@ -13703,11 +16014,25 @@ function drawCodexFilters(L) {
   } else if (codexTab === 'loot') {
     filters = []; // loot tab has no category filters; just search + Small/Full
   } else if (codexTab === 'perks') {
-    // Perks: "All" / "Repeatable" / "Unique" quick filter.
     filters = [
       { id: 'all',        label: 'All' },
       { id: 'repeatable', label: 'Repeatable' },
       { id: 'unique',     label: 'Unique' },
+    ];
+    activeId = codexFilter; clickKind = 'filter';
+  } else if (codexTab === 'sounds') {
+    filters = [
+      { id: 'all',         label: 'All' },
+      { id: 'UIAudio',     label: 'UI' },
+      { id: 'RpgAudio',    label: 'RPG' },
+      { id: 'CasinoAudio', label: 'Casino' },
+      { id: 'ImpactAudio', label: 'Impact' },
+      { id: 'Weapons',     label: 'Weapons' },
+      { id: 'Magic',       label: 'Magic' },
+      { id: 'Monster',     label: 'Monster' },
+      { id: 'Heroes',      label: 'Heroes' },
+      { id: 'Misc',        label: 'Misc' },
+      { id: 'Music',       label: 'Music' },
     ];
     activeId = codexFilter; clickKind = 'filter';
   } else {
@@ -13750,6 +16075,7 @@ function drawCodexFilters(L) {
     codexTab === 'decks'      ? 'Search decks / cards…'  :
     codexTab === 'characters' ? 'Search heroes / monsters…' :
     codexTab === 'perks'      ? 'Search perks…'          :
+    codexTab === 'sounds'     ? 'Search sounds…'         :
     'Search cards…';
   ctx.font = '13px sans-serif';
   ctx.textAlign = 'left';
@@ -13778,7 +16104,7 @@ function drawCodexFilters(L) {
   // Format toggle (everything except characters and perks): Small / Full —
   // sits right of the search box. Perks are a single consistent layout, no
   // size variants.
-  if (codexTab !== 'characters' && codexTab !== 'perks') {
+  if (codexTab !== 'characters' && codexTab !== 'perks' && codexTab !== 'sounds') {
     const tw = 70;
     const trX = sr.x + sr.w + 8;
     const trSmall = { x: trX, y: L.filterY + 4, w: tw, h: CODEX_FILTER_H - 8 };
@@ -14695,6 +17021,174 @@ function drawCodexPerkDetails(sel, x, y, w, h) {
   ctx.textBaseline = 'alphabetic';
 }
 
+function drawCodexSoundGrid(L) {
+  // Build flat list of { pack, file, fullPath } entries.
+  let entries = [];
+  for (const [pack, files] of Object.entries(SOUND_PACKS)) {
+    if (codexFilter !== 'all' && codexFilter !== pack) continue;
+    for (const file of files) {
+      if (codexSearchText && !_codexSearchMatches(file) && !_codexSearchMatches(pack)) continue;
+      entries.push({ pack, file, fullPath: `${pack}/${file}` });
+    }
+  }
+
+  // Find which game events / scenes map to each sound file (reverse
+  // lookup). SOUND_MAP covers SFX events; MUSIC_FOR_AREA and
+  // MUSIC_FOR_NODE wire long music tracks into map areas/nodes — we
+  // surface those here too so the codex shows where each track plays.
+  const wiredTo = {};
+  for (const [event, path] of Object.entries(SOUND_MAP)) {
+    if (path) {
+      if (!wiredTo[path]) wiredTo[path] = [];
+      wiredTo[path].push(event);
+    }
+  }
+  for (const [area, path] of Object.entries(MUSIC_FOR_AREA)) {
+    if (!wiredTo[path]) wiredTo[path] = [];
+    wiredTo[path].push(`area:${area}`);
+  }
+  for (const [nodeId, path] of Object.entries(MUSIC_FOR_NODE)) {
+    if (!wiredTo[path]) wiredTo[path] = [];
+    wiredTo[path].push(`node:${nodeId}`);
+  }
+  for (const [path, tags] of Object.entries(MUSIC_TAGS)) {
+    if (!wiredTo[path]) wiredTo[path] = [];
+    for (const tag of tags) wiredTo[path].push(`tag:${tag}`);
+  }
+
+  const rowH = 28;
+  const totalH = entries.length * rowH;
+  const maxScroll = Math.max(0, totalH - L.gridH);
+  if (codexScrollY > maxScroll) codexScrollY = maxScroll;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(L.gridX, L.gridY, L.gridW, L.gridH);
+  ctx.clip();
+
+  // Column header
+  const hdrY = L.gridY - codexScrollY;
+  ctx.fillStyle = 'rgba(20,20,35,0.7)';
+  ctx.fillRect(L.gridX, L.gridY, L.gridW, 24);
+  ctx.fillStyle = Colors.GOLD;
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Pack', L.gridX + 8, L.gridY + 12);
+  ctx.fillText('File', L.gridX + 90, L.gridY + 12);
+  // Wired To column moved left so it gets ~280 px of horizontal room
+  // (was ~120 px). Filename column shrinks accordingly — long file
+  // names are truncated with an ellipsis by the fileMaxW measure pass.
+  const playColX = L.gridX + L.gridW - 350;
+  ctx.fillText('Wired To', playColX - 10, L.gridY + 12);
+  ctx.fillText('Play', L.gridX + L.gridW - 50, L.gridY + 12);
+
+  const startY = L.gridY + 26 - codexScrollY;
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const y = startY + i * rowH;
+    if (y + rowH < L.gridY || y > L.gridY + L.gridH) continue;
+
+    // Alternating row background
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(20,20,35,0.4)' : 'rgba(30,30,45,0.4)';
+    ctx.fillRect(L.gridX, y, L.gridW, rowH);
+
+    // Hover highlight
+    const hov = hitTest(mouseX, mouseY, { x: L.gridX, y, w: L.gridW, h: rowH });
+    if (hov) {
+      ctx.fillStyle = 'rgba(60,60,80,0.4)';
+      ctx.fillRect(L.gridX, y, L.gridW, rowH);
+    }
+
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const cy = y + rowH / 2;
+
+    // Pack name
+    ctx.fillStyle = e.pack === 'UIAudio' ? '#78c8ff' : '#c8a060';
+    ctx.fillText(e.pack, L.gridX + 8, cy);
+
+    // File name — clickable to copy to clipboard. Strip ".ogg" from
+    // the displayed name to save horizontal room (every filename has
+    // it). Truncate with an ellipsis when the column shrinks past the
+    // text width. Click target stays the underlying file name so the
+    // copied value is still the canonical id.
+    const fileX = L.gridX + 90;
+    const fileMaxW = (playColX - 10) - fileX - 4;
+    let fileDisplay = e.file.replace(/\.ogg$/i, '');
+    if (ctx.measureText(fileDisplay).width > fileMaxW) {
+      while (fileDisplay.length > 4 &&
+             ctx.measureText(fileDisplay + '…').width > fileMaxW) {
+        fileDisplay = fileDisplay.slice(0, -1);
+      }
+      fileDisplay += '…';
+    }
+    const fileTextW = ctx.measureText(fileDisplay).width;
+    const fileHov = hitTest(mouseX, mouseY, { x: fileX, y, w: fileTextW + 8, h: rowH });
+    ctx.fillStyle = fileHov ? '#fff' : '#ddd';
+    ctx.fillText(fileDisplay, fileX, cy);
+    if (fileHov) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(fileX, cy + 7);
+      ctx.lineTo(fileX + fileTextW, cy + 7);
+      ctx.stroke();
+    }
+    codexClickAreas.push({ x: fileX, y, w: fileTextW + 8, h: rowH, kind: 'copy-sound-name', name: e.file });
+
+    // Wired-to events
+    const events = wiredTo[e.fullPath];
+    if (events) {
+      ctx.fillStyle = Colors.GREEN;
+      ctx.font = '11px sans-serif';
+      ctx.fillText(events.join(', '), playColX - 10, cy);
+    }
+
+    // Play + Stop buttons. Stop sits to the LEFT of Play so the eye
+    // hits Play first (most common action). Both share the same row
+    // height — 32 px wide each so a music label still fits.
+    const btnW = 32, btnH = 20;
+    const playX = L.gridX + L.gridW - btnW - 8;
+    const stopX = playX - btnW - 4;
+    const btnY = y + (rowH - btnH) / 2;
+    // Stop
+    const stopHov = hitTest(mouseX, mouseY, { x: stopX, y: btnY, w: btnW, h: btnH });
+    ctx.fillStyle = stopHov ? 'rgba(140,80,80,0.9)' : 'rgba(90,50,50,0.8)';
+    ctx.fillRect(stopX, btnY, btnW, btnH);
+    ctx.strokeStyle = '#c99';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(stopX, btnY, btnW, btnH);
+    ctx.fillStyle = '#fdd';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('■', stopX + btnW / 2, cy);
+    codexClickAreas.push({ x: stopX, y: btnY, w: btnW, h: btnH, kind: 'stop-sound', path: e.fullPath });
+    // Play
+    const playHov = hitTest(mouseX, mouseY, { x: playX, y: btnY, w: btnW, h: btnH });
+    ctx.fillStyle = playHov ? 'rgba(80,130,80,0.9)' : 'rgba(50,90,50,0.8)';
+    ctx.fillRect(playX, btnY, btnW, btnH);
+    ctx.strokeStyle = '#9c9';
+    ctx.strokeRect(playX, btnY, btnW, btnH);
+    ctx.fillStyle = '#dfd';
+    ctx.fillText('▶', playX + btnW / 2, cy);
+    codexClickAreas.push({ x: playX, y: btnY, w: btnW, h: btnH, kind: 'play-sound', path: e.fullPath });
+  }
+
+  ctx.restore();
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+
+  drawCodexScrollbar(L, totalH + 26);
+
+  // Footer count
+  ctx.fillStyle = Colors.GRAY;
+  ctx.font = '12px sans-serif';
+  ctx.fillText(`${entries.length} sound${entries.length === 1 ? '' : 's'}`, L.gridX, L.gridY + L.gridH - 4);
+}
+
 function drawCodexDecksGrid(L) {
   const cache = buildCodexSourceCache();
   const allDecks = cache.decks
@@ -14824,12 +17318,18 @@ function getCodexMonsterIds() {
 // Stand-in for drawCharacterPanel that renders a portrait + name + frame at a
 // fixed rect, without needing a real Character object.
 function drawCodexCharacterPanel(entry, x, y, w, h) {
+  // Some monster ids share an art key with a card (wolf_pack → the
+  // power card art) instead of a portrait. Remap those to the right
+  // creature/portrait asset so the codex shows the actual monster.
+  const PORTRAIT_REMAP = {
+    wolf_pack: 'wolf', // WolfInSnow.jpg
+  };
   let portraitId, displayName;
   if (entry.kind === 'hero') {
     portraitId = `${entry.name.toLowerCase()}_class`;
     displayName = entry.name;
   } else {
-    portraitId = entry.id;
+    portraitId = PORTRAIT_REMAP[entry.id] || entry.id;
     displayName = entry.id.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
   const portrait = getCardArt(portraitId);
@@ -15019,6 +17519,15 @@ function buildCodexSourceCache() {
   thorbCreature._sourceSubtype = 'allies';
   addCreature(thorbCreature, 'Summoned by: Thorb (recruit)');
 
+  // Elf Warriors — five spawn at the General Zhost army fight, plus the
+  // Elf Reinforcements buff summons one each turn during that fight.
+  const elfWarrior = new Creature({ name: 'Elf Warrior', attack: 2, maxHp: 2 });
+  elfWarrior._codexSide = 'player';
+  elfWarrior._sourceRarity = 'common';
+  elfWarrior._sourceSubtype = 'allies';
+  addCreature(elfWarrior, "Summoned by: General Zhost's Army (encounter)");
+  addCreature(elfWarrior, 'Summoned by: Elf Reinforcements (combat buff)');
+
   // Ability-choice lists (level-up / Lost Shrine pick). We don't surface a
   // "Ability choice: X" line per card — the per-card characterClass already
   // tells the player which classes can pick it. Instead we just record which
@@ -15094,6 +17603,11 @@ function buildCodexSourceCache() {
     'dwarven_specter','kobold_slyblade','obsidian_oracle','magma_drake',
   ];
   const savedEnemy = enemy;
+  // Some enemy setup branches mutate `player` as a side effect — the
+  // dire_rat setup pushes a Thorb onto player.creatures when
+  // currentEncounter is corner_cell. Snapshot the player allies so the
+  // sandbox scan can't permanently add a second Thorb to a live combat.
+  const savedPlayerCreatures = player ? player.creatures.slice() : null;
   for (const eid of enemyIds) {
     try {
       setupEnemyForCombat(eid);
@@ -15142,6 +17656,7 @@ function buildCodexSourceCache() {
     } catch (e) { /* enemy setup failed — skip */ }
   }
   enemy = savedEnemy;
+  if (player && savedPlayerCreatures) player.creatures = savedPlayerCreatures;
 
   // Class powers
   const classPowers = [
@@ -15326,6 +17841,98 @@ function drawCodexStatsPanel(L) {
     }
   }
 
+  // Sounds section — shows the weapon-SFX cues wired to this card,
+  // creature, or power (flesh = landed swing, blocked = fully absorbed,
+  // play = on-cast cue, defense = on-block cue). Character entries
+  // (boss / monster portraits) show fight-start and fight-end cues
+  // instead. Click ▶ to audition.
+  if (!sel._isPerk) {
+    let sfx = null;
+    if (sel._isCharacter) {
+      const startKey = getFightStartSfxKey(sel.name);
+      const endKey = getDeathSfxKey({ name: sel.name });
+      if (startKey || endKey) sfx = { fightStart: startKey, fightEnd: endKey };
+    } else if (sel._isCreature) sfx = getWeaponSfxKeys(null, sel);
+    else sfx = getWeaponSfxKeys(sel);
+    // Armor / shield cards without an explicit defense override fall
+    // back to the subtype-based block_* sound. Reflect that in the
+    // codex so the user can see what'll fire on block — even when the
+    // card has no other SFX wiring (cracked_buckler, generic armor).
+    if (!sel._isCharacter && sel.subtype && (!sfx || !sfx.defense)) {
+      const sub = sel.subtype.toLowerCase();
+      let defKey = null;
+      if (sub === 'heavy_armor') defKey = 'block_heavy';
+      else if (sub === 'light_armor' || sub === 'armor' || sub === 'shield') defKey = 'block_light';
+      else if (sub === 'clothing') defKey = 'block_clothing';
+      if (defKey) sfx = { ...(sfx || {}), defense: defKey };
+    }
+    if (sfx) {
+      ctx.fillStyle = Colors.GOLD;
+      ctx.font = 'bold 13px Georgia, serif';
+      ctx.fillText('Sounds', L.rightX + 12, py);
+      py += 18;
+      const rowEntries = sel._isCharacter ? [
+        { label: 'Fight Start', key: sfx.fightStart, ambient: true },
+        { label: 'Fight End',   key: sfx.fightEnd,   ambient: true },
+      ] : [
+        { label: 'Flesh',   key: sfx.flesh },
+        { label: 'Blocked', key: sfx.blocked },
+        { label: 'Play',    key: sfx.play,    ambient: true },
+        { label: 'Defense', key: sfx.defense, ambient: true },
+      ];
+      ctx.font = '12px sans-serif';
+      ctx.textBaseline = 'middle';
+      const btnW = 28, btnH = 18;
+      const rowH = 22;
+      for (const re of rowEntries) {
+        // Resolve the displayed path. If the weapon family doesn't wire
+        // a dedicated key for this row (typically Blocked), fall back
+        // to 'hit_blocked' so the row reflects what playAttackHitSfx
+        // actually plays. Suffix it as "(default)" for clarity.
+        // Ambient rows (Play) skip when no key — they're optional.
+        let path = SOUND_MAP[re.key];
+        let isFallback = false;
+        if (!path && re.label === 'Blocked') {
+          path = SOUND_MAP['hit_blocked'];
+          isFallback = !!path;
+        }
+        if (!path && re.ambient) continue;
+        const lineX = L.rightX + 12;
+        const cy = py + rowH / 2;
+        ctx.fillStyle = '#cdd';
+        ctx.fillText(`${re.label}:`, lineX, cy);
+        ctx.fillStyle = path ? (isFallback ? '#aab' : '#dce6f0') : '#999';
+        // Wider value column for character "Fight Start / Fight End"
+        // labels (longer than Flesh/Blocked/Play/Defense).
+        const valX = lineX + (sel._isCharacter ? 78 : 56);
+        const valText = path
+          ? path.split('/').pop() + (isFallback ? '  (default)' : '')
+          : '(unmapped)';
+        ctx.fillText(valText, valX, cy);
+        if (path) {
+          const btnX = L.rightX + (CODEX_RIGHT_W - CODEX_PADDING) - btnW - 8;
+          const btnY = py + (rowH - btnH) / 2;
+          const hov = hitTest(mouseX, mouseY, { x: btnX, y: btnY, w: btnW, h: btnH });
+          ctx.fillStyle = hov ? 'rgba(80,130,80,0.9)' : 'rgba(50,90,50,0.8)';
+          ctx.fillRect(btnX, btnY, btnW, btnH);
+          ctx.strokeStyle = '#9c9';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(btnX, btnY, btnW, btnH);
+          ctx.fillStyle = '#dfd';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('▶', btnX + btnW / 2, cy);
+          ctx.textAlign = 'left';
+          ctx.font = '12px sans-serif';
+          codexClickAreas.push({ x: btnX, y: btnY, w: btnW, h: btnH, kind: 'play-sound', path });
+        }
+        py += rowH;
+      }
+      ctx.textBaseline = 'alphabetic';
+      py += 6;
+    }
+  }
+
   // Raw fields (debug)
   ctx.fillStyle = '#cdd';
   ctx.font = '12px monospace';
@@ -15373,6 +17980,17 @@ function handleCodexClick(x, y) {
   // codex instead of typing into a stale search.
   const hitSearchFocus = codexClickAreas.some(a => a.kind === 'search-focus' && hitTest(x, y, a));
   if (!hitSearchFocus) codexSearchActive = false;
+  // The X clear button sits visually inside the search-focus rect, so
+  // priority-check it first — otherwise the broader search-focus area
+  // would consume the click and refocus the search instead of clearing.
+  for (const a of codexClickAreas) {
+    if (a.kind === 'search-clear' && hitTest(x, y, a)) {
+      codexSearchText = '';
+      codexSearchActive = false;
+      codexScrollY = 0;
+      return;
+    }
+  }
   for (const a of codexClickAreas) {
     if (!hitTest(x, y, a)) continue;
     if (a.kind === 'tab') {
@@ -15407,6 +18025,31 @@ function handleCodexClick(x, y) {
       if (result && result[0]) {
         codexLootRollResults[a.tableId] = { card: result[0], ts: Date.now() };
       }
+      return;
+    }
+    if (a.kind === 'play-sound') {
+      initSound();
+      playSoundFile(a.path);
+      return;
+    }
+    if (a.kind === 'stop-sound') {
+      // Stop every active source for this path — long music tracks can
+      // overlap if Play is pressed several times, this kills all of
+      // them. Doesn't affect sounds for other paths.
+      stopSoundFile(a.path);
+      return;
+    }
+    if (a.kind === 'copy-sound-name') {
+      // Canvas text isn't selectable — single-click writes the file name
+      // to the clipboard so the user can paste it elsewhere (e.g. into
+      // a SOUND_MAP entry).
+      const name = a.name;
+      const ok = (navigator.clipboard && navigator.clipboard.writeText)
+        ? navigator.clipboard.writeText(name).then(() => true).catch(() => false)
+        : Promise.resolve(false);
+      Promise.resolve(ok).then(success => {
+        showToast(success ? `Copied: ${name}` : `Copy failed — ${name}`, 1500);
+      });
       return;
     }
     if (a.kind === 'perk-roll') {
