@@ -147,10 +147,56 @@ export function createDireFury() {
     id: 'dire_fury',
     name: 'Dire Fury',
     costDescription: 'Passive',
-    effectDescription: 'End of Turn: Gain 1 Rage.',
+    effectDescription: 'Turn End: Gain 1 Rage.',
     rechargeCost: 0,
     isPassive: true,
-    shortDesc: 'End of Turn:\n+1 Rage',
+    shortDesc: 'Turn End:\n+1 Rage',
+  });
+}
+
+// Siege Ogre's signature attack power — recharge 4 cards from hand to
+// blast every player ally + the player for 5 damage. Active. Heroism
+// stacked from Pulling Back the Ram boosts each swing on top.
+export function createMassiveOgreRam() {
+  return new Power({
+    id: 'massive_ogre_ram',
+    name: 'Massive Ogre Ram',
+    costDescription: 'Recharge 4 Cards',
+    effectDescription: 'Deal 5 Damage to ALL enemies.',
+    rechargeCost: 4,
+    shortDesc: 'R4->5 Dmg All',
+  });
+}
+
+// Siege Ogre passive — every enemy turn summons 1-3 Goblin Sappers as
+// chaff. Mirrors PY create_goblin_sapper_squad.
+export function createGoblinSapperSquad() {
+  return new Power({
+    id: 'goblin_sapper_squad',
+    name: 'Goblin Sapper Squad',
+    costDescription: 'Passive',
+    // The "Turn Start:" prefix triggers the existing perk-style badge
+    // tokenizer (drawPowerCard's hasTriggerBadge regex) so the power
+    // card paints a TURN START pill in front of the description.
+    effectDescription: 'Turn Start: Summon Goblin Sapper Squad.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Turn Start:\nSummon Sappers',
+  });
+}
+
+// Mimic-class passive — when a player ally takes more damage than its
+// remaining HP, the overflow rolls onto the player character. Mirrors
+// PY create_overwhelm.
+export function createOverwhelm() {
+  return new Power({
+    id: 'overwhelm',
+    name: 'Overwhelm',
+    costDescription: 'Passive',
+    effectDescription: 'Overflow damage on allies hits you.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Overflow\n->You',
   });
 }
 
@@ -207,6 +253,35 @@ export function createAmalgam() {
   });
 }
 
+// Piranhas Swarm — invulnerable boss power, summons 2-4 piranhas
+// each turn. Mirrors PY create_piranhas_swarm_power.
+export function createPiranhasSwarm() {
+  return new Power({
+    id: 'piranhas_swarm',
+    name: 'Piranhas Swarm',
+    costDescription: 'Passive',
+    effectDescription: 'Start of Turn: Summon Piranhas.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Summon\nPiranhas',
+  });
+}
+
+// Sahuagin Baron — start-of-turn summon. Mirrors PY
+// create_from_the_deep: 1/3 Shark, 1/3 Sahuagin Sentinel, 1/3 High
+// Priest each turn.
+export function createFromTheDeep() {
+  return new Power({
+    id: 'from_the_deep',
+    name: 'From the Deep',
+    costDescription: 'Passive',
+    effectDescription: 'Start of Turn: Summon 1 Creature from the Deep.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'Summon\nFrom Deep',
+  });
+}
+
 // Wolf Pack — invulnerable boss summon: each turn, top up the wolf
 // roster. Mirrors PY create_wolf_pack_power.
 export function createWolfPack() {
@@ -232,6 +307,37 @@ export function createKoboldArmy() {
     rechargeCost: 0,
     isPassive: true,
     shortDesc: 'Summon Army',
+  });
+}
+
+// Obsidian Construct (Golem boss) — passive: every time the boss is
+// attacked, lose 1 base armor and gain 1 Rage. Mirrors PY
+// power.py:create_obsidian_construct.
+export function createObsidianConstructPower() {
+  return new Power({
+    id: 'obsidian_construct',
+    name: 'Obsidian Construct',
+    costDescription: 'Passive',
+    effectDescription: 'When Hit: -1 Armor, +1 Rage. Turn Start: +1 Armor (max 5), -1 Rage.',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'When Hit:\n-1 Armor, +1 Rage',
+  });
+}
+
+// Obsidian Body (Slime boss) — passive: every time the boss is
+// attacked (even if armor blocks the whole hit) and still has armor,
+// lose 1 base armor AND spawn a small Obsidian Slime (1/1, 5 Armor).
+// Mirrors PY power.py:create_obsidian_body.
+export function createObsidianBodyPower() {
+  return new Power({
+    id: 'obsidian_body',
+    name: 'Obsidian Body',
+    costDescription: 'Passive',
+    effectDescription: 'When Hit: -1 Armor, spawn an Obsidian Slime. Turn Start: +1 Armor (max 5).',
+    rechargeCost: 0,
+    isPassive: true,
+    shortDesc: 'When Hit:\n-1 Armor +Slime',
   });
 }
 

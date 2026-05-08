@@ -174,7 +174,15 @@ export class Deck {
         this.addToRechargePile(card);
         break;
       case 'BANISH':
-        this.masterDeck = this.masterDeck.filter(c => c.id !== card.id || c.uid !== card.uid);
+        // Hand copies have a fresh uid (addCard pushes a copy() to hand)
+        // so prefer uid match (same instance), fall back to first-match
+        // by id (the common case: copy() with a new uid). Single splice
+        // so duplicates aren't all wiped.
+        {
+          let mdIdx = this.masterDeck.findIndex(c => c.uid === card.uid);
+          if (mdIdx === -1) mdIdx = this.masterDeck.findIndex(c => c.id === card.id);
+          if (mdIdx !== -1) this.masterDeck.splice(mdIdx, 1);
+        }
         break;
       case 'FREE':
       case 'DISCARD':
@@ -194,7 +202,13 @@ export class Deck {
       const idx = pile.indexOf(card);
       if (idx !== -1) pile.splice(idx, 1);
     }
-    this.masterDeck = this.masterDeck.filter(c => c.id !== card.id);
+    // Hand copies have a fresh uid (addCard pushes a copy() to hand),
+    // so prefer uid match for same-instance bookkeeping, fall back to
+    // first-match by id so cross-pile copies still remove ONE entry
+    // (never the full duplicate set).
+    let mdIdx = this.masterDeck.findIndex(c => c.uid === card.uid);
+    if (mdIdx === -1) mdIdx = this.masterDeck.findIndex(c => c.id === card.id);
+    if (mdIdx !== -1) this.masterDeck.splice(mdIdx, 1);
   }
 
   discardFromHand(card) {
@@ -205,13 +219,28 @@ export class Deck {
     return true;
   }
 
-  // Push a card into the discard pile and fire any on-discard passives
-  // (Lucky Pebble: draw 1 when it lands in discard from hand or deck).
+  // Push a card into the discard pile and fire any on-discard passives.
+  // Currently handles two riders:
+  //   on_discard_draw — Lucky Pebble (draw 1 when discarded).
+  //   on_discard_discard — Web token (drag N more cards from the top
+  //     of the draw pile into the discard, recursively triggering this
+  //     same hook so chained Webs cascade naturally).
   discardCard(card) {
     if (!card) return;
     this.discardPile.push(card);
-    if ((card.effects || []).some(e => e && e.effectType === 'on_discard_draw')) {
+    const effects = card.effects || [];
+    if (effects.some(e => e && e.effectType === 'on_discard_draw')) {
       this.draw(1, 10);
+    }
+    for (const e of effects) {
+      if (e && e.effectType === 'on_discard_discard') {
+        const n = Math.max(1, e.value || 1);
+        for (let i = 0; i < n; i++) {
+          if (this.drawPile.length === 0) break;
+          const dragged = this.drawPile.pop();
+          this.discardCard(dragged);
+        }
+      }
     }
   }
 

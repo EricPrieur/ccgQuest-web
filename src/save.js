@@ -47,6 +47,41 @@ export function saveGame(state, saveName = '') {
     shownDeckTutorial: !!state.shownDeckTutorial,
     calmGroveRaenaJoined: !!state.calmGroveRaenaJoined,
     calmGroveBreadTaken: !!state.calmGroveBreadTaken,
+    // Antiquity shop: monster cleared yet? + buyback ledger.
+    antiquityShopCleared: !!state.antiquityShopCleared,
+    soldCardsHistory: Array.isArray(state.soldCardsHistory) ? state.soldCardsHistory.slice() : [],
+    // Filibaf Forest maze state — drives the post-clear teleport pair
+    // and the in-loop counters when saving mid-maze.
+    forestCleared: !!state.forestCleared,
+    forestLoopLevel: typeof state.forestLoopLevel === 'number' ? state.forestLoopLevel : 1,
+    forestCorrectPath: state.forestCorrectPath === 'right' ? 'right' : 'left',
+    // Tharnag siege gauntlet — progress is reset on bail (handled at
+    // arrive-time in main.js), siegeComplete latches on for good once
+    // the third line falls.
+    siegeProgress: typeof state.siegeProgress === 'number' ? state.siegeProgress : 0,
+    siegeComplete: !!state.siegeComplete,
+    // Tharnag interior — throne audience gates the side-exit, the
+    // quarters rest unlocks it, and Valdrisa joins on the first
+    // post-rest exit through the hallway.
+    throneAudienceComplete: !!state.throneAudienceComplete,
+    quartersRested: !!state.quartersRested,
+    valdrisaJoined: !!state.valdrisaJoined,
+    upperStairsReturnSeen: !!state.upperStairsReturnSeen,
+    tharnagExitSeen: !!state.tharnagExitSeen,
+    // Globally completed encounter ids — persisted as a flat list so
+    // a one-shot encounter (north_crossroad, etc.) stays done after a
+    // cross-map hop, even when the destination map's cache was wiped
+    // by a load. arriveAtNode forces node.isDone for any node whose
+    // encounterId is in this set.
+    completedEncounters: state.completedEncounters instanceof Set
+      ? Array.from(state.completedEncounters)
+      : (Array.isArray(state.completedEncounters) ? state.completedEncounters.slice() : []),
+    // Obsidian Wastes labyrinth — seed + state so the same layout is
+    // regenerated on load.
+    labyrinthGenerated: !!state.labyrinthGenerated,
+    labyrinthSeed: typeof state.labyrinthSeed === 'number' ? state.labyrinthSeed : 0,
+    labyrinthEncounterChance: typeof state.labyrinthEncounterChance === 'number' ? state.labyrinthEncounterChance : 0.2,
+    labyrinthComplete: !!state.labyrinthComplete,
     // Node states
     nodeStates: {},
   };
@@ -57,6 +92,12 @@ export function saveGame(state, saveName = '') {
       isDone: node.isDone,
       isLocked: node.isLocked,
       canRevisit: node.canRevisit,
+      // Persist the hidden labels so unlocking via a story flag
+      // (north_pass clearing "???" after the throne audience, etc.)
+      // survives a load. Only carries through when the node was
+      // unlocked at save time and its label was cleared.
+      hiddenName: node.hiddenName || '',
+      hiddenDescription: node.hiddenDescription || '',
       exhaustedChoices: Array.isArray(node.exhaustedChoices) ? node.exhaustedChoices.slice() : [],
     };
   }

@@ -20,6 +20,46 @@ let _currentMusicGain = null;    // active GainNode (for live volume changes)
 let _musicRestartTimer = null;   // setTimeout handle between loops
 const MUSIC_LOOP_GAP_MS = 1800;
 
+// Tracks listed here loop seamlessly via AudioBufferSourceNode.loop —
+// no JS-driven gap between repeats. Ambience beds get this treatment
+// so the cinematic 1.8s pause doesn't stutter the bed every cycle.
+// Cinematic music_* tracks are NOT in this set; their natural
+// beat-end pause stays.
+const SEAMLESS_LOOP_KEYS = new Set([
+  'Music/ambience_campfire_01',
+  'Music/ambience_cave_dripping_01',
+  'Music/ambience_cave_water_01',
+  'Music/ambience_forest_01',
+  'Music/ambience_mountain_creek_01',
+  'Music/ambience_mountain_wind_01',
+  'Music/ambience_obsidian_wastes_01',
+  'Music/ambience_prison_01',
+  'Music/ambience_shrine_drone_01',
+  'Music/water_fast_flowing_01',
+]);
+
+// Per-track loop offsets (seconds). When the buffer loops back, it
+// jumps to LOOP_START_OFFSET[key] instead of 0 — useful for trimming
+// a startup transient that creates an audible click on every repeat.
+// Only applied when source.loop is true (SEAMLESS_LOOP_KEYS).
+const LOOP_START_OFFSET = {
+  'Music/water_fast_flowing_01': 1.0, // skip the click at the head of the file
+};
+
+// Per-track gain multiplier on top of the global music volume slider.
+// Used to balance individual cues against the rest of the soundtrack
+// (some cinematic stems are mastered hotter than the ambient beds).
+const MUSIC_VOLUME_SCALE = {
+  // Guild theme is mastered hotter than the rest of the soundtrack —
+  // 25 % reduction keeps it comfortable across every dwarven city
+  // interior area + post-siege Tharnag exterior.
+  'Music/music_guild_of_unlikely_heroes_01': 0.75,
+};
+function _musicGainFor(key) {
+  const scale = (key && MUSIC_VOLUME_SCALE[key]) || 1;
+  return musicVolume * scale;
+}
+
 // Cache decoded AudioBuffers so each file is fetched + decoded once.
 const bufferCache = {};
 const loadingSet = new Set();
@@ -138,6 +178,7 @@ export const SOUND_PACKS = {
     'dark_slime_gore_01',
     'dark_spell_01',
     'dark_warp_01','dark_warp_02',
+    'electric_beam_01',
     'fire_blast_01',
     'fireball_whoosh_01','fire_spell_01',
     'heal_angelic_01','heal_angelic_02','heal_angelic_03',
@@ -175,10 +216,25 @@ export const SOUND_PACKS = {
     'monster_snort_01',
     'reptilian_chuff_01',
     'reptilian_hiss_01','reptilian_hiss_02','reptilian_hiss_03',
+    'piranha_swarm_pass_01',
     'rocks_rolling_01',
     'rodent_squeak_01',
+    'sahuagin_scream_01','sahuagin_scream_02','sahuagin_scream_03',
     'spider_scuttle_01',
     'wolf_howl_distant_01',
+    // Ogre voice pack — long groans, deep short growls, pain growls.
+    // Audition in the codex Sound tab to pick start/end-of-fight cues
+    // for the Siege Ogre and any future ogre boss.
+    'ogre_groan_01','ogre_groan_02',
+    'ogre_growl_01','ogre_growl_02','ogre_growl_03',
+    'ogre_growl_deep_01','ogre_growl_deep_02','ogre_growl_deep_03','ogre_growl_deep_04',
+    'ogre_pain_01','ogre_pain_02','ogre_pain_03',
+    // Goblin Sapper — fireworks-style sparks burst, used for both the
+    // sapper's swing and the on-death explosion.
+    'goblin_explosion_01',
+    // Battering ram impact — heavy siege ram hitting a metal gate.
+    // Wired as the Massive Ogre Ram swing cue.
+    'battering_ram_01',
   ],
   // Music pack — full-length cinematic tracks (loops + phrases).
   // Long-form audio for room/encounter beds, victory swells, etc.
@@ -187,6 +243,7 @@ export const SOUND_PACKS = {
     'ambience_cave_dripping_01',
     'ambience_cave_water_01',
     'ambience_forest_01',
+    'water_fast_flowing_01',
     'ambience_mountain_creek_01',
     'ambience_mountain_wind_01',
     'ambience_prison_01',
@@ -199,6 +256,16 @@ export const SOUND_PACKS = {
     'music_sentimental_01',
     'music_tension_01',
     'music_thriller_brass_01',
+    // Newly added — auditioned via codex; not yet wired to any scene.
+    'music_castle_festivities_01',
+    'music_kings_carpet_01',
+    'music_one_last_battle_01',
+    'music_victory_orchestra_01','music_victory_orchestra_02',
+    'music_final_streak_01',
+    'music_forgotten_castle_01',
+    'music_guild_of_unlikely_heroes_01',
+    // Wind / cold storm bed for the Obsidian Wastes lab traversal.
+    'ambience_obsidian_wastes_01',
   ],
   // Heroes pack — player-character voice grunts and pain cries.
   Heroes: [
@@ -223,9 +290,17 @@ export const SOUND_PACKS = {
     'eat_popcorn_01',
     'human_scream_01',
     'leather_bag_01',
+    'pig_grunt_01',
+    // Obsidian boss reactions — lava bubble for the slime split,
+    // small rocks impact for the golem armor cracking.
+    'lava_bubble_01',
+    'rocks_impact_small_01',
     'lion_roar_01',
     'male_warrior_hit_01',
     'water_bodyfall_01',
+    // Coin pickup variations — short positive musical stings; audition
+    // in the codex Sound tab to pick a gold-loot cue.
+    'coin_pickup_01','coin_pickup_02','coin_pickup_03',
   ],
 };
 
@@ -252,6 +327,8 @@ export const SOUND_MAP = {
   axe_1h_flesh:   'Weapons/axe_light_1h_flesh_01',
   axe_2h_flesh:   'Weapons/axe_heavy_2h_flesh_01',
   axe_blocked:    'Weapons/axe_light_1h_hit_01',
+  // Execute (warrior tier 2) — heavier 2H axe-cleave variant.
+  execute_axe:    'Weapons/axe_heavy_2h_flesh_03',
   sword_1h_flesh: 'Weapons/sword_light_1h_flesh_01',
   sword_2h_flesh: 'Weapons/sword_heavy_2h_flesh_01',
   sword_blocked:  'Weapons/sword_rock_wall_01',
@@ -275,10 +352,17 @@ export const SOUND_MAP = {
   staff_flesh:       'Weapons/baton_hit_01',
   spear_flesh:       'Weapons/spear_stab_flesh_01',
   spear_throw_flesh: 'Weapons/spear_throw_flesh_01',
+  // Spear / trident blocked — same sword-on-rock-wall clang used for
+  // 1H sword blocks. Mounts to a hard target rather than the generic
+  // hit_blocked thud.
+  spear_blocked:     'Weapons/sword_rock_wall_01',
   // Spells. Block sample left unwired so a fully-absorbed magic hit
   // falls back to the generic thud, same pattern as spears/staves.
   missile_flesh: 'Magic/spell_burst_01',
   fire_flesh:    'Magic/fireball_whoosh_01',
+  // Consecration paladin AOE — heavier fire blast pulse, staggered
+  // per-target via damage_all so the 3-hit cadence matches the visual.
+  fire_blast:    'Magic/fire_blast_01',
   ice_flesh:     'Magic/ice_blast_01',
   // Fires whenever Ice actually lands on any character or creature
   // (player attacks, enemy Icy Breath, blizzard buffs). Not a hit cue.
@@ -306,6 +390,18 @@ export const SOUND_MAP = {
   rat_bite_flesh: 'Monster/monster_chew_01',
   // Big Bite power (Giant Rat / Dire Rat / Bone Pile chunky_bite).
   big_bite:       'Monster/monster_chew_rip_01',
+  // Mimic's chest-teeth swing — heavier rip than Big Bite.
+  mimic_chomp:    'Monster/monster_chew_rip_04',
+  // Siege Ogre — start-of-fight bellow + death pain growl.
+  // Groan plays each time the ogre heaves the ram backward (Pulling
+  // Back the Ram). Battering ram is the impact on the eventual
+  // Massive Ogre Ram swing.
+  ogre_growl:     'Monster/ogre_growl_01',
+  ogre_pain:      'Monster/ogre_pain_02',
+  ogre_groan:     'Monster/ogre_groan_01',
+  battering_ram:  'Monster/battering_ram_01',
+  // Goblin Sapper — fireworks burst on attack + on-death explosion.
+  goblin_explosion: 'Monster/goblin_explosion_01',
   // Big Bone (enemy 2H club card) — heavy skull crunch.
   big_bone_hit:   'Misc/bone_skull_crush_02',
   // Spider scuttle — Pet Spider summon + every spider creature swing.
@@ -322,6 +418,22 @@ export const SOUND_MAP = {
   wolf_attack:    'Monster/monster_chew_02',
   // Wolf Pack — distant pack howl for fight start AND end.
   wolf_howl:      'Monster/wolf_howl_distant_01',
+  // Piranha creature attack — quick chew when a piranha bites.
+  piranha_attack: 'Monster/monster_chew_01',
+  // Piranhas Swarm — bubbly fast pass-by for fight start AND end.
+  piranha_swarm:  'Monster/piranha_swarm_pass_01',
+  // Shark — chunky chew + splash. Splash plays as the cast cue
+  // (creature swing ambient), chew lands on flesh / blocked.
+  shark_chew:     'Monster/monster_chew_03',
+  shark_splash:   'Misc/water_bodyfall_01',
+  // Old God's Blessing — eerie wood-glitch reveal when the buff is
+  // granted at the Old God Statue. Plays once on the loot page.
+  dark_glitch_wood: 'Magic/dark_glitch_wood_01',
+  // Sahuagin Sentinel + Priest — same cave-monster scream bookends
+  // both fights (start + end).
+  sahuagin_scream:       'Monster/sahuagin_scream_01',
+  // Sahuagin Baron — heavier scream variant for the boss bookend.
+  sahuagin_baron_scream: 'Monster/sahuagin_scream_02',
   // Wrath (druid) — leaf-fall on cast for both modal options.
   wrath_cast:     'Misc/leaf_fall_01',
   // Reckless Strike (warrior) — heavier 2H axe variant.
@@ -337,13 +449,24 @@ export const SOUND_MAP = {
   battle_fury:    'Misc/male_warrior_hit_01',
   // Thorb summon (ally card play) — same warrior shout as Battle Fury.
   thorb_shout:    'Misc/male_warrior_hit_01',
+  // Dwarven Scout (Korgan) summon — same male-warrior shout sample.
+  dwarven_scout_shout: 'Misc/male_warrior_hit_01',
   // Raena summon (ally card play) — female battle yell.
   raena_summon:   'Heroes/hero_female_pain_04',
+  valdrisa_summon: 'Heroes/hero_female_pain_04',
   // Aimed Shot (ranger power) — bowstring draw before the shot.
   aimed_shot:     'Weapons/bow_draw_01',
   // Druid wild-shape attack cues.
   bear_form_attack: 'Misc/bear_growl_01',
   cat_form_attack:  'Misc/lion_roar_01',
+  // Animal Companion summons — Misha (bear) shares the druid bear
+  // growl, Huffer (boar) gets a pig grunt for summon / attack / death.
+  bear_growl:       'Misc/bear_growl_01',
+  pig_grunt:        'Misc/pig_grunt_01',
+  // Obsidian boss reactions — lava splash when the slime sheds armor
+  // and spawns a split, rocks pile thump when the golem's armor cracks.
+  lava_bubble:      'Misc/lava_bubble_01',
+  rocks_impact_small: 'Misc/rocks_impact_small_01',
   // Cloth rustle — bandages, scraps.
   cloth_use:        'Misc/cloth_handle_01',
   // Leather bag squish — sacks, pouches.
@@ -360,6 +483,24 @@ export const SOUND_MAP = {
   // Goodberries (druid ability) — angelic chime when berries are
   // conjured. The eaten Goodberry token plays the eat cue instead.
   goodberries_cast: 'Magic/buff_angelic_01',
+  // The Queen's Locket — soft angelic chime when the gift fires.
+  queens_gift_cast: 'Magic/buff_angelic_02',
+  // Arcane Beam — sustained electrical spell hum. The caller clips the
+  // playback duration to scale with damage (4-13 dmg → 4/13..13/13 of
+  // the full ~8 sec sample).
+  arcane_beam:      'Magic/electric_beam_01',
+  // Sparkle bell — Hammer of Wrath cast halo + Thunderclap shock pulses.
+  sparkle_spell:    'Magic/sparkle_spell_01',
+  // Wind-rush whoosh — Starfire's celestial cleave.
+  wind_blast:       'Magic/wind_blast_01',
+  // Healing Touch (druid) — softer angelic chime.
+  heal_touch:       'Magic/heal_angelic_02',
+  // Revivify (paladin) — third angelic chime, only fires when an ally
+  // is actually reanimated.
+  heal_revivify:    'Magic/heal_angelic_03',
+  // Treant rustle — leaf-fall ambient. Already mapped via wrath_cast,
+  // re-aliased here for codex clarity at the Treant call sites.
+  leaf_fall:        'Misc/leaf_fall_01',
   // Card-play "ambient" cues — these fire on play (not on hit), so
   // they don't slot into the flesh/blocked pair. Used by getCardSfx
   // for the third "Play" row in the codex Sounds section.
@@ -410,7 +551,15 @@ export function initSound() {
  * Loads + decodes on first call, then plays from cache.
  */
 export function playSoundFile(packAndFile, volumeScale = 1) {
-  if (!soundEnabled || !audioCtx || masterVolume <= 0) return;
+  if (!audioCtx) return;
+  // Music/ paths (codex preview, ambience beds) gate on the music
+  // toggle/volume; everything else gates on the SFX toggle/volume.
+  const isMusicPath = typeof packAndFile === 'string' && packAndFile.startsWith('Music/');
+  if (isMusicPath) {
+    if (!musicEnabled || musicVolume <= 0) return;
+  } else {
+    if (!soundEnabled || masterVolume <= 0) return;
+  }
 
   // When the browser suspends the AudioContext (tab switch, background),
   // resume() returns a promise. Schedule the sound to play AFTER the
@@ -462,9 +611,19 @@ function _playBuffer(buffer, volumeScale, key) {
   const source = audioCtx.createBufferSource();
   source.buffer = buffer;
   const gain = audioCtx.createGain();
-  gain.gain.value = masterVolume * volumeScale;
+  // Codex preview playback of Music/ tracks (campfire ambience, music
+  // beds, etc.) goes through playSoundFile → _playBuffer. Route those
+  // through the music volume slider, not the SFX slider, so the options
+  // screen's Music control affects the preview too.
+  const isMusicPath = typeof key === 'string' && key.startsWith('Music/');
+  const baseVol = isMusicPath ? musicVolume : masterVolume;
+  gain.gain.value = baseVol * volumeScale;
   source.connect(gain);
   gain.connect(audioCtx.destination);
+  // Stash the gain node + base volume on the source so callers like
+  // playSoundForDuration can fade out cleanly instead of clicking off.
+  source._gainNode = gain;
+  source._baseVol = baseVol * volumeScale;
   // Track this source so stopSoundFile / stopAllSounds can find it.
   if (key) {
     let set = activeSources.get(key);
@@ -477,6 +636,51 @@ function _playBuffer(buffer, volumeScale, key) {
   }
   source.start(0);
   return source;
+}
+
+/**
+ * Play a named SFX, then schedule it to fade out and stop after `durationMs`.
+ * Used by Arcane Beam to scale the electric-beam length with damage —
+ * 4 dmg = 4/13 of full clip, 13 dmg = full clip.
+ */
+export function playSoundForDuration(name, durationMs, volumeScale = 1) {
+  if (!audioCtx) return;
+  if (!soundEnabled || masterVolume <= 0) return;
+  const mapped = SOUND_MAP[name];
+  if (!mapped) return;
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().then(() => _playClipped(mapped, durationMs, volumeScale));
+    return;
+  }
+  _playClipped(mapped, durationMs, volumeScale);
+}
+
+function _playClipped(packAndFile, durationMs, volumeScale) {
+  const buffer = bufferCache[packAndFile];
+  const finish = (buf) => {
+    const source = _playBuffer(buf, volumeScale, packAndFile);
+    if (!source) return;
+    const fadeMs = Math.min(180, durationMs * 0.18);
+    const now = audioCtx.currentTime;
+    const stopAt = now + durationMs / 1000;
+    const fadeStart = Math.max(now, stopAt - fadeMs / 1000);
+    try {
+      if (source._gainNode) {
+        source._gainNode.gain.setValueAtTime(source._baseVol || 1, fadeStart);
+        source._gainNode.gain.linearRampToValueAtTime(0, stopAt);
+      }
+      source.stop(stopAt + 0.01);
+    } catch (_) {}
+  };
+  if (buffer) { finish(buffer); return; }
+  if (loadingSet.has(packAndFile)) return;
+  loadingSet.add(packAndFile);
+  const url = `${BASE}assets/Sounds/${packAndFile}.ogg`;
+  fetch(url)
+    .then(r => r.arrayBuffer())
+    .then(ab => audioCtx.decodeAudioData(ab))
+    .then(buf => { bufferCache[packAndFile] = buf; loadingSet.delete(packAndFile); finish(buf); })
+    .catch(() => loadingSet.delete(packAndFile));
 }
 
 /**
@@ -560,6 +764,20 @@ function _playMusicBuffer(buffer, key, fadeInMs = 0) {
   _stopCurrentMusicSource();
   const source = audioCtx.createBufferSource();
   source.buffer = buffer;
+  // Seamless loop: no JS-driven restart gap. The buffer source loops
+  // sample-accurately on its own; we never see an `ended` event for
+  // these tracks (until we explicitly stop them). Optional loopStart
+  // offset trims a startup click from the loop point (the very first
+  // play still starts at 0; only the loopback jumps past the offset).
+  const seamless = SEAMLESS_LOOP_KEYS.has(key);
+  if (seamless) {
+    source.loop = true;
+    const offset = LOOP_START_OFFSET[key];
+    if (offset && buffer.duration > offset) {
+      source.loopStart = offset;
+      source.loopEnd = buffer.duration;
+    }
+  }
   const gain = audioCtx.createGain();
   if (_musicPaused) {
     // Started while paused (e.g. loop restart in pause menu) — leave
@@ -568,23 +786,25 @@ function _playMusicBuffer(buffer, key, fadeInMs = 0) {
   } else if (fadeInMs > 0) {
     const now = audioCtx.currentTime;
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(musicVolume, now + fadeInMs / 1000);
+    gain.gain.linearRampToValueAtTime(_musicGainFor(key), now + fadeInMs / 1000);
   } else {
-    gain.gain.value = musicVolume;
+    gain.gain.value = _musicGainFor(key);
   }
   source.connect(gain);
   gain.connect(audioCtx.destination);
-  source.onended = () => {
-    // Bail if we've been replaced (stop / track-switch).
-    if (_currentMusicSource !== source) return;
-    _currentMusicSource = null;
-    _currentMusicGain = null;
-    if (!musicEnabled || !_currentMusicKey) return;
-    _musicRestartTimer = setTimeout(() => {
-      _musicRestartTimer = null;
-      _scheduleMusicPlay();
-    }, MUSIC_LOOP_GAP_MS);
-  };
+  if (!seamless) {
+    source.onended = () => {
+      // Bail if we've been replaced (stop / track-switch).
+      if (_currentMusicSource !== source) return;
+      _currentMusicSource = null;
+      _currentMusicGain = null;
+      if (!musicEnabled || !_currentMusicKey) return;
+      _musicRestartTimer = setTimeout(() => {
+        _musicRestartTimer = null;
+        _scheduleMusicPlay();
+      }, MUSIC_LOOP_GAP_MS);
+    };
+  }
   _currentMusicSource = source;
   _currentMusicGain = gain;
   source.start(0);
@@ -677,6 +897,92 @@ export function stopMusic() {
   _stopCurrentMusicSource();
 }
 
+// === Ambience layer — a SECOND looping track that plays in parallel
+// with the main music. Used by the Sahuagin Baron fight to layer
+// water_fast_flowing_01 underneath boss music at reduced volume.
+// Only one ambience layer at a time; calling play with a new key
+// replaces the previous one. Volume is a multiplier on top of the
+// global musicVolume so the music slider still controls it.
+let _ambienceKey = null;
+let _ambienceSource = null;
+let _ambienceGain = null;
+let _ambienceVolumeScale = 1; // remembered so live music-volume changes can rescale it.
+
+export function playAmbienceLayer(packAndFile, volumeScale = 1) {
+  if (!packAndFile) return;
+  if (_ambienceKey === packAndFile && _ambienceSource) {
+    // Same track already playing — just rescale the volume.
+    _ambienceVolumeScale = volumeScale;
+    if (_ambienceGain && audioCtx && !_musicPaused) {
+      _ambienceGain.gain.setTargetAtTime(musicVolume * volumeScale, audioCtx.currentTime, 0.05);
+    }
+    return;
+  }
+  stopAmbienceLayer();
+  if (!musicEnabled || !audioCtx) {
+    _ambienceKey = packAndFile;
+    _ambienceVolumeScale = volumeScale;
+    return;
+  }
+  _ambienceKey = packAndFile;
+  _ambienceVolumeScale = volumeScale;
+  const start = (buffer) => {
+    if (_ambienceKey !== packAndFile) return;
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const offset = LOOP_START_OFFSET[packAndFile];
+    if (offset && buffer.duration > offset) {
+      source.loopStart = offset;
+      source.loopEnd = buffer.duration;
+    }
+    const gain = audioCtx.createGain();
+    const target = _musicPaused ? 0 : musicVolume * volumeScale;
+    const now = audioCtx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(target, now + 1.2);
+    source.connect(gain);
+    gain.connect(audioCtx.destination);
+    source.start(0);
+    _ambienceSource = source;
+    _ambienceGain = gain;
+  };
+  if (bufferCache[packAndFile]) {
+    start(bufferCache[packAndFile]);
+    return;
+  }
+  const url = `${BASE}assets/Sounds/${packAndFile}.ogg`;
+  fetch(url)
+    .then(r => r.arrayBuffer())
+    .then(ab => audioCtx.decodeAudioData(ab))
+    .then(buffer => {
+      bufferCache[packAndFile] = buffer;
+      start(buffer);
+    })
+    .catch(() => {});
+}
+
+export function stopAmbienceLayer(fadeOutMs = 800) {
+  _ambienceKey = null;
+  _ambienceVolumeScale = 1;
+  if (!_ambienceSource || !_ambienceGain || !audioCtx) {
+    _ambienceSource = null;
+    _ambienceGain = null;
+    return;
+  }
+  const src = _ambienceSource;
+  const g = _ambienceGain;
+  const now = audioCtx.currentTime;
+  try {
+    g.gain.cancelScheduledValues(now);
+    g.gain.setValueAtTime(g.gain.value, now);
+    g.gain.linearRampToValueAtTime(0, now + fadeOutMs / 1000);
+  } catch (_) {}
+  setTimeout(() => { try { src.stop(0); } catch (_) {} }, fadeOutMs + 80);
+  _ambienceSource = null;
+  _ambienceGain = null;
+}
+
 /**
  * Fade the active music out over fadeOutMs and stop it. Use when
  * leaving a scene without an immediate replacement track.
@@ -728,6 +1034,14 @@ export function pauseMusic() {
       _currentMusicGain.gain.linearRampToValueAtTime(0, now + 0.15);
     } catch (_) {}
   }
+  if (_ambienceGain && audioCtx) {
+    const now = audioCtx.currentTime;
+    try {
+      _ambienceGain.gain.cancelScheduledValues(now);
+      _ambienceGain.gain.setValueAtTime(_ambienceGain.gain.value, now);
+      _ambienceGain.gain.linearRampToValueAtTime(0, now + 0.15);
+    } catch (_) {}
+  }
 }
 
 /**
@@ -742,7 +1056,15 @@ export function resumeMusic() {
     try {
       _currentMusicGain.gain.cancelScheduledValues(now);
       _currentMusicGain.gain.setValueAtTime(0, now);
-      _currentMusicGain.gain.linearRampToValueAtTime(musicVolume, now + 0.25);
+      _currentMusicGain.gain.linearRampToValueAtTime(_musicGainFor(_currentMusicKey), now + 0.25);
+    } catch (_) {}
+  }
+  if (_ambienceGain && audioCtx) {
+    const now = audioCtx.currentTime;
+    try {
+      _ambienceGain.gain.cancelScheduledValues(now);
+      _ambienceGain.gain.setValueAtTime(0, now);
+      _ambienceGain.gain.linearRampToValueAtTime(musicVolume * _ambienceVolumeScale, now + 0.25);
     } catch (_) {}
   }
 }
@@ -751,7 +1073,19 @@ export function isMusicPaused() { return _musicPaused; }
 
 export function setMusicVolume(v) {
   musicVolume = Math.max(0, Math.min(1, v));
-  if (_currentMusicGain) _currentMusicGain.gain.value = musicVolume;
+  // While paused (in-game menu / options / codex), the gain is being
+  // ramped down to 0; don't yank it back up — resumeMusic will pick
+  // up the new volume when the menu closes. Without this, dragging
+  // the slider in the options screen unmutes the track mid-pause and
+  // sounds like an abrupt music restart.
+  if (_currentMusicGain && !_musicPaused) {
+    _currentMusicGain.gain.value = _musicGainFor(_currentMusicKey);
+  }
+  // Mirror the volume change to the secondary ambience layer so the
+  // baron's underwater bed stays in sync with the slider.
+  if (_ambienceGain && !_musicPaused) {
+    _ambienceGain.gain.value = musicVolume * _ambienceVolumeScale;
+  }
 }
 export function getMusicVolume() { return musicVolume; }
 export function isMusicEnabled() { return musicEnabled; }

@@ -17,6 +17,7 @@ export class Creature {
     attackAll = false,
     multiAttack = 0,
     sentinel = false,
+    haste = false,
     selfDestruct = false,
     swarm = false,
     bloodfrenzy = 0,
@@ -35,11 +36,16 @@ export class Creature {
     this.maxHp = maxHp;
     this.currentHp = currentHp !== null ? currentHp : maxHp;
 
-    this.exhausted = true;
+    // Haste keyword — creature is ready to attack the turn it arrives.
+    // Mirrors PY's per-summon `exhausted=False` override (Huffer,
+    // Treants, etc.). Stored as a flag so the codex / hover preview
+    // can render a "Haste" pill in the creature description.
+    this.haste = haste;
+    this.exhausted = !haste;
     // justSummoned: true on the turn this creature arrives. Cleared when the
     // owner's ready() fires at the start of their next turn. Lets the UI tell
     // the player "can't attack the turn it's summoned" instead of "already attacked".
-    this.justSummoned = true;
+    this.justSummoned = !haste;
     this.owner = null;
     this.unpreventable = unpreventable;
 
@@ -64,6 +70,8 @@ export class Creature {
 
     this.sentinel = sentinel;
     this.selfDestruct = selfDestruct;
+    // Note: this.haste is set above (alongside this.exhausted) so the
+    // initial-exhaust check sees it.
     this.swarm = swarm;
     this.bloodfrenzy = bloodfrenzy;
     this.isCompanion = isCompanion;

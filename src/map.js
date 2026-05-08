@@ -8,7 +8,7 @@ export class MapNode {
     connections = [], position = [0, 0], mapArea = '',
     isLocked = false, canRevisit = false, unlocks = [],
     hiddenName = '', hiddenDescription = '',
-    passthroughTo = '',
+    passthroughTo = '', repeatableUntil = '',
   }) {
     this.id = id;
     this.name = name;
@@ -27,6 +27,11 @@ export class MapNode {
     // of retriggering the encounter (e.g. the kitchen shunts back to the
     // sewer passage once you've resolved it).
     this.passthroughTo = passthroughTo;
+    // When set, the encounter repeats while canRevisit is true UNTIL the
+    // node id named here is isDone — at that point this node stops
+    // refiring its encounter (e.g. Sentinel Patrol stops once the Baron
+    // is killed). Combined with canRevisit:true.
+    this.repeatableUntil = repeatableUntil;
     // Keys of encounter choices that have been permanently exhausted on this node.
     // Used for repeat-visit encounters (Abandoned Camp: one rest, one search).
     this.exhaustedChoices = [];
@@ -217,28 +222,57 @@ export function createRuinsBasinMap() {
 
   const nodes = [
     { id: 'piranha_pool', name: 'Piranha Pool', description: 'Dark water churns with hungry fish.', encounterId: 'piranha_pool', connections: ['pool_edge'], position: [512, 500], mapArea: 'ruins_basin' },
-    { id: 'pool_edge', name: 'Pool Edge', description: 'The edge of the pool, a sentinel watches.', encounterId: 'sahuagin_sentinel', connections: ['pool_south'], position: [760, 380], mapArea: 'ruins_basin', canRevisit: true },
-    { id: 'pool_south', name: 'Pool South', description: 'The southern edge of the basin.', encounterId: 'pool_south', connections: ['pool_edge', 'pool_exit'], position: [798, 686], mapArea: 'ruins_basin', canRevisit: true, unlocks: ['pool_exit'] },
-    { id: 'pool_exit', name: 'Pool Exit', description: 'A passage leading out of the basin.', encounterId: 'pool_exit', connections: ['pool_south', 'flooded_entrance'], position: [520, 910], mapArea: 'ruins_basin', isLocked: true, canRevisit: true },
-    { id: 'flooded_entrance', name: 'Flooded Entrance', description: 'The entrance to a flooded temple.', encounterId: '', connections: ['pool_exit', 'temple_right', 'temple_left'], position: [512, 120], mapArea: 'flood_temple', canRevisit: true },
-    { id: 'temple_right', name: 'Temple Right', description: 'The right wing of the flooded temple.', encounterId: 'conservatory_wing', connections: ['flooded_entrance', 'temple_depths'], position: [902, 492], mapArea: 'flood_temple', canRevisit: true },
-    { id: 'temple_depths', name: 'Temple Depths', description: 'Deep within the flooded temple.', encounterId: 'flooded_passage', connections: ['temple_right', 'temple_left', 'passage_entrance'], position: [512, 883], mapArea: 'flood_temple', canRevisit: true },
-    { id: 'temple_left', name: 'Temple Left', description: 'The left wing of the flooded temple.', encounterId: 'dark_corridor', connections: ['flooded_entrance', 'temple_depths'], position: [160, 450], mapArea: 'flood_temple', canRevisit: true },
-    { id: 'passage_entrance', name: 'Passage Entrance', description: 'The entrance to a passage beyond the temple.', encounterId: '', connections: ['temple_depths', 'passage_ambush'], position: [512, 150], mapArea: 'temple_exit', canRevisit: true },
+    { id: 'pool_edge', name: 'Pool Edge', description: 'The edge of the pool, a sentinel watches.', encounterId: 'sahuagin_sentinel', connections: ['pool_south'], position: [760, 380], mapArea: 'ruins_basin' },
+    { id: 'pool_south', name: 'Pool South', description: 'The southern edge of the basin.', encounterId: 'pool_south', connections: ['pool_edge', 'pool_exit'], position: [798, 686], mapArea: 'ruins_basin', unlocks: ['pool_exit'] },
+    { id: 'pool_exit', name: "Pool's Exit", description: 'A patrolling sentinel blocks the corridor.', encounterId: 'pool_exit', connections: ['pool_south', 'flooded_entrance'], position: [520, 910], mapArea: 'ruins_basin', isLocked: true, unlocks: ['flooded_entrance'], passthroughTo: 'flooded_entrance' },
+    { id: 'flooded_entrance', name: 'Flooded Entrance', description: 'The entrance to a flooded temple.', encounterId: '', connections: ['pool_exit', 'temple_right', 'temple_left', 'flooded_atrium'], position: [512, 120], mapArea: 'flood_temple', canRevisit: true, passthroughTo: 'pool_exit' },
+    { id: 'temple_right', name: 'Conservatory Wing', description: 'A well-conserved area of the temple. Some light shows through cracks in the ceiling.', encounterId: 'conservatory_wing', connections: ['flooded_entrance', 'temple_depths', 'altar_entrance', 'flooded_atrium'], position: [902, 492], mapArea: 'flood_temple', passthroughTo: 'altar_entrance', unlocks: ['altar_entrance'] },
+    // Atrium: new mid-room node not in the PY map. A direct link from
+    // the flooded entrance straight down to the temple depths so the
+    // player has a center-line path in addition to the flanks. Also
+    // bridges the two side-wings (Conservatory + Dark Corridor) so
+    // players can cut across the room without backtracking.
+    { id: 'flooded_atrium', name: 'Flooded Atrium', description: 'A vast central chamber, half-submerged.', encounterId: '', connections: ['flooded_entrance', 'temple_depths', 'temple_left', 'temple_right'], position: [512, 500], mapArea: 'flood_temple', canRevisit: true },
+    { id: 'temple_depths', name: 'Flooded Passage', description: 'Deep within the flooded temple.', encounterId: 'flooded_passage', connections: ['temple_right', 'temple_left', 'passage_entrance', 'flooded_atrium'], position: [512, 883], mapArea: 'flood_temple', passthroughTo: 'passage_entrance' },
+    { id: 'temple_left', name: 'Dark Corridor', description: 'A wide corridor that leads deeper into the temple. This area looks dangerous.', encounterId: 'dark_corridor', connections: ['flooded_entrance', 'temple_depths', 'boss_wing_sentinel', 'flooded_atrium'], position: [160, 450], mapArea: 'flood_temple', passthroughTo: 'boss_wing_sentinel' },
+    // --- Flood Temple Boss Wing (revealed by Dark Corridor descend) ---
+    // Mirrors PY: same map, separate map_area. PY has three nodes
+    // (sentinel sighting / sentinel combat / priest combat); JS port
+    // wires the sighting node here and stubs the deeper rooms as
+    // simple passages until the dedicated combats land.
+    // Deeper Corridor — no encounter; the dark_corridor descend
+    // teleports here directly. Acts as a bidirectional teleport
+    // pair with temple_left thereafter. Reaching it unlocks the
+    // Sentinel Patrol so the player can press deeper.
+    { id: 'boss_wing_sentinel', name: 'Deeper Corridor', description: 'A flooded corridor descending into the dark wing of the temple.', encounterId: '', connections: ['boss_wing_entrance', 'temple_left'], unlocks: ['boss_wing_entrance'], position: [502, 960], mapArea: 'flood_temple_boss_wing', isLocked: true, canRevisit: true, passthroughTo: 'temple_left' },
+    { id: 'boss_wing_entrance', name: 'Sentinel Patrol', description: 'A Sahuagin sentinel blocks the way deeper into the temple wing.', encounterId: 'boss_wing_sentinel_combat', connections: ['boss_wing_sentinel', 'boss_wing_priest'], unlocks: ['boss_wing_priest'], position: [312, 720], mapArea: 'flood_temple_boss_wing', isLocked: true, hiddenName: 'Deeper Corridor', canRevisit: true, repeatableUntil: 'boss_wing_priest' },
+    { id: 'boss_wing_priest', name: 'Flooded Chamber', description: 'A grand chamber at the heart of the temple wing. Dark power radiates from within.', encounterId: 'boss_wing_priest_combat', connections: ['boss_wing_entrance'], position: [502, 310], mapArea: 'flood_temple_boss_wing', isLocked: true, hiddenName: '???' },
+    // --- Flooded Altar (revealed via Conservatory Wing) ---
+    { id: 'altar_entrance', name: 'Sacred Chamber', description: 'A vast chamber. The air is thick with brine and decay.', encounterId: '', connections: ['temple_right', 'flooded_altar'], unlocks: ['flooded_altar'], position: [200, 500], mapArea: 'flooded_altar', isLocked: true, canRevisit: true, passthroughTo: 'temple_right' },
+    { id: 'flooded_altar', name: 'Flooded Altar', description: 'A sacred area within the temple. Dark shapes move beneath the water.', encounterId: 'flooded_altar', connections: ['altar_entrance', 'old_god_statue'], unlocks: ['old_god_statue'], position: [750, 500], mapArea: 'flooded_altar', isLocked: true },
+    { id: 'old_god_statue', name: 'Statue of an Old God', description: 'An ancient statue stands half-submerged, its hands outstretched.', encounterId: 'old_god_statue', connections: ['flooded_altar'], position: [890, 512], mapArea: 'flooded_altar', isLocked: true, canRevisit: true },
+    { id: 'passage_entrance', name: 'Passage Entrance', description: 'The entrance to a passage beyond the temple.', encounterId: '', connections: ['temple_depths', 'passage_ambush'], position: [512, 150], mapArea: 'temple_exit', canRevisit: true, passthroughTo: 'temple_depths' },
     { id: 'passage_ambush', name: 'Passage Ambush', description: 'A shadowed gallery.', encounterId: 'passage_ambush', connections: ['passage_entrance', 'cave_exit'], position: [512, 500], mapArea: 'temple_exit', hiddenName: 'Shadowed Gallery' },
-    { id: 'cave_exit', name: 'Cave Exit', description: 'A passage leading out.', encounterId: 'cave_exit', connections: ['passage_ambush', 'mountain_overlook'], position: [512, 850], mapArea: 'temple_exit', hiddenName: 'Passage' },
-    { id: 'mountain_overlook', name: 'Mountain Overlook', description: 'A vista overlooking the land below.', encounterId: '', connections: ['cave_exit', 'river_crossing'], position: [212, 670], mapArea: 'arriving_city', canRevisit: true },
+    // Cave Exit is a one-shot narrative beat that ends with the
+    // party stepping out onto the mountain overlook (different
+    // map_area). passthroughTo makes a click after first completion
+    // auto-route to the overlook so the player doesn't have to
+    // manually click out of the cave.
+    { id: 'cave_exit', name: 'Cave Exit', description: 'A passage leading out.', encounterId: 'cave_exit', connections: ['passage_ambush', 'mountain_overlook'], position: [512, 850], mapArea: 'temple_exit', hiddenName: 'Passage', passthroughTo: 'mountain_overlook' },
+    { id: 'mountain_overlook', name: 'Mountain Overlook', description: 'A vista overlooking the land below.', encounterId: '', connections: ['cave_exit', 'river_crossing'], position: [212, 670], mapArea: 'arriving_city', canRevisit: true, passthroughTo: 'cave_exit' },
     { id: 'river_crossing', name: 'River Crossing', description: 'A crossing over the river.', encounterId: 'river_crossing', connections: ['mountain_overlook', 'south_gate'], position: [322, 510], mapArea: 'arriving_city' },
-    { id: 'south_gate', name: 'South Gate', description: 'The southern gate of Qualibaf.', encounterId: 'south_gate', connections: ['river_crossing', 'city_south_gate'], position: [662, 260], mapArea: 'arriving_city', canRevisit: true },
-    { id: 'city_south_gate', name: 'City South Gate', description: 'Inside the southern gate of Qualibaf.', encounterId: '', connections: ['city_square', 'weaponsmith', 'armorsmith', 'general_store', 'inn', 'church', 'arcane_emporium', 'city_north_gate'], position: [512, 900], mapArea: 'qualibaf', canRevisit: true },
-    { id: 'city_square', name: 'City Square', description: 'The central square of Qualibaf.', encounterId: 'city_square', connections: ['city_south_gate', 'weaponsmith', 'armorsmith', 'general_store', 'inn', 'church', 'arcane_emporium', 'city_north_gate'], position: [512, 500], mapArea: 'qualibaf', canRevisit: true },
+    { id: 'south_gate', name: 'South Gate', description: 'The southern gate of Qualibaf.', encounterId: 'south_gate', connections: ['river_crossing', 'city_south_gate'], position: [662, 260], mapArea: 'arriving_city', passthroughTo: 'city_south_gate' },
+    { id: 'city_south_gate', name: 'City South Gate', description: 'Inside the southern gate of Qualibaf.', encounterId: '', connections: ['city_square', 'weaponsmith', 'armorsmith', 'general_store', 'inn', 'church', 'guild_hall', 'antiquity_shop', 'arcane_emporium', 'city_north_gate'], position: [512, 900], mapArea: 'qualibaf', canRevisit: true, passthroughTo: 'south_gate' },
+    { id: 'city_square', name: 'City Square', description: 'The central square of Qualibaf.', encounterId: 'city_square', connections: ['city_south_gate', 'weaponsmith', 'armorsmith', 'general_store', 'inn', 'church', 'guild_hall', 'antiquity_shop', 'arcane_emporium', 'city_north_gate'], position: [512, 500], mapArea: 'qualibaf', canRevisit: true },
     { id: 'weaponsmith', name: 'Weaponsmith', description: 'A weaponsmith shop.', encounterId: 'weaponsmith', connections: ['city_south_gate', 'city_square'], position: [340, 390], mapArea: 'qualibaf', canRevisit: true },
     { id: 'armorsmith', name: 'Armorsmith', description: 'An armorsmith shop.', encounterId: 'armorsmith', connections: ['city_south_gate', 'city_square'], position: [324, 470], mapArea: 'qualibaf', canRevisit: true },
     { id: 'general_store', name: 'General Store', description: 'A general goods store.', encounterId: 'general_store', connections: ['city_south_gate', 'city_square'], position: [650, 610], mapArea: 'qualibaf', canRevisit: true },
     { id: 'inn', name: 'Inn', description: 'A cozy inn.', encounterId: 'inn', connections: ['city_south_gate', 'city_square'], position: [684, 430], mapArea: 'qualibaf', canRevisit: true },
     { id: 'church', name: 'Church', description: 'A place of worship.', encounterId: 'church', connections: ['city_south_gate', 'city_square'], position: [820, 350], mapArea: 'qualibaf', canRevisit: true },
+    { id: 'guild_hall', name: 'Guild Hall', description: "The Adventurer's Guild hall. A place to find work and information.", encounterId: 'guild_hall', connections: ['city_south_gate', 'city_square'], position: [520, 401], mapArea: 'qualibaf', canRevisit: true },
+    { id: 'antiquity_shop', name: 'Antiquity Shop', description: 'A dusty shop filled with ancient relics and curious artifacts.', encounterId: 'antiquity_shop', connections: ['city_south_gate', 'city_square'], position: [420, 270], mapArea: 'qualibaf', canRevisit: true },
     { id: 'arcane_emporium', name: 'Arcane Emporium', description: 'A shop of arcane goods.', encounterId: 'arcane_emporium', connections: ['city_south_gate', 'city_square'], position: [260, 710], mapArea: 'qualibaf', canRevisit: true },
-    { id: 'city_north_gate', name: 'City North Gate', description: 'The northern gate of Qualibaf.', encounterId: 'city_north_gate', connections: ['city_south_gate', 'city_square'], position: [512, 100], mapArea: 'qualibaf', isLocked: true, canRevisit: true, hiddenName: '???' },
+    { id: 'city_north_gate', name: 'City North Gate', description: 'The northern gate of Qualibaf.', encounterId: 'city_north_gate', connections: ['city_south_gate', 'city_square'], position: [512, 100], mapArea: 'qualibaf', isLocked: true, hiddenName: '???' },
   ];
 
   for (const data of nodes) {
@@ -257,7 +291,7 @@ export function createNorthQualibafMap() {
 
   const nodes = [
     { id: 'north_gate_return', name: 'North Gate Return', description: 'Outside the northern gate of Qualibaf.', encounterId: '', connections: ['north_crossroad'], position: [480, 947], mapArea: 'north_qualibaf', canRevisit: true },
-    { id: 'north_crossroad', name: 'North Crossroad', description: 'A crossroad north of the city.', encounterId: 'north_crossroad', connections: ['north_gate_return', 'filibaf_entrance'], position: [580, 170], mapArea: 'north_qualibaf', canRevisit: true, unlocks: ['filibaf_entrance'] },
+    { id: 'north_crossroad', name: 'North Crossroad', description: 'A crossroad north of the city.', encounterId: 'north_crossroad', connections: ['north_gate_return', 'filibaf_entrance'], position: [580, 170], mapArea: 'north_qualibaf', unlocks: ['filibaf_entrance'] },
     { id: 'filibaf_entrance', name: 'Filibaf Entrance', description: 'The entrance to Filibaf Forest.', encounterId: 'filibaf_entrance', connections: ['north_crossroad'], position: [825, 160], mapArea: 'north_qualibaf', isLocked: true, canRevisit: true, hiddenName: '???' },
   ];
 
@@ -302,9 +336,13 @@ export function createTharnagMap() {
     { id: 'tharnag_entry', name: 'Tharnag Entry', description: 'The approach to Tharnag.', encounterId: 'tharnag_arrival', connections: ['siege_gauntlet_1'], position: [930, 940], mapArea: 'tharnag', canRevisit: true },
     { id: 'siege_gauntlet_1', name: 'Siege Gauntlet 1', description: 'The first siege line.', encounterId: 'siege_gauntlet_1', connections: ['tharnag_entry', 'siege_gauntlet_2'], position: [550, 780], mapArea: 'tharnag', isLocked: true, unlocks: ['siege_gauntlet_2'], hiddenName: 'Siege Line' },
     { id: 'siege_gauntlet_2', name: 'Siege Gauntlet 2', description: 'The second siege line.', encounterId: 'siege_gauntlet_2', connections: ['siege_gauntlet_1', 'siege_gauntlet_3'], position: [440, 700], mapArea: 'tharnag', isLocked: true, unlocks: ['siege_gauntlet_3'], hiddenName: 'Siege Line' },
-    { id: 'siege_gauntlet_3', name: 'Siege Gauntlet 3', description: 'The third siege line.', encounterId: 'siege_gauntlet_3', connections: ['siege_gauntlet_2', 'siege_gauntlet_dialog'], position: [450, 570], mapArea: 'tharnag', isLocked: true, unlocks: ['siege_gauntlet_dialog'], hiddenName: 'Siege Line' },
+    { id: 'siege_gauntlet_3', name: 'Siege Gauntlet 3', description: 'The third siege line.', encounterId: 'siege_gauntlet_3', connections: ['siege_gauntlet_2', 'siege_gauntlet_dialog', 'north_pass'], position: [450, 570], mapArea: 'tharnag', isLocked: true, unlocks: ['siege_gauntlet_dialog'], hiddenName: 'Siege Line' },
     { id: 'siege_gauntlet_dialog', name: 'Siege Gauntlet Dialog', description: 'Beyond the siege lines.', encounterId: 'siege_gauntlet_dialog', connections: ['siege_gauntlet_3', 'tharnag_side_door'], position: [640, 580], mapArea: 'tharnag', isLocked: true, unlocks: ['tharnag_side_door'], hiddenName: '???' },
     { id: 'tharnag_side_door', name: 'Tharnag Side Door', description: 'A side entrance to Tharnag.', encounterId: 'tharnag_side_door', connections: ['siege_gauntlet_dialog'], position: [790, 450], mapArea: 'tharnag', isLocked: true, canRevisit: true, hiddenName: '???' },
+    // North Pass — unlocked after the throne audience. Clicking it
+    // hops to the Obsidian Wastes map (wastes_entry). Mirrors PY
+    // map.py:1088-1099 + game.py:2322-2341.
+    { id: 'north_pass', name: 'North Pass', description: 'A narrow mountain pass leading north to the Obsidian Wastes.', encounterId: '', connections: ['siege_gauntlet_3'], position: [60, 320], mapArea: 'tharnag', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'A path continues north through the mountains.' },
   ];
 
   for (const data of nodes) {
@@ -323,9 +361,11 @@ export function createVolcanoMap() {
 
   const nodes = [
     { id: 'volcano_approach', name: 'Volcano Approach', description: 'The approach to the volcano.', encounterId: 'volcano_arrival', connections: ['volcano_east_path'], position: [642, 940], mapArea: 'volcano', canRevisit: true, unlocks: ['volcano_east_path'] },
-    { id: 'volcano_east_path', name: 'Volcano East Path', description: 'A path along the eastern slope.', encounterId: '', connections: ['volcano_approach', 'volcano_lava_crossing'], position: [750, 790], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???' },
-    { id: 'volcano_lava_crossing', name: 'Volcano Lava Crossing', description: 'A crossing over a lava flow.', encounterId: '', connections: ['volcano_east_path', 'volcano_base'], position: [800, 630], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???' },
-    { id: 'volcano_base', name: 'Volcano Base', description: 'The base of the volcano crater.', encounterId: 'volcano_choice', connections: ['volcano_lava_crossing'], position: [770, 540], mapArea: 'volcano', isLocked: true, hiddenName: '???' },
+    // Each step up the slope unlocks the next so the player can walk
+    // straight from approach -> east path -> lava crossing -> base.
+    { id: 'volcano_east_path', name: 'Volcano East Path', description: 'A path along the eastern slope.', encounterId: '', connections: ['volcano_approach', 'volcano_lava_crossing'], position: [750, 790], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???', unlocks: ['volcano_lava_crossing'] },
+    { id: 'volcano_lava_crossing', name: 'Volcano Lava Crossing', description: 'A crossing over a lava flow.', encounterId: '', connections: ['volcano_east_path', 'volcano_base'], position: [800, 630], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???', unlocks: ['volcano_base'] },
+    { id: 'volcano_base', name: 'Volcano Base', description: 'The base of the volcano crater.', encounterId: 'volcano_choice', connections: ['volcano_lava_crossing'], position: [770, 540], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???' },
   ];
 
   for (const data of nodes) {
@@ -336,6 +376,10 @@ export function createVolcanoMap() {
 }
 
 // === Obsidian Wastes Map ===
+// Base map only carries the entry + exit. The labyrinth in between
+// is generated procedurally via generateLabyrinthNodes(map, seed) on
+// the first arrival, then re-generated from the same seed on load.
+// Mirrors PY map.py:create_obsidian_wastes_map.
 export function createObsidianWastesMap() {
   const map = new GameMap('obsidian_wastes', 'Obsidian Wastes');
   map.mapImages = {
@@ -343,8 +387,8 @@ export function createObsidianWastesMap() {
   };
 
   const nodes = [
-    { id: 'wastes_entry', name: 'Wastes Entry', description: 'The edge of the obsidian wastes.', encounterId: 'obsidian_wastes_arrival', connections: ['wastes_north'], position: [500, 950], mapArea: 'obsidian_wastes', canRevisit: true },
-    { id: 'wastes_north', name: 'Wastes North', description: 'Deeper into the obsidian wastes.', encounterId: 'wastes_north', connections: ['wastes_entry'], position: [410, 220], mapArea: 'obsidian_wastes', isLocked: true, canRevisit: true, hiddenName: '???' },
+    { id: 'wastes_entry', name: 'Edge of the Wastes', description: 'The frozen lava fields begin here, stretching endlessly northward.', encounterId: 'obsidian_wastes_arrival', connections: [], position: [500, 950], mapArea: 'obsidian_wastes', canRevisit: true },
+    { id: 'wastes_north', name: 'Northern Wastes', description: 'The Volcano looms closer. Thorgazad must be near.', encounterId: 'wastes_north', connections: [], position: [410, 220], mapArea: 'obsidian_wastes', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'Something ahead, near the Volcano.' },
   ];
 
   for (const data of nodes) {
@@ -354,20 +398,259 @@ export function createObsidianWastesMap() {
   return map;
 }
 
+// Procedural labyrinth generation between wastes_entry and
+// wastes_north. Mirrors PY map.py:generate_labyrinth_nodes — same
+// shape, same seeded RNG behavior so the generated layout is
+// deterministic per playthrough.
+const LABYRINTH_NAMES = [
+  'Obsidian Tunnel', 'Lava Crust Passage', 'Glass Cavern',
+  'Molten Corridor', 'Basalt Chamber', 'Cinder Path',
+  'Volcanic Vent', 'Sulfur Grotto', 'Magma Seam',
+  'Scorched Gallery', 'Ember Crossing', 'Ash-Choked Passage',
+  'Obsidian Ridge', 'Crystal Vein', 'Slag Heap',
+  'Smoke-Filled Chamber', 'Cooled Flow', 'Black Glass Trail',
+  'Fissure Path', 'Pyroclast Tunnel',
+];
+const LABYRINTH_DESCRIPTIONS = [
+  'Sharp obsidian formations crunch underfoot. The haze is thick here.',
+  'The ground is warm beneath your feet. Faint red light pulses from cracks below.',
+  'Walls of jagged black glass rise on either side, distorting your reflection.',
+  'Sulfurous fumes sting your eyes. The path narrows between volcanic boulders.',
+  'A vast cavern of cooled lava, its ceiling lost in darkness above.',
+  'The obsidian here is smooth as a mirror, treacherous to walk on.',
+  'Thin wisps of steam rise from vents in the rock floor.',
+  'Broken columns of basalt stand like petrified trees in the fog.',
+  'The air shimmers with heat. Pools of molten rock glow dimly nearby.',
+  'A narrow passage between towering obsidian walls. Every sound echoes.',
+  'The ground slopes unpredictably. Loose volcanic gravel slides beneath your boots.',
+  'Crystals of yellow sulfur crust the walls, casting a sickly glow.',
+  'A wide chamber where the lava cooled in strange rippling waves.',
+  'The fog is so thick you can barely see your own hands.',
+  'Scorched rock formations twist into bizarre, almost organic shapes.',
+  'A thin crust of obsidian over hollow ground — every step feels precarious.',
+  'The path forks around a massive volcanic boulder, then rejoins.',
+  'Ash drifts like black snow from somewhere above.',
+  'A field of obsidian shards, sharp as broken glass, blocks easy passage.',
+  'The remnants of an ancient lava tube, its walls smooth and dark.',
+];
+
+// Tiny seeded PRNG so layouts are deterministic for a given seed.
+// Mulberry32 — fast, non-crypto, fine for layout reproducibility.
+function _seededRng(seed) {
+  let s = (seed >>> 0) || 1;
+  return function() {
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function _rngInt(rng, min, max) { return Math.floor(rng() * (max - min + 1)) + min; }
+function _rngChoice(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
+function _rngShuffle(rng, arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function _rngSample(rng, arr, k) {
+  return _rngShuffle(rng, arr.slice()).slice(0, k);
+}
+
+export function generateLabyrinthNodes(gameMap, seed) {
+  const rng = _seededRng(seed);
+  // 7 inner tiers of 3-5 nodes each.
+  const tierSizes = Array.from({ length: 7 }, () => _rngInt(rng, 3, 5));
+  const names = _rngShuffle(rng, LABYRINTH_NAMES.slice());
+  const descs = _rngShuffle(rng, LABYRINTH_DESCRIPTIONS.slice());
+
+  const tiers = [['wastes_entry']];
+  for (let t = 1; t <= tierSizes.length; t++) {
+    const ids = [];
+    for (let i = 0; i < tierSizes[t - 1]; i++) ids.push(`lab_${t}_${i}`);
+    tiers.push(ids);
+  }
+  tiers.push(['wastes_north']);
+
+  // Random positions, min 80px spacing.
+  const allLab = {};
+  const used = [];
+  let nameIdx = 0;
+  for (let t = 1; t < tiers.length - 1; t++) {
+    for (const nodeId of tiers[t]) {
+      let x = 0, y = 0;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        x = _rngInt(rng, 100, 900);
+        y = _rngInt(rng, 120, 850);
+        let close = false;
+        for (const [px, py] of used) {
+          if (Math.abs(x - px) < 80 && Math.abs(y - py) < 80) { close = true; break; }
+        }
+        if (!close) break;
+      }
+      used.push([x, y]);
+      allLab[nodeId] = {
+        name: names[nameIdx % names.length],
+        description: descs[nameIdx % descs.length],
+        position: [x, y],
+      };
+      nameIdx++;
+    }
+  }
+
+  // Build connection graph.
+  const allNodeIds = [].concat(...tiers);
+  const connections = {};
+  for (const nid of allNodeIds) connections[nid] = [];
+
+  for (let t = 0; t < tiers.length - 1; t++) {
+    const cur = tiers[t];
+    const next = tiers[t + 1];
+    // Every next-tier node has at least one incoming forward edge.
+    for (const nextNid of next) {
+      const parent = _rngChoice(rng, cur);
+      if (!connections[parent].includes(nextNid)) connections[parent].push(nextNid);
+    }
+    // wastes_entry caps at 3 forward connections.
+    if (t === 0) {
+      const fwd = connections['wastes_entry'].filter(c => next.includes(c));
+      if (fwd.length > 3) {
+        const keep = _rngSample(rng, fwd, 3);
+        connections['wastes_entry'] = connections['wastes_entry'].filter(c => !fwd.includes(c) || keep.includes(c));
+      }
+    }
+    // Each current-tier node aims for 2 forward connections.
+    for (const curNid of cur) {
+      const existing = connections[curNid].filter(c => next.includes(c));
+      const need = 2 - existing.length;
+      if (need > 0) {
+        const candidates = next.filter(n => !connections[curNid].includes(n));
+        for (let i = 0; i < Math.min(need, candidates.length); i++) {
+          const pick = _rngChoice(rng, candidates);
+          connections[curNid].push(pick);
+          candidates.splice(candidates.indexOf(pick), 1);
+        }
+      }
+    }
+  }
+
+  // Cap forward connections (wastes_entry: 3, others: 2).
+  for (let t = 0; t < tiers.length - 1; t++) {
+    const cur = tiers[t];
+    const next = tiers[t + 1];
+    for (const curNid of cur) {
+      const maxFwd = curNid === 'wastes_entry' ? 3 : 2;
+      const fwd = connections[curNid].filter(c => next.includes(c));
+      if (fwd.length > maxFwd) {
+        const keep = _rngSample(rng, fwd, maxFwd);
+        connections[curNid] = connections[curNid].filter(c => !fwd.includes(c) || keep.includes(c));
+      }
+    }
+  }
+
+  // Add 1 backward (or sideways) connection per lab node.
+  for (let t = 1; t < tiers.length - 1; t++) {
+    for (const curNid of tiers[t]) {
+      let back = 1;
+      if (t >= 3 && rng() < 0.25) back = 2;
+      const targetTier = tiers[Math.max(0, t - back)];
+      const target = _rngChoice(rng, targetTier);
+      if (!connections[curNid].includes(target)) connections[curNid].push(target);
+    }
+  }
+
+  // Shuffle each connection list so the player can't tell forward from back.
+  for (const nid of Object.keys(connections)) _rngShuffle(rng, connections[nid]);
+
+  // Add the lab nodes to the map.
+  for (const [nodeId, info] of Object.entries(allLab)) {
+    gameMap.addNode(new MapNode({
+      id: nodeId,
+      name: info.name,
+      description: info.description,
+      connections: connections[nodeId].slice(),
+      position: info.position,
+      mapArea: 'obsidian_wastes',
+      isLocked: true,
+      canRevisit: true,
+      hiddenName: '???',
+      hiddenDescription: 'Darkness ahead.',
+    }));
+  }
+
+  // Update entry + north connections.
+  const entry = gameMap.getNode('wastes_entry');
+  if (entry) {
+    entry.connections = connections['wastes_entry'].slice();
+    entry.unlocks = entry.connections.filter(c => c.startsWith('lab_'));
+  }
+  const north = gameMap.getNode('wastes_north');
+  if (north) north.connections = connections['wastes_north'].slice();
+
+  // Each lab node unlocks its connections on visit.
+  for (const nodeId of Object.keys(allLab)) {
+    const n = gameMap.getNode(nodeId);
+    if (n) n.unlocks = n.connections.slice();
+  }
+}
+
 // === Tharnag Interior Map ===
+// Mirrors PY map.py:create_tharnag_interior_map. The Grand Hall lane
+// (side entry → lower → mid → upper stairs) is wired now; the
+// Artisan Hall and beyond are stubbed for future work — their nodes
+// stay in the data so encounters keep resolving by id, but they're
+// not connected to the navigable path yet.
 export function createTharnagInteriorMap() {
   const map = new GameMap('tharnag_interior', 'Tharnag Interior');
   map.mapImages = {
     grand_hall: 'Maps/TharnagGrandHall.jpg',
+    grand_staircase: 'Maps/TharnagGrandStairCase.jpg',
+    throne_room: 'Maps/TharnagThroneRoom.jpg',
+    personal_quarters: 'Maps/TharnagPersonalQuarter.jpg',
     artisan_hall: 'Maps/ArtisanHallMap.jpg',
   };
 
   const nodes = [
-    { id: 'grand_hall_side_entry', name: 'Grand Hall Side Entry', description: 'A side entrance to the grand hall.', encounterId: 'grand_hall_arrival', connections: ['grand_hall_lower_stairs'], position: [940, 620], mapArea: 'grand_hall', canRevisit: true },
-    { id: 'grand_hall_lower_stairs', name: 'Grand Hall Lower Stairs', description: 'Stairs descending from the grand hall.', encounterId: '', connections: ['grand_hall_side_entry', 'artisan_hall'], position: [580, 660], mapArea: 'grand_hall', canRevisit: true },
-    { id: 'artisan_hall', name: 'Artisan Hall', description: 'A hall of dwarven artisans.', encounterId: '', connections: ['grand_hall_lower_stairs', 'dwarven_tavern', 'dwarven_smithy'], position: [770, 870], mapArea: 'artisan_hall', canRevisit: true },
-    { id: 'dwarven_tavern', name: 'Dwarven Tavern', description: 'A bustling dwarven tavern.', encounterId: 'dwarven_tavern', connections: ['artisan_hall', 'dwarven_smithy'], position: [400, 500], mapArea: 'artisan_hall', canRevisit: true },
-    { id: 'dwarven_smithy', name: 'Dwarven Smithy', description: 'A dwarven smithy.', encounterId: 'dwarven_smithy', connections: ['artisan_hall', 'dwarven_tavern'], position: [400, 800], mapArea: 'artisan_hall', canRevisit: true },
+    // Grand Hall lane — side entry fires once (canRevisit:false), the
+    // stairs above it are pure navigation nodes (no encounters yet).
+    { id: 'grand_hall_side_entry', name: 'Grand Hall Side Entry', description: 'The side door opens into the vast Grand Hall of Tharnag.', encounterId: 'grand_hall_arrival', connections: ['grand_hall_lower_stairs'], position: [940, 620], mapArea: 'grand_hall', canRevisit: false },
+    { id: 'grand_hall_lower_stairs', name: 'Lower Stairs', description: 'Wide stone stairs carved into the mountain rock.', encounterId: '', connections: ['grand_hall_side_entry', 'grand_hall_mid_stairs', 'artisan_hall_entry'], position: [580, 660], mapArea: 'grand_hall', canRevisit: true },
+    { id: 'grand_hall_mid_stairs', name: 'Middle Stairs', description: 'The stairs continue upward past towering pillars.', encounterId: '', connections: ['grand_hall_lower_stairs', 'grand_hall_upper_stairs'], position: [690, 520], mapArea: 'grand_hall', canRevisit: true },
+    { id: 'grand_hall_upper_stairs', name: 'Upper Stairs', description: 'The top of the grand stairway. A massive archway leads deeper into Tharnag.', encounterId: '', connections: ['grand_hall_mid_stairs', 'staircase_entry'], position: [740, 420], mapArea: 'grand_hall', canRevisit: true, passthroughTo: 'staircase_entry' },
+    // Grand Staircase area — Thorb's homecoming dialog at the entry,
+    // then a top + landing bridge into the throne room.
+    { id: 'staircase_entry', name: 'Grand Staircase', description: 'A monumental staircase hewn from the living rock, lit by rivers of molten forge-light.', encounterId: 'grand_staircase_arrival', connections: ['grand_hall_upper_stairs', 'staircase_top'], position: [100, 970], mapArea: 'grand_staircase', canRevisit: false, passthroughTo: 'grand_hall_upper_stairs' },
+    { id: 'staircase_top', name: 'Top of the Staircase', description: 'The stairs open onto a broad landing. To the left, a passage leads to the Throne Room.', encounterId: '', connections: ['staircase_entry', 'staircase_landing', 'quarters_hallway'], position: [650, 640], mapArea: 'grand_staircase', canRevisit: true },
+    // To the Throne Room ↔ Throne Room — teleport pair across the
+    // staircase / throne_room area boundary. Walking onto the landing
+    // from the staircase auto-hops into the throne room and fires the
+    // arrival dialog on first visit; walking back out of the throne
+    // room hops you onto the landing. The teleport guard suppresses
+    // the bounce when fromNodeId already matches the paired node, so
+    // the encounter-complete re-fire doesn't ping-pong forever.
+    { id: 'staircase_landing', name: 'To the Throne Room', description: 'A wide landing where the passage turns toward the Throne Room.', encounterId: '', connections: ['staircase_top', 'throne_room_entry'], position: [400, 580], mapArea: 'grand_staircase', canRevisit: true, passthroughTo: 'throne_room_entry' },
+    { id: 'throne_room_entry', name: 'Throne Room', description: 'Massive iron doors stand open, revealing the Throne Room of Tharnag.', encounterId: 'throne_room_arrival', connections: ['staircase_landing', 'throne'], position: [500, 970], mapArea: 'throne_room', canRevisit: false, passthroughTo: 'staircase_landing' },
+    { id: 'throne', name: 'The Throne', description: "The ancient stone throne of Tharnag's king sits upon a raised dais.", encounterId: 'throne_audience', connections: ['throne_room_entry'], position: [510, 820], mapArea: 'throne_room', canRevisit: false },
+    // Personal Quarters lane — locked until the throne audience
+    // completes (handled by the throne_audience completion hook in
+    // main.js, which flips quarters_hallway.isLocked off and reveals
+    // its hidden name). Mirrors PY map.py:1493-1535. Hallway is a
+    // bridge node into the quarters; the quarters entry is a hub with
+    // bed (rest) + chest (Queen's Locket) leaves.
+    { id: 'quarters_hallway', name: 'Hallway to Quarters', description: 'A torchlit corridor leading to the personal quarters.', encounterId: '', connections: ['staircase_top', 'personal_quarters_entry'], position: [900, 640], mapArea: 'grand_staircase', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'A passage leading somewhere.', passthroughTo: 'personal_quarters_entry' },
+    { id: 'personal_quarters_entry', name: 'Personal Quarters', description: "A private chamber prepared for Thorb's companions.", encounterId: '', connections: ['quarters_hallway', 'quarters_bed', 'quarters_chest'], position: [520, 920], mapArea: 'personal_quarters', canRevisit: true, passthroughTo: 'quarters_hallway' },
+    { id: 'quarters_bed', name: 'Bed', description: 'A sturdy dwarven bed with thick furs. It looks incredibly inviting after the long journey.', encounterId: 'quarters_rest', connections: ['personal_quarters_entry', 'quarters_chest'], position: [520, 260], mapArea: 'personal_quarters', canRevisit: true },
+    { id: 'quarters_chest', name: 'Chest with Personal Belongings', description: 'A wooden chest containing personal items left for the party.', encounterId: 'quarters_chest', connections: ['personal_quarters_entry', 'quarters_bed'], position: [940, 540], mapArea: 'personal_quarters', canRevisit: false },
+    // Artisan Hall lane — unlocked by the throne audience completion.
+    // The entry sits on the Grand Hall side as a hidden gate; once
+    // open, it's a single navigation hop into the Artisan Hall hub
+    // which then connects city-style to the tavern + smithy.
+    // Mirrors PY map.py:1375-1418.
+    { id: 'artisan_hall_entry', name: 'To the Artisan Hall', description: "A wide passage leads to the Artisan Hall where Tharnag's craftsmen work.", encounterId: '', connections: ['grand_hall_lower_stairs', 'artisan_hall'], position: [350, 500], mapArea: 'grand_hall', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'A passage leads somewhere deeper into Tharnag.', passthroughTo: 'artisan_hall' },
+    { id: 'artisan_hall', name: 'Artisan Hall', description: "The great workshop of Tharnag's master craftsmen.", encounterId: '', connections: ['artisan_hall_entry', 'dwarven_tavern', 'dwarven_smithy'], position: [770, 870], mapArea: 'artisan_hall', canRevisit: true, isLocked: true, hiddenName: '???', passthroughTo: 'artisan_hall_entry' },
+    { id: 'dwarven_tavern', name: 'Dwarven Tavern', description: 'A warm tavern filled with the smell of ale and roasting meat.', encounterId: 'dwarven_tavern', connections: ['artisan_hall', 'dwarven_smithy'], position: [400, 500], mapArea: 'artisan_hall', canRevisit: true, isLocked: true, hiddenName: '???' },
+    { id: 'dwarven_smithy', name: 'Dwarven Smithy', description: 'A massive forge where master smiths craft the finest dwarven arms and armor.', encounterId: 'dwarven_smithy', connections: ['artisan_hall', 'dwarven_tavern'], position: [400, 800], mapArea: 'artisan_hall', canRevisit: true, isLocked: true, hiddenName: '???' },
   ];
 
   for (const data of nodes) {

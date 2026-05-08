@@ -79,6 +79,10 @@ export const TargetType = Object.freeze({
   ALL_ENEMIES: 'ALL_ENEMIES',
   RANDOM_ENEMY: 'RANDOM_ENEMY',
   SUMMON: 'SUMMON',
+  // Single ally (player character OR a player ally creature). Used by
+  // healing spells that let you pick who to heal. The play flow enters
+  // a heal-targeting state on cards carrying this on a heal effect.
+  SINGLE_ALLY: 'SINGLE_ALLY',
 });
 
 // === Status Effects ===

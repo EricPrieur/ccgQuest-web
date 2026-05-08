@@ -30,6 +30,45 @@ export class CombatBuff {
 }
 
 /**
+ * Permanent character-sheet buff. Lives on the player forever (no
+ * combats_remaining decrement) and projects into combat as a fresh
+ * CombatBuff at combat start when its `condition` matches the
+ * current enemy. Mirrors PY's persistent buff concept (Old God's
+ * Blessing, etc.).
+ *
+ * `condition` shapes:
+ *   { type: 'always' }                           — always active
+ *   { type: 'enemyName', includes: ['Sahuagin'] }— active when
+ *      enemy.name contains ANY of the given substrings (case-insensitive).
+ *   { type: 'enemyId', oneOf: ['sahuagin_baron'] } — exact enemy id match.
+ */
+export class PersistentBuff {
+  constructor({ id, name, description, imageId, effectType, effectValue,
+    trigger = 'on_attack', condition = { type: 'always' } }) {
+    this.id = id;
+    this.name = name;
+    this.description = description;
+    this.imageId = imageId;
+    this.effectType = effectType;
+    this.effectValue = effectValue;
+    this.trigger = trigger;
+    this.condition = condition;
+  }
+  matches(enemy, enemyId) {
+    const cond = this.condition || { type: 'always' };
+    if (cond.type === 'always') return true;
+    if (cond.type === 'enemyName' && Array.isArray(cond.includes)) {
+      const name = (enemy && enemy.name || '').toLowerCase();
+      return cond.includes.some(s => name.includes(String(s).toLowerCase()));
+    }
+    if (cond.type === 'enemyId' && Array.isArray(cond.oneOf)) {
+      return cond.oneOf.includes(enemyId);
+    }
+    return false;
+  }
+}
+
+/**
  * A perk chosen during character progression.
  */
 export class Perk {
@@ -60,6 +99,10 @@ export class Character {
     this.pendingSummons = [];
     this.buffs = [];
     this.combatBuffs = [];
+    // Persistent (character-sheet) buffs. Survive end-of-combat
+    // cleanup; project into combatBuffs at combat start when their
+    // condition matches the current enemy.
+    this.persistentBuffs = [];
     this.buffDisplayOrder = [];
     this.heroism = 0;
     this.shield = 0;
@@ -150,26 +193,43 @@ export class Character {
       this.deck.initializeForAdventure();
     }
     let taken = 0;
-    for (let i = 0; i < amount; i++) {
-      // Draw pile first, then recharge pile (via damageFromDrawPile).
+    // Use a while-loop so token discards don't consume the damage
+    // counter — Web tokens (and any other isToken card sitting in the
+    // draw pile) get dragged out without counting as HP, and the loop
+    // tries again for a real card to absorb the hit.
+    while (taken < amount) {
       const card = this.deck.damageFromDrawPile();
       if (card) {
-        taken++;
         // damageFromDrawPile pushes the card to discardPile directly, so the
         // generic discardCard hook didn't fire — re-check the on-discard
-        // passive here.
-        if (card.effects && card.effects.some(e => e && e.effectType === 'on_discard_draw')) {
+        // passives here (Lucky Pebble draw, Web token cascade).
+        const effects = (card.effects || []);
+        if (effects.some(e => e && e.effectType === 'on_discard_draw')) {
           this.deck.draw(1, this.maxHandSize || 10);
         }
+        for (const e of effects) {
+          if (e && e.effectType === 'on_discard_discard') {
+            const n = Math.max(1, e.value || 1);
+            for (let k = 0; k < n; k++) {
+              if (this.deck.drawPile.length === 0) break;
+              const dragged = this.deck.drawPile.pop();
+              this.deck.discardCard(dragged);
+            }
+          }
+        }
+        // Tokens (Web token most importantly) are clog, not lifeforce —
+        // they discard without absorbing the swing.
+        if (!card.isToken) taken++;
         continue;
       }
       // No more cards in deck — pull from hand instead (random card).
+      // Tokens in hand (Goodberries, etc.) similarly skip the HP cost.
       if (this.deck.hand.length > 0) {
         const idx = Math.floor(Math.random() * this.deck.hand.length);
         const handCard = this.deck.hand.splice(idx, 1)[0];
         handCard.exhausted = false;
         this.deck.discardCard(handCard);
-        taken++;
+        if (!handCard.isToken) taken++;
         continue;
       }
       // No cards anywhere — character is dead

@@ -131,6 +131,8 @@ export const CARD_ART_MAP = {
   buff_regrowth: 'RegrowthDruid.jpg',
   buff_elf_reinforcements: 'ElfWarrior.jpg',
   buff_blizzard: 'BlizzardEnv.jpg',
+  buff_sahuagin_eye: 'SahuaginEye.jpg',
+  buff_old_god_blessing: 'SahuaginEye.jpg',
 
   // === Enemy Cards - Spider ===
   poisoned_bite: 'PoisonedBite.jpg',
@@ -142,11 +144,11 @@ export const CARD_ART_MAP = {
   trident_thrust: 'SahuaginTrident.jpg',
   sahuagin_trident: 'SahuaginTrident.jpg',
   scale_armor: 'ScaleArmor.jpg',
-  scale_armor_loot: 'ScaleArmor.jpg',
   fish_scale_boots: 'FishScaleBoots.jpg',
   sahuagin_eye: 'SahuaginEye.jpg',
   blood_in_the_water: 'Shark.jpg',
   whirlpool: 'Whirlpool.jpg',
+  swimming_in_current: 'SwimingInCurrent.jpg',
   sahuagin_priest_staff: 'SahuaginPriestStaff.jpg',
   sahuagin_staff_enemy: 'SahuaginPriestStaff.jpg',
   barnacle_encrusted_plate: 'BarnacleEncrustedPlate.jpg',
@@ -158,6 +160,11 @@ export const CARD_ART_MAP = {
   goblin_rocket_boots: 'GoblinRocketBoots.jpg',
   goblin_sapper_charges: 'GoblinSapperCharges.jpg',
   ogre_maul: 'OgreMaul.jpg',
+  // Enemy character "Siege Ogre" — portrait reuses the ram art.
+  siege_ogre: 'OgreSiegeRam.jpg',
+  // Goblin Sapper creature portrait (referenced via creature_<name>
+  // and the lazy fallback).
+  goblin_sapper: 'GoblinSapper.jpg',
 
   // === Enemy Cards - Obsidian ===
   crush: 'ObsidianGolem.jpg',
@@ -289,7 +296,13 @@ export const CARD_ART_MAP = {
   sahuagin_sentinel: 'SahuaginSentinel.jpg',
   sahuagin_priest: 'SahuaginPriest.jpg',
   sahuagin_baron: 'SahuaginBaron.jpg',
+  // Piranhas Swarm boss splash needs `getCardArt('piranhas_swarm')`
+  // to resolve — the entry below in POWER_ART_MAP only feeds power
+  // lookups, so without this the character-splash overlay fell
+  // through to a brown rectangle.
+  piranhas_swarm: 'PiranhasSwarm.jpg',
   obsidian_golem: 'ObsidianGolem.jpg',
+  obsidian_construct: 'ObsidianGolem.jpg',
   obsidian_slime: 'ObsidianSlime.jpg',
   magma_drake: 'MagmaDrake.jpg',
   general_zhost: 'GeneralZhost.jpg',
@@ -309,6 +322,9 @@ export const CARD_ART_MAP = {
   small_spider: 'PetSpider.jpg',
   spider: 'PetSpider.jpg',
   deathjump_spider: 'DeathjumpSpider.jpg',
+  // Enemy Character is named 'Deathjump Spiders' (plural) so the
+  // portrait lookup needs the plural form too.
+  deathjump_spiders: 'DeathjumpSpider.jpg',
   bone_amalgam: 'BoneAmalgam.jpg',
   goblin_sapper: 'GoblinSapper.jpg',
   elf_warrior: 'ElfWarrior.jpg',
@@ -318,6 +334,7 @@ export const CARD_ART_MAP = {
   "general_zhost's_army": 'GeneralZhost.jpg',
   general_zhost_s_army: 'GeneralZhost.jpg',
   raena: 'RaenaAlly.jpg',
+  valdrisa: 'ValdrisaEmberforge.jpg',
   piranhas: 'PiranhasSwarm.jpg',
   durin_stoneheart: 'DurinStoneheart.jpg',
   balgrim_ironvein: 'BalgrimIronvein.jpg',
@@ -359,8 +376,14 @@ export const POWER_ART_MAP = {
   armor: 'ArmorPower.jpg',
   split: 'SplitSlime.jpg',
   dire_fury: 'DireFury.jpg',
+  overwhelm: 'MimicInAntiquity.jpg',
   wolf_pack: 'WolfPackPower.jpg',
   piranhas_swarm: 'PiranhasSwarm.jpg',
+  piranha: 'PiranhasSwarm.jpg',
+  shark: 'Shark.jpg',
+  from_the_deep: 'Shark.jpg',
+  sahuagin_sentinel: 'SahuaginSentinel.jpg',
+  high_priest: 'SahuaginPriest.jpg',
   massive_ogre_ram: 'OgreSiegeRam.jpg',
   goblin_sapper_squad: 'GoblinSapper.jpg',
   obsidian_construct: 'ObsidianGolem.jpg',
