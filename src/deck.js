@@ -58,11 +58,25 @@ export class Deck {
       if (idx !== -1) this.drawPile.splice(idx, 1);
     }
 
-    // Remove cards equal to discard pile count (persistent damage)
-    const dmgCount = this.discardPile.length;
-    if (dmgCount > 0 && dmgCount < this.drawPile.length) {
-      this.drawPile.splice(this.drawPile.length - dmgCount, dmgCount);
-    } else if (dmgCount >= this.drawPile.length) {
+    // Pull out cards that match the persistent discard pile (by ID, one per
+    // match). This is critical for companion cards (Thorb / Raena / Val /
+    // Scout) whose death route the card to discard — without this match,
+    // the generic "damage slice" below could miss the discarded copy and
+    // leave a duplicate in drawPile.
+    const discardIds = this.discardPile.map(c => c.id);
+    let remainingDmg = 0;
+    for (const id of discardIds) {
+      const idx = this.drawPile.findIndex(c => c.id === id);
+      if (idx !== -1) this.drawPile.splice(idx, 1);
+      else remainingDmg++; // discard card whose id isn't in drawPile (shouldn't happen for masterDeck cards)
+    }
+
+    // Any leftover damage that didn't match by id still shrinks the draw
+    // pile generically — preserves the legacy "deck size = HP" rule for
+    // edge cases where discard contents drift from masterDeck.
+    if (remainingDmg > 0 && remainingDmg < this.drawPile.length) {
+      this.drawPile.splice(this.drawPile.length - remainingDmg, remainingDmg);
+    } else if (remainingDmg >= this.drawPile.length) {
       this.drawPile = [];
     }
 

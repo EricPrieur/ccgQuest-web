@@ -2099,33 +2099,48 @@ export function createTharnagSideDoorEncounter() {
 // Volcano Encounters
 // ============================================================
 
-export function createVolcanoArrivalEncounter() {
-  return new Encounter('volcano_arrival', 'Volcano Slopes', 'The volcano slopes', [
+// Kobold Drake Rider — random encounter on the volcano slopes
+// (volcano_east_path / volcano_lava_crossing / volcano_base). Mirrors
+// PY encounter.py:create_kobold_drake_rider_encounter. The volcano-
+// path arrival flow stamps `loot_cards = ["drake_rider_loot_city"]`
+// on the loot phase so the drop rolls at 50% (vs the guaranteed roll
+// used by the dwarven-city variant).
+export function createKoboldDrakeRiderEncounter() {
+  return new Encounter('kobold_drake_rider', 'Kobold Drake Rider', 'A kobold drake rider charges at you from the volcanic ridge.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('The ground beneath your feet shifts from earth to dark, porous rock. The volcano rises before you, its slopes scarred by ancient lava flows.'),
-        new EncounterText('Heat radiates from fissures in the rock, and the air shimmers with waves of warmth. The smell of sulfur stings your nostrils.'),
-        new EncounterText('Obsidian rocks jut from the ground like black glass teeth, their edges razor-sharp and gleaming in the harsh light. Nothing grows here.'),
+        new EncounterText("The ground shakes as a massive frost drake comes barreling around the ridge, a kobold rider clinging to its back and screaming a war cry. The drake's claws tear into the rock as it charges straight at you, icy breath billowing from its jaws. War horns sound in the distance — the army knows you're here."),
       ],
     }),
-    // Player can drop back into the labyrinth to grind / loot here. The
-    // node is canRevisit, so the choice re-fires each time the player
-    // returns to the volcano approach.
     new EncounterPhaseData({
-      phaseType: EncounterPhase.CHOICE,
-      choices: [
-        new EncounterChoice(
-          'Climb the volcano',
-          'You shoulder your gear and start the long climb up the slope.',
-          '', 0,
-          { completesEncounter: true }
-        ),
-        new EncounterChoice(
-          'Return to the Obsidian Wastes',
-          'You retrace your steps. The labyrinth still calls — there may be more to find among its corridors.',
-          'enter_obsidian_wastes', 1
-        ),
+      phaseType: EncounterPhase.COMBAT,
+      enemyId: 'kobold_drake_rider',
+    }),
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.LOOT,
+      lootGoldDice: [3, 6],
+      lootCards: ['drake_rider_loot'],
+    }),
+  ]);
+}
+
+// Qualibaf Volcano arrival — the dramatic "frozen volcano + invasion
+// force" beat. TEXT-only, no choice. Mirrors PY encounter.py:
+// create_volcano_arrival_encounter.
+export function createVolcanoArrivalEncounter() {
+  return new Encounter('volcano_arrival', 'Qualibaf Volcano', 'The volcano looms before you, wreathed in unnatural cold.', [
+    new EncounterPhaseData({
+      phaseType: EncounterPhase.TEXT,
+      texts: [
+        new EncounterText('As you finally draw close to the Qualibaf Volcano, the air grows unnaturally cold. The lava flows that should be molten are frozen in place — rivers of black glass caught mid-surge. Dark shapes circle in the sky above, and across the mountain\'s slopes, armies of kobolds scurry like ants on a hill.'),
+        new EncounterText("By the ancestors... I've never seen it like this. The Volcano should be burning, not... frozen. Something powerful is at work here. Something that shouldn't be possible.", 'Thorb'),
+        new EncounterText("Look at those numbers. There must be thousands of them. This isn't a raiding party — it's an invasion force.", 'Raena'),
+        new EncounterText("I've seen kobold war camps before, but nothing like this. Those shadows in the sky... those aren't birds. Whatever is commanding them has power we haven't faced yet.", 'Val'),
+        new EncounterText("Then we don't march through the front door. We find a way in that isn't swarmed by every kobold in the north. There has to be an old passage — Thorgazad was built by dwarves, and dwarves always leave themselves a back door.", 'Thorb'),
+        new EncounterText('A back door into a frozen volcano crawling with monsters. Just another day, then.', 'Raena'),
+        new EncounterText("We've come too far to turn back. Whatever lurks inside that mountain — we face it together.", 'Val'),
+        new EncounterText("Aye. Together. Let's find our way in.", 'Thorb'),
       ],
     }),
   ]);
@@ -2227,32 +2242,18 @@ export function createObsidianWastesArrivalEncounter() {
   ]);
 }
 
+// Northern Wastes — TEXT-only rest stop. On completion the game heals
+// up to 8 cards from the discard pile and transitions straight into
+// the Qualibaf Volcano map. Mirrors PY encounter.py:create_wastes_north_encounter
+// + game.py:4545 (post-completion heal + volcano transition).
 export function createWastesNorthEncounter() {
-  return new Encounter('wastes_north', 'Northern Wastes', 'The northern edge of the wastes', [
+  return new Encounter('wastes_north', 'Northern Wastes', 'You find shelter behind a rocky outcrop.', [
     new EncounterPhaseData({
       phaseType: EncounterPhase.TEXT,
       texts: [
-        new EncounterText('You reach the northern edge of the Obsidian Wastes. The terrain grows rougher here, the obsidian giving way to jagged basalt formations.'),
-        new EncounterText('The volcano looms to the north, its peak wreathed in smoke and ash. Rivers of ancient lava have carved deep channels into the landscape, now cooled into twisted stone corridors.'),
-      ],
-    }),
-    // Standing at the northern edge: push on into the Volcano, or stay
-    // in the Wastes and grind another lap through the labyrinth. The
-    // node is canRevisit, so the choice fires on every return trip.
-    new EncounterPhaseData({
-      phaseType: EncounterPhase.CHOICE,
-      choices: [
-        new EncounterChoice(
-          'Push on toward the Volcano',
-          'You leave the wastes behind and march toward the smoking peak. The heat thickens with every step.',
-          'enter_volcano', 1
-        ),
-        new EncounterChoice(
-          'Stay and search the labyrinth',
-          'You turn back into the obsidian maze. There may still be threats — and rewards — among the molten corridors.',
-          '', 0,
-          { completesEncounter: true }
-        ),
+        new EncounterText('You spot a sheltered alcove between two massive obsidian pillars. The wind dies down here, and the heat from the wastes feels almost bearable.'),
+        new EncounterText("Let's catch our breath while we can. The volcano's close now — I can feel the cold from here. Something unnatural about it.", 'Thorb'),
+        new EncounterText('You rest briefly, tending your wounds and gathering your strength for what lies ahead.'),
       ],
     }),
   ]);
@@ -2902,6 +2903,7 @@ export const ENCOUNTER_REGISTRY = {
   obsidian_golem: createObsidianGolemEncounter,
   obsidian_slime: createObsidianSlimeEncounter,
   wastes_north: createWastesNorthEncounter,
+  kobold_drake_rider: createKoboldDrakeRiderEncounter,
   // Tharnag Interior
   grand_hall_arrival: createGrandHallArrivalEncounter,
   grand_staircase_arrival: createGrandStaircaseArrivalEncounter,

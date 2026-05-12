@@ -413,6 +413,13 @@ export const SOUND_MAP = {
   kobold_attack:  'Monster/reptilian_hiss_02',
   // General Zhost — beefier reptilian hiss for the army + boss fights.
   zhost_hiss:     'Monster/reptilian_hiss_03',
+  // Kobold Drake Rider — same reptilian roar so the drake's signature
+  // hiss bookends its fight (showcase + death).
+  drake_rider_hiss: 'Monster/reptilian_hiss_03',
+  // Frost Drake — alien wail. Wired to its attack swings, its death
+  // cue, and the staggered second beat on the Drake Rider fight-start
+  // splash so the drake is heard before the rider's hiss settles.
+  frost_drake_scream: 'Monster/monster_alien_scream_01',
   // Wolf creature swing (Wolf Pack fight) — chunky chew shared by flesh
   // and blocked outcomes.
   wolf_attack:    'Monster/monster_chew_02',

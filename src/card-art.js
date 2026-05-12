@@ -175,6 +175,9 @@ export const CARD_ART_MAP = {
   obsidian_staff: 'ObsidianStaff.jpg',
   obsidian_spear: 'ObsidianSpear.jpg',
   obsidian_core: 'ObsidianCore.jpg',
+  // CombatBuff visuals — reuse the card art so the buff icon shown on
+  // the character row matches the card the player just played.
+  buff_obsidian_core: 'ObsidianCore.jpg',
   obsidian_shard: 'ObsidianShard.jpg',
   obsidian_curse: 'ObsidianCurseShard.jpg',
   obsidian_shard_token: 'ObsidianCurseShard.jpg',
@@ -303,6 +306,11 @@ export const CARD_ART_MAP = {
   piranhas_swarm: 'PiranhasSwarm.jpg',
   obsidian_golem: 'ObsidianGolem.jpg',
   obsidian_construct: 'ObsidianGolem.jpg',
+  obsidian_slime: 'ObsidianSlime.jpg',
+  kobold_drake_rider: 'KoboldDrakeRider.jpg',
+  // Codex lookup uses the encounter id (plural). The singular alias
+  // above is still used by the player-side Pet Spider summon.
+  forest_spiders: 'DeathjumpSpider.jpg',
   obsidian_slime: 'ObsidianSlime.jpg',
   magma_drake: 'MagmaDrake.jpg',
   general_zhost: 'GeneralZhost.jpg',

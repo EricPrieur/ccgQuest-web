@@ -390,7 +390,6 @@ function createSmallSpiderCreature() {
     attack: 0,
     maxHp: 1,
     poisonAttack: true,
-    isCompanion: true,
   });
 }
 
@@ -586,8 +585,8 @@ export function createRaenaCard() {
   return new Card({
     id: 'raena_card',
     name: 'Raena',
-    description: 'Recharge +1 Card -> Summon Raena to the battle!',
-    shortDesc: 'R+1->Summon Raena',
+    description: 'Play -> Call Raena to the battle!',
+    shortDesc: 'Call Raena',
     subtype: 'allies',
     cardType: CardType.CREATURE,
     costType: CostType.RECHARGE,
@@ -607,8 +606,8 @@ export function createRaenaCard2() {
   return new Card({
     id: 'raena_card_2',
     name: 'Raena',
-    description: 'Recharge +1 Card -> Summon Raena (3/4, 2 targets) to the battle!',
-    shortDesc: 'R+1->Summon Raena',
+    description: 'Play -> Call Raena to the battle!',
+    shortDesc: 'Call Raena',
     subtype: 'allies',
     cardType: CardType.CREATURE,
     costType: CostType.RECHARGE,
@@ -1839,6 +1838,20 @@ export function createBuffSahuaginEye() {
     effects: [],
   });
 }
+export function createBuffObsidianCore() {
+  // Granted by playing the Obsidian Core relic. Consumed on the next
+  // attack — adds +2 damage when the target has Armor or Shield.
+  return new Card({
+    id: 'buff_obsidian_core',
+    name: 'Obsidian Core',
+    description: 'Next Attack: +2 damage vs Armor/Shield.',
+    shortDesc: 'Next Attack +2\nvs Armor/Shield',
+    subtype: 'buff',
+    cardType: CardType.ABILITY,
+    costType: CostType.FREE,
+    effects: [],
+  });
+}
 export function createBuffOldGodBlessing() {
   // Granted by praying at the Old God Statue. Permanent — projects
   // into combat as a fresh CombatBuff at the start of every Sahuagin
@@ -2644,19 +2657,27 @@ export function createPullingBackTheRam() {
 // ============================================================
 
 export function createDrakeRiderCharge() {
+  // Mirrors PY cards_basic.py:create_drake_rider_charge. The rider buffs
+  // the warband (+1 Heroism to itself and every ally) then jabs for 2
+  // damage, AND a random drake ally on the enemy side gets a free
+  // attack (drake_attack effect). The drake doesn't exhaust — it can
+  // still swing on its own turn afterward.
   return new Card({
     id: 'drake_rider_charge',
     name: 'Drake Rider Charge!',
-    description: 'Recharge +1 -> Deal 3 Damage + 1 Ice.',
-    shortDesc: 'R+1->3 Dmg + Ice',
+    description: 'Recharge +1 -> You and allies gain 1 Heroism. Deal 2 Damage. A random drake attacks.',
+    shortDesc: 'R+1->+1 Hero\n2 Dmg, Drake',
     subtype: 'weapon',
     cardType: CardType.ATTACK,
     costType: CostType.RECHARGE,
     effects: [
-      new CardEffect('damage', 3, TargetType.SINGLE_ENEMY),
-      new CardEffect('apply_ice', 1, TargetType.SINGLE_ENEMY),
+      new CardEffect('buff_allies_heroism', 1, TargetType.SELF),
+      new CardEffect('damage', 2, TargetType.SINGLE_ENEMY),
+      new CardEffect('drake_attack', 1, TargetType.SELF),
       new CardEffect('recharge_extra', 1, TargetType.SELF),
     ],
+    // The drake's reptilian roar plays alongside the showcase art when
+    // the enemy fires this card. Wired via CARD_SFX_OVERRIDES in main.js.
   });
 }
 
@@ -2672,6 +2693,26 @@ export function createChainShirt() {
     costType: CostType.RECHARGE,
     effects: [new CardEffect('block', 3, TargetType.SELF)],
     rarity: 'uncommon',
+  });
+}
+
+// Frost Drake Scale — relic dropped by the Kobold Drake Rider on the
+// Qualibaf Volcano path. Mirrors PY cards_basic.py:create_frost_drake_scale.
+export function createFrostDrakeScale() {
+  return new Card({
+    id: 'frost_drake_scale',
+    name: 'Frost Drake Scale',
+    description: 'Recharge -> Deal 1 Ice to a random enemy. Draw 1.',
+    shortDesc: 'R->Ice random\nDraw 1',
+    subtype: 'relic',
+    cardType: CardType.ABILITY,
+    costType: CostType.RECHARGE,
+    effects: [
+      new CardEffect('apply_ice', 1, TargetType.RANDOM_ENEMY),
+      new CardEffect('draw', 1, TargetType.SELF),
+    ],
+    rarity: 'uncommon',
+    tier: 2,
   });
 }
 
@@ -2959,8 +3000,8 @@ export function createValdrisaCard() {
   return new Card({
     id: 'valdrisa_card',
     name: 'Valdrisa Emberforge',
-    description: 'Recharge +1 Card -> Summon Valdrisa to the battle!',
-    shortDesc: 'R+1->Summon Val',
+    description: 'Play -> Call Valdrisa to the battle!',
+    shortDesc: 'Call Valdrisa',
     subtype: 'allies',
     cardType: CardType.CREATURE,
     costType: CostType.RECHARGE,
@@ -3169,8 +3210,8 @@ export function createThorbCard() {
   return new Card({
     id: 'thorb_card',
     name: 'Thorb',
-    description: 'Recharge +1 -> Summon Thorb (2/4) to battle!',
-    shortDesc: 'R+1->Summon Thorb',
+    description: 'Play -> Call Thorb to the battle!',
+    shortDesc: 'Call Thorb',
     subtype: 'allies',
     cardType: CardType.CREATURE,
     costType: CostType.RECHARGE,
@@ -3188,8 +3229,8 @@ export function createThorbUpgradedCard() {
   return new Card({
     id: 'thorb_card_2',
     name: 'Thorb',
-    description: 'Recharge +1 -> Summon Thorb (2/5 Sentinel)!',
-    shortDesc: 'R+1->Summon Thorb',
+    description: 'Play -> Call Thorb to the battle!',
+    shortDesc: 'Call Thorb',
     subtype: 'allies',
     cardType: CardType.CREATURE,
     costType: CostType.RECHARGE,
@@ -3249,6 +3290,7 @@ function createDwarvenScoutCreature() {
     maxHp: 2,
     shield: 1,
     endTurnDamage: 1,
+    isCompanion: true,
     description: 'Turn End: 1 Dmg to random enemy',
   });
 }
@@ -3257,8 +3299,8 @@ export function createDwarvenScoutCard() {
   return new Card({
     id: 'dwarven_scout',
     name: 'Dwarven Scout',
-    description: 'Recharge -> Summon Dwarven Scout to the battle!',
-    shortDesc: 'R->Summon Scout',
+    description: 'Play -> Call Dwarven Scout to the battle!',
+    shortDesc: 'Call Scout',
     subtype: 'allies',
     cardType: CardType.CREATURE,
     costType: CostType.RECHARGE,

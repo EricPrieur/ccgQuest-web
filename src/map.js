@@ -113,7 +113,10 @@ export function createPrisonCellMap() {
     { id: 'splash_point', name: 'Splash Point', description: 'Where you fell into the foul sewer water.', encounterId: 'splash_point', connections: ['dead_end', 'sewer_junction'], position: [728, 110], mapArea: 'sewers', isLocked: true, unlocks: ['dead_end', 'sewer_junction'] },
     { id: 'dead_end', name: 'Dead End', description: 'A sturdy metal gate blocks the way.', encounterId: 'dead_end', connections: ['splash_point', 'tight_opening'], position: [1050, 250], mapArea: 'sewers', isLocked: true, unlocks: ['tight_opening'], hiddenName: 'Deeper Sewer', hiddenDescription: 'The tunnel slopes upward into darkness.' },
     { id: 'tight_opening', name: 'Tight Opening', description: 'A narrow gap carved through rock by slime acid.', encounterId: 'tight_opening', connections: ['dead_end', 'lost_shrine'], position: [1220, 380], mapArea: 'sewers', isLocked: true, canRevisit: true, hiddenName: 'Deeper Sewer', hiddenDescription: 'The tunnel continues into darkness.' },
-    { id: 'lost_shrine', name: 'Lost Shrine', description: 'A forgotten shrine glowing with faint golden light.', encounterId: 'lost_shrine', connections: ['tight_opening'], position: [1320, 220], mapArea: 'sewers', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'Something glows faintly beyond the gap.' },
+    // Lost Shrine — single-shot. The encounter grants a class-specific
+    // ability card via the ABILITY_SELECT flow; re-firing would let the
+    // player stack extra ability picks. canRevisit removed accordingly.
+    { id: 'lost_shrine', name: 'Lost Shrine', description: 'A forgotten shrine glowing with faint golden light.', encounterId: 'lost_shrine', connections: ['tight_opening'], position: [1320, 220], mapArea: 'sewers', isLocked: true, hiddenName: '???', hiddenDescription: 'Something glows faintly beyond the gap.' },
     { id: 'sewer_junction', name: 'Sewer Junction', description: 'A junction where passages branch.', encounterId: 'sewer_junction', connections: ['splash_point', 'deeper_sewer', 'less_deep_sewer'], position: [500, 420], mapArea: 'sewers', isLocked: true, unlocks: ['deeper_sewer', 'less_deep_sewer'], hiddenName: 'Deeper Sewer', hiddenDescription: 'The tunnel descends deeper into darkness.' },
     { id: 'deeper_sewer', name: 'Abandoned Camp', description: 'An old campsite left behind by adventurers.', encounterId: 'abandoned_camp', connections: ['sewer_junction'], position: [728, 420], mapArea: 'sewers', isLocked: true, canRevisit: true, hiddenName: 'Dark Passage', hiddenDescription: 'A passage descending into total darkness.' },
     // Upward Passage: dialog only fires the first time. After that, the node
@@ -221,11 +224,18 @@ export function createRuinsBasinMap() {
   };
 
   const nodes = [
-    { id: 'piranha_pool', name: 'Piranha Pool', description: 'Dark water churns with hungry fish.', encounterId: 'piranha_pool', connections: ['pool_edge'], position: [512, 500], mapArea: 'ruins_basin' },
+    // After the first dive the player can hop straight back across the
+    // basin to the temple entrance; the pool/sentinel/exit chain stays
+    // walkable for anyone who wants the long way around.
+    { id: 'piranha_pool', name: 'Piranha Pool', description: 'Dark water churns with hungry fish.', encounterId: 'piranha_pool', connections: ['pool_edge'], position: [512, 500], mapArea: 'ruins_basin', passthroughTo: 'flooded_entrance' },
     { id: 'pool_edge', name: 'Pool Edge', description: 'The edge of the pool, a sentinel watches.', encounterId: 'sahuagin_sentinel', connections: ['pool_south'], position: [760, 380], mapArea: 'ruins_basin' },
     { id: 'pool_south', name: 'Pool South', description: 'The southern edge of the basin.', encounterId: 'pool_south', connections: ['pool_edge', 'pool_exit'], position: [798, 686], mapArea: 'ruins_basin', unlocks: ['pool_exit'] },
     { id: 'pool_exit', name: "Pool's Exit", description: 'A patrolling sentinel blocks the corridor.', encounterId: 'pool_exit', connections: ['pool_south', 'flooded_entrance'], position: [520, 910], mapArea: 'ruins_basin', isLocked: true, unlocks: ['flooded_entrance'], passthroughTo: 'flooded_entrance' },
-    { id: 'flooded_entrance', name: 'Flooded Entrance', description: 'The entrance to a flooded temple.', encounterId: '', connections: ['pool_exit', 'temple_right', 'temple_left', 'flooded_atrium'], position: [512, 120], mapArea: 'flood_temple', canRevisit: true, passthroughTo: 'pool_exit' },
+    // Flooded entrance hops back to the Piranha Pool (the first pool
+    // node), letting the player skip the cleared pool/sentinel/exit
+    // sequence on the way out. The opposite teleport lives on
+    // piranha_pool above.
+    { id: 'flooded_entrance', name: 'Flooded Entrance', description: 'The entrance to a flooded temple.', encounterId: '', connections: ['pool_exit', 'temple_right', 'temple_left', 'flooded_atrium'], position: [512, 120], mapArea: 'flood_temple', canRevisit: true, passthroughTo: 'piranha_pool' },
     { id: 'temple_right', name: 'Conservatory Wing', description: 'A well-conserved area of the temple. Some light shows through cracks in the ceiling.', encounterId: 'conservatory_wing', connections: ['flooded_entrance', 'temple_depths', 'altar_entrance', 'flooded_atrium'], position: [902, 492], mapArea: 'flood_temple', passthroughTo: 'altar_entrance', unlocks: ['altar_entrance'] },
     // Atrium: new mid-room node not in the PY map. A direct link from
     // the flooded entrance straight down to the temple depths so the
@@ -250,9 +260,15 @@ export function createRuinsBasinMap() {
     // --- Flooded Altar (revealed via Conservatory Wing) ---
     { id: 'altar_entrance', name: 'Sacred Chamber', description: 'A vast chamber. The air is thick with brine and decay.', encounterId: '', connections: ['temple_right', 'flooded_altar'], unlocks: ['flooded_altar'], position: [200, 500], mapArea: 'flooded_altar', isLocked: true, canRevisit: true, passthroughTo: 'temple_right' },
     { id: 'flooded_altar', name: 'Flooded Altar', description: 'A sacred area within the temple. Dark shapes move beneath the water.', encounterId: 'flooded_altar', connections: ['altar_entrance', 'old_god_statue'], unlocks: ['old_god_statue'], position: [750, 500], mapArea: 'flooded_altar', isLocked: true },
-    { id: 'old_god_statue', name: 'Statue of an Old God', description: 'An ancient statue stands half-submerged, its hands outstretched.', encounterId: 'old_god_statue', connections: ['flooded_altar'], position: [890, 512], mapArea: 'flooded_altar', isLocked: true, canRevisit: true },
+    // Old God Statue — single-shot. The prayer encounter grants the
+    // permanent Old God's Blessing buff + a Sahuagin Eye relic on
+    // completion; re-firing the dialog would let the player double up.
+    { id: 'old_god_statue', name: 'Statue of an Old God', description: 'An ancient statue stands half-submerged, its hands outstretched.', encounterId: 'old_god_statue', connections: ['flooded_altar'], position: [890, 512], mapArea: 'flooded_altar', isLocked: true },
     { id: 'passage_entrance', name: 'Passage Entrance', description: 'The entrance to a passage beyond the temple.', encounterId: '', connections: ['temple_depths', 'passage_ambush'], position: [512, 150], mapArea: 'temple_exit', canRevisit: true, passthroughTo: 'temple_depths' },
-    { id: 'passage_ambush', name: 'Passage Ambush', description: 'A shadowed gallery.', encounterId: 'passage_ambush', connections: ['passage_entrance', 'cave_exit'], position: [512, 500], mapArea: 'temple_exit', hiddenName: 'Shadowed Gallery' },
+    // Passage Ambush — repeatable combat. The sahuagin keep prowling
+    // this corridor regardless of how many fall, so each return trip
+    // rolls a fresh fight.
+    { id: 'passage_ambush', name: 'Passage Ambush', description: 'A shadowed gallery.', encounterId: 'passage_ambush', connections: ['passage_entrance', 'cave_exit'], position: [512, 500], mapArea: 'temple_exit', hiddenName: 'Shadowed Gallery', canRevisit: true },
     // Cave Exit is a one-shot narrative beat that ends with the
     // party stepping out onto the mountain overlook (different
     // map_area). passthroughTo makes a click after first completion
@@ -269,7 +285,10 @@ export function createRuinsBasinMap() {
     { id: 'general_store', name: 'General Store', description: 'A general goods store.', encounterId: 'general_store', connections: ['city_south_gate', 'city_square'], position: [650, 610], mapArea: 'qualibaf', canRevisit: true },
     { id: 'inn', name: 'Inn', description: 'A cozy inn.', encounterId: 'inn', connections: ['city_south_gate', 'city_square'], position: [684, 430], mapArea: 'qualibaf', canRevisit: true },
     { id: 'church', name: 'Church', description: 'A place of worship.', encounterId: 'church', connections: ['city_south_gate', 'city_square'], position: [820, 350], mapArea: 'qualibaf', canRevisit: true },
-    { id: 'guild_hall', name: 'Guild Hall', description: "The Adventurer's Guild hall. A place to find work and information.", encounterId: 'guild_hall', connections: ['city_south_gate', 'city_square'], position: [520, 401], mapArea: 'qualibaf', canRevisit: true },
+    // Guild Hall — Aldric's briefing is single-shot. On completion it
+    // unlocks the city's North Gate (declared via `unlocks` so the
+    // hydration pass on a fresh map can recover the unlock state too).
+    { id: 'guild_hall', name: 'Guild Hall', description: "The Adventurer's Guild hall. A place to find work and information.", encounterId: 'guild_hall', connections: ['city_south_gate', 'city_square'], position: [520, 401], mapArea: 'qualibaf', unlocks: ['city_north_gate'] },
     { id: 'antiquity_shop', name: 'Antiquity Shop', description: 'A dusty shop filled with ancient relics and curious artifacts.', encounterId: 'antiquity_shop', connections: ['city_south_gate', 'city_square'], position: [420, 270], mapArea: 'qualibaf', canRevisit: true },
     { id: 'arcane_emporium', name: 'Arcane Emporium', description: 'A shop of arcane goods.', encounterId: 'arcane_emporium', connections: ['city_south_gate', 'city_square'], position: [260, 710], mapArea: 'qualibaf', canRevisit: true },
     { id: 'city_north_gate', name: 'City North Gate', description: 'The northern gate of Qualibaf.', encounterId: 'city_north_gate', connections: ['city_south_gate', 'city_square'], position: [512, 100], mapArea: 'qualibaf', isLocked: true, hiddenName: '???' },
@@ -359,13 +378,16 @@ export function createVolcanoMap() {
     volcano: 'Maps/QualibafVolcano.jpg',
   };
 
+  // Names + descriptions mirror PY map.py:create_volcano_map. Nodes
+  // step up the slope: approach -> east -> crossing -> base, each one
+  // unlocking the next. Drake-rider risk fires on every step past the
+  // approach (handled in arriveAtNode). Volcano approach revisits warp
+  // back to the Northern Wastes.
   const nodes = [
-    { id: 'volcano_approach', name: 'Volcano Approach', description: 'The approach to the volcano.', encounterId: 'volcano_arrival', connections: ['volcano_east_path'], position: [642, 940], mapArea: 'volcano', canRevisit: true, unlocks: ['volcano_east_path'] },
-    // Each step up the slope unlocks the next so the player can walk
-    // straight from approach -> east path -> lava crossing -> base.
-    { id: 'volcano_east_path', name: 'Volcano East Path', description: 'A path along the eastern slope.', encounterId: '', connections: ['volcano_approach', 'volcano_lava_crossing'], position: [750, 790], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???', unlocks: ['volcano_lava_crossing'] },
-    { id: 'volcano_lava_crossing', name: 'Volcano Lava Crossing', description: 'A crossing over a lava flow.', encounterId: '', connections: ['volcano_east_path', 'volcano_base'], position: [800, 630], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???', unlocks: ['volcano_base'] },
-    { id: 'volcano_base', name: 'Volcano Base', description: 'The base of the volcano crater.', encounterId: 'volcano_choice', connections: ['volcano_lava_crossing'], position: [770, 540], mapArea: 'volcano', isLocked: true, canRevisit: true, hiddenName: '???' },
+    { id: 'volcano_approach', name: 'Volcano Approach', description: "The frozen lava fields give way to the volcano's base.", encounterId: 'volcano_arrival', connections: ['volcano_east_path'], position: [642, 940], mapArea: 'volcano', canRevisit: true, unlocks: ['volcano_east_path'] },
+    { id: 'volcano_east_path', name: 'Eastern Path', description: 'A winding path through frozen lava flows on the east side.', encounterId: '', connections: ['volcano_approach', 'volcano_lava_crossing'], position: [750, 790], mapArea: 'volcano', isLocked: true, canRevisit: true, unlocks: ['volcano_lava_crossing'] },
+    { id: 'volcano_lava_crossing', name: 'Lava Crossing', description: 'Rivers of half-frozen lava crisscross the path ahead.', encounterId: '', connections: ['volcano_east_path', 'volcano_base'], position: [800, 630], mapArea: 'volcano', isLocked: true, canRevisit: true, unlocks: ['volcano_base'] },
+    { id: 'volcano_base', name: 'Volcano Base', description: 'The mountain rises sheer above you. Kobold patrols are everywhere.', encounterId: 'volcano_choice', connections: ['volcano_lava_crossing'], position: [770, 540], mapArea: 'volcano', isLocked: true, canRevisit: true },
   ];
 
   for (const data of nodes) {
@@ -387,8 +409,18 @@ export function createObsidianWastesMap() {
   };
 
   const nodes = [
-    { id: 'wastes_entry', name: 'Edge of the Wastes', description: 'The frozen lava fields begin here, stretching endlessly northward.', encounterId: 'obsidian_wastes_arrival', connections: [], position: [500, 950], mapArea: 'obsidian_wastes', canRevisit: true },
-    { id: 'wastes_north', name: 'Northern Wastes', description: 'The Volcano looms closer. Thorgazad must be near.', encounterId: 'wastes_north', connections: [], position: [410, 220], mapArea: 'obsidian_wastes', isLocked: true, canRevisit: true, hiddenName: '???', hiddenDescription: 'Something ahead, near the Volcano.' },
+    // Encounter is single-shot — once the arrival dialog plays, the
+    // node becomes a cross-map teleporter back to Tharnag's North
+    // Pass (handled in handleMapClick via isCrossMapGate +
+    // arriveAtNode's wastes_entry-revisit branch). canRevisit stays
+    // false so the dialog never re-fires.
+    { id: 'wastes_entry', name: 'Edge of the Wastes', description: 'The frozen lava fields begin here, stretching endlessly northward.', encounterId: 'obsidian_wastes_arrival', connections: [], position: [500, 950], mapArea: 'obsidian_wastes' },
+    // Northern Wastes — rest-stop encounter is single-shot. After it
+    // plays once, the node becomes a cross-map teleporter to the
+    // Qualibaf Volcano (handled in handleMapClick via isCrossMapGate +
+    // arriveAtNode's wastes_north revisit branch). canRevisit stays
+    // false so the rest dialog never repeats.
+    { id: 'wastes_north', name: 'Northern Wastes', description: 'The Volcano looms closer. Thorgazad must be near.', encounterId: 'wastes_north', connections: [], position: [410, 220], mapArea: 'obsidian_wastes', isLocked: true, hiddenName: '???', hiddenDescription: 'Something ahead, near the Volcano.' },
   ];
 
   for (const data of nodes) {
@@ -557,6 +589,19 @@ export function generateLabyrinthNodes(gameMap, seed) {
       const targetTier = tiers[Math.max(0, t - back)];
       const target = _rngChoice(rng, targetTier);
       if (!connections[curNid].includes(target)) connections[curNid].push(target);
+    }
+  }
+
+  // Normalize the graph: every edge becomes bidirectional. PY parity
+  // shipped the one-way graph (forward fan-out + one back-edge per
+  // node), which left many connections un-walkable in reverse — the
+  // player would see a link line to a node they couldn't actually
+  // click. Mirroring every edge guarantees the player can always
+  // retrace, and the fog/accessibility check (which uses the current
+  // node's `connections`) now matches the visible line graph.
+  for (const a of allNodeIds) {
+    for (const b of connections[a]) {
+      if (!connections[b].includes(a)) connections[b].push(a);
     }
   }
 

@@ -29,7 +29,7 @@ import {
   createBuffRunning, createBuffHiding, createBuffCalculating,
   createBuffVialOfPoison, createBuffSlimeJar, createBuffScrollOfPotency,
   createBuffAle, createBuffDwarvenBrew, createBuffRegrowth, createBuffElfReinforcements,
-  createBuffBlizzard, createBuffSahuaginEye, createBuffOldGodBlessing,
+  createBuffBlizzard, createBuffSahuaginEye, createBuffOldGodBlessing, createBuffObsidianCore,
   createBadRations, createSturdyBoots,
   createChickenLeg, createWardensWhip,
   createWoodenSword, createLeatherArmor, createScraps,
@@ -57,7 +57,7 @@ import {
   createPoisonedBite, createWebSpider, createWebToken,
   createCrush, createRockyAppendage,
   createPullingBackTheRam,
-  createDrakeRiderCharge, createChainShirt,
+  createDrakeRiderCharge, createChainShirt, createFrostDrakeScale,
   createPummel, createDrainEssence, createObsidianCurse,
   createWhiteClawReforged, createIronforgeChainmail, createDwarvenThrowingAxe,
   createRuneforgedBuckler, createDwarvenTowerShield,
@@ -232,8 +232,20 @@ let completedEncounters = new Set();
 // Mirrors PY game.py:1261-1264.
 let labyrinthGenerated = false;
 let labyrinthSeed = 0;
-let labyrinthEncounterChance = 0.2;
+// Cumulative labyrinth encounter chance — starts at 15% on entry, +15%
+// per safe lab step, resets to 15% on encounter or re-entry from
+// wastes_entry. (Was 20% — tuned down for less attrition.)
+let labyrinthEncounterChance = 0.15;
 let labyrinthComplete = false;
+// Distinct from labyrinthComplete (which older buggy code set on every
+// wastes_north arrival, polluting saves). This flag is ONLY set when
+// the new rest-stop dialog actually finishes — so a stale save with
+// labyrinthComplete=true still gets the encounter on first load.
+let wastesNorthRestDone = false;
+// Volcano slopes random-encounter (Kobold Drake Rider). Cumulative 34%
+// starting at 0.34: resets on encounter, +0.34 per step otherwise.
+// Mirrors PY game.py:1266 / 4053-4068.
+let volcanoEncounterChance = 0.34;
 
 // Shop state
 let shopCards = []; // { card, price, creator }[]
@@ -886,6 +898,7 @@ const CARD_REGISTRY = {
   scale_armor: createScaleArmor,
   scroll_of_potency: createScrollOfPotency, minor_healing_potion: createMinorHealingPotion,
   wand_of_fire: createWandOfFire,
+  frost_drake_scale: createFrostDrakeScale,
   greatclub: createGreatclub, quarterstaff: createQuarterstaff, ale: createAle,
   thorb_card: createThorbCard, thorb_card_2: createThorbUpgradedCard,
   dwarven_crossbow: createDwarvenCrossbow, dwarven_tower_shield: createDwarvenTowerShield,
@@ -1039,6 +1052,30 @@ const LOOT_TABLES = {
     { creator: createObsidianStaff,     weight: 0.5 },
     { creator: createObsidianSpear,     weight: 0.5 },
   ],
+  // Kobold Drake Rider — volcano-path random encounter. Pick-one.
+  // Frost Drake Scale (relic) is the rare drop. Mirrors PY
+  // get_drake_rider_loot. The 50% gate for the Wastes-path version
+  // (drake_rider_loot_city) is applied in the encounter loot loop.
+  drake_rider_loot: [
+    { creator: createChainShirt,         weight: 0.5 },
+    { creator: createKoboldSpear,        weight: 0.5 },
+    { creator: createKoboldShield,       weight: 0.5 },
+    { creator: createSack,               weight: 0.5 },
+    { creator: createBandages,           weight: 0.5 },
+    { creator: createMinorHealingPotion, weight: 0.5 },
+    { creator: createChickenLeg,         weight: 0.5 },
+    { creator: createFrostDrakeScale,    weight: 1.0 },
+  ],
+  drake_rider_loot_city: [
+    { creator: createChainShirt,         weight: 0.5 },
+    { creator: createKoboldSpear,        weight: 0.5 },
+    { creator: createKoboldShield,       weight: 0.5 },
+    { creator: createSack,               weight: 0.5 },
+    { creator: createBandages,           weight: 0.5 },
+    { creator: createMinorHealingPotion, weight: 0.5 },
+    { creator: createChickenLeg,         weight: 0.5 },
+    { creator: createFrostDrakeScale,    weight: 1.0 },
+  ],
 };
 
 // Display names for loot tables (shown in the Codex tab + source lines).
@@ -1060,7 +1097,12 @@ const LOOT_TABLE_LABELS = {
   lucky_pebble_loot:      'Lucky Pebble',
   obsidian_golem_loot:    'Obsidian Golem',
   obsidian_slime_loot:    'Obsidian Slime',
+  drake_rider_loot:       'Kobold Drake Rider',
+  drake_rider_loot_city:  'Kobold Drake Rider (Volcano)',
 };
+
+// Wired below in CARD_SFX_OVERRIDES so the drake rider's roar plays at
+// showcase time alongside the existing damage SFX.
 
 // Per-table notes shown under the title in the Loot Tables tab.
 const LOOT_TABLE_NOTES = {
@@ -1079,8 +1121,10 @@ const LOOT_TABLE_NOTES = {
   sahuagin_priest_loot:   'Dropped after defeating the Sahuagin Priest at the Flooded Altar. Always Sahuagin Priest Staff.',
   sahuagin_baron_loot:    'Dropped after defeating the Sahuagin Baron. Always Barnacle Encrusted Plate (rolled alongside a Sahuagin Sentinel pick).',
   lucky_pebble_loot:      'Awarded by the River Crossing 25% bonus beat. Always a Lucky Pebble.',
-  obsidian_golem_loot:    'Random labyrinth fight in the Obsidian Wastes. Pick one — Rock common, Shard / Edge / Staff / Spear uncommon, Core rare (golem-only).',
-  obsidian_slime_loot:    'Random labyrinth fight in the Obsidian Wastes. Pick one — Rock common, Shard / Edge / Staff / Spear uncommon, Slime card rare (slime-only).',
+  obsidian_golem_loot:    'Random labyrinth fight in the Obsidian Wastes. 50% chance to drop anything; if it drops, pick one — Rock common, Shard / Edge / Staff / Spear uncommon, Core rare (golem-only).',
+  obsidian_slime_loot:    'Random labyrinth fight in the Obsidian Wastes. 50% chance to drop anything; if it drops, pick one — Rock common, Shard / Edge / Staff / Spear uncommon, Slime card rare (slime-only).',
+  drake_rider_loot:       'Kobold Drake Rider random encounter on the volcano slopes. Pick one — Chain Shirt / Kobold Spear / Shield / sundries uncommon, Frost Drake Scale rare.',
+  drake_rider_loot_city:  'Volcano-side Drake Rider drop. 50% chance to drop anything; if it drops, rolls the standard drake_rider_loot table.',
 };
 
 function rollLootTable(id) {
@@ -1107,6 +1151,24 @@ const CLASS_HAND_SIZE = {
   Paladin: 4, Ranger: 4, Wizard: 5, Rogue: 4, Warrior: 4, Druid: 4,
 };
 const MAX_HAND_SIZE = 10;
+
+// Push a loot card into the player's deck. Always lands in masterDeck;
+// also goes to hand if there's room, otherwise it's recharged under the
+// draw pile so the next combat (or refresh) picks it up. Without this
+// gate, looting at a full hand silently overflows past MAX_HAND_SIZE.
+function addLootedCard(card) {
+  if (!player || !player.deck) return;
+  player.deck.masterDeck.push(card);
+  if (player.deck.hand.length < MAX_HAND_SIZE) {
+    player.deck.hand.push(card.copy ? card.copy() : card);
+  } else {
+    // Bottom of draw pile = next-to-last-drawn. unshift() puts at index
+    // 0, which is the bottom (draw uses pop()).
+    const copy = card.copy ? card.copy() : card;
+    player.deck.drawPile.unshift(copy);
+    addLog(`  Hand full — ${card.name} goes under the deck.`, Colors.GRAY, card);
+  }
+}
 
 // === Asset Loading ===
 const images = {};
@@ -2109,8 +2171,11 @@ const MUSIC_FOR_AREA = {
   personal_quarters: 'Music/music_guild_of_unlikely_heroes_01',
   artisan_hall: 'Music/music_guild_of_unlikely_heroes_01',
   // Obsidian Wastes labyrinth — cold wind / storm bed. Holds until
-  // the party crosses into the volcano interior.
+  // the party crosses into the volcano interior. The Qualibaf Volcano
+  // approach + slopes share the same bed so the unnatural-cold motif
+  // carries through Chapter 6's opening.
   obsidian_wastes: 'Music/ambience_obsidian_wastes_01',
+  volcano: 'Music/ambience_obsidian_wastes_01',
 };
 
 // Static music wirings that aren't keyed to area/node — used by the
@@ -2238,8 +2303,10 @@ function startNewGame() {
   completedEncounters = new Set();
   labyrinthGenerated = false;
   labyrinthSeed = 0;
-  labyrinthEncounterChance = 0.2;
+  labyrinthEncounterChance = 0.15;
   labyrinthComplete = false;
+  wastesNorthRestDone = false;
+  volcanoEncounterChance = 0.34;
   // Wipe the per-session map cache so a new run doesn't inherit stale
   // node state from the previous one (cross-map teleports use this).
   for (const k of Object.keys(_mapCache)) delete _mapCache[k];
@@ -3235,7 +3302,7 @@ function arriveAtNode(nodeId, fromNodeId = null, skipEncounter = false) {
   // 20 % per step, resetting after a fight.
   if (!skipEncounter && nodeId.startsWith('lab_')
       && currentMap.id === 'obsidian_wastes') {
-    if (fromNodeId === 'wastes_entry') labyrinthEncounterChance = 0.2;
+    if (fromNodeId === 'wastes_entry') labyrinthEncounterChance = 0.15;
     currentMap.currentNodeId = nodeId;
     node.isDone = true;
     visitedNodes.add(nodeId);
@@ -3248,7 +3315,7 @@ function arriveAtNode(nodeId, fromNodeId = null, skipEncounter = false) {
       }
     }
     if (Math.random() < labyrinthEncounterChance) {
-      labyrinthEncounterChance = 0.2;
+      labyrinthEncounterChance = 0.15;
       const factoryKey = Math.random() < 0.5 ? 'obsidian_golem' : 'obsidian_slime';
       const factory = ENCOUNTER_REGISTRY[factoryKey];
       if (factory) {
@@ -3261,16 +3328,170 @@ function arriveAtNode(nodeId, fromNodeId = null, skipEncounter = false) {
         return;
       }
     } else {
-      labyrinthEncounterChance = Math.min(1.0, labyrinthEncounterChance + 0.2);
+      labyrinthEncounterChance = Math.min(1.0, labyrinthEncounterChance + 0.15);
     }
     state = GameState.MAP;
     return;
   }
-  // Wastes North — flag the labyrinth as cleared so future visits
-  // skip the random-encounter rolls.
+  // Edge of the Wastes (done) — teleport back to Tharnag's North
+  // Pass. Mirrors PY game.py:2352-2365. Two arrival paths trigger this:
+  // (a) click-on-self from handleMapClick's isCrossMapGate branch
+  // (fromNodeId === null), (b) walking onto wastes_entry from another
+  // wastes node (fromNodeId is in currentMap). Cross-map arrivals
+  // (fromNodeId points at a different map's node, e.g. north_pass)
+  // must NOT teleport, or the player ping-pongs straight back.
+  if (!skipEncounter && nodeId === 'wastes_entry'
+      && currentMap.id === 'obsidian_wastes' && node.isDone
+      && (fromNodeId === null || currentMap.getNode(fromNodeId))) {
+    if (currentMap) _mapCache[currentMap.id] = currentMap;
+    currentMap = getOrCreateMap('tharnag', createTharnagMap);
+    visitedNodes = new Set();
+    currentMap.currentNodeId = 'north_pass';
+    const np = currentMap.getNode('north_pass');
+    if (np) { np.isLocked = false; np.hiddenName = ''; np.hiddenDescription = ''; }
+    visitedNodes.add('north_pass');
+    state = GameState.MAP;
+    return;
+  }
+  // Wastes North — first visit fires the rest-stop encounter (heal +
+  // dialog), then the encounter-completion handler warps the party to
+  // the Qualibaf Volcano. Revisits skip straight to the volcano. Also
+  // wires a bidirectional shortcut between the Edge of the Wastes and
+  // the Northern Wastes. Mirrors PY game.py:2522-2553.
+  //
+  // The warp gate is wastesNorthRestDone (set in the completion
+  // handler), NOT labyrinthComplete — that older flag was set on every
+  // arrival by buggy code and is unreliable in old saves.
   if (!skipEncounter && nodeId === 'wastes_north'
       && currentMap.id === 'obsidian_wastes') {
-    labyrinthComplete = true;
+    const entry = currentMap.getNode('wastes_entry');
+    if (entry && !entry.connections.includes('wastes_north')) {
+      entry.connections.push('wastes_north');
+    }
+    if (!node.connections.includes('wastes_entry')) {
+      node.connections.push('wastes_entry');
+    }
+    if (wastesNorthRestDone || completedEncounters.has('wastes_north')) {
+      // Revisit (rest dialog already played) — warp to the volcano.
+      // Only fire volcano_approach's encounter if it hasn't played yet;
+      // otherwise just land on the map. Mirrors PY game.py:2547-2553.
+      currentMap.currentNodeId = nodeId;
+      visitedNodes.add(nodeId);
+      currentMap = getOrCreateMap('volcano', createVolcanoMap);
+      visitedNodes = new Set();
+      const approach = currentMap.getNode('volcano_approach');
+      // Rescue isDone via completedEncounters — getOrCreateMap may have
+      // returned a freshly-built volcano (e.g. after a save+load wiped
+      // the in-memory cache), and a fresh approach has isDone=false.
+      // Without this promotion, the arrival dialog would re-fire even
+      // though the player already saw it.
+      if (approach && approach.encounterId && !approach.isDone
+          && completedEncounters.has(approach.encounterId)) {
+        approach.isDone = true;
+      }
+      if (approach && approach.encounterId && !approach.isDone) {
+        startNodeEncounter('volcano_approach');
+      } else {
+        currentMap.currentNodeId = 'volcano_approach';
+        visitedNodes.add('volcano_approach');
+        updateMusicForCurrentScene();
+        state = GameState.MAP;
+      }
+      return;
+    }
+    // First visit (or stale save): force the encounter to fire. Older
+    // saves of the prior CHOICE-based wastes_north encounter would
+    // have added the id to completedEncounters, which the cross-map
+    // rescue at the top of arriveAtNode auto-promotes to isDone — that
+    // would skip the dialog. Unstick the node here.
+    node.isDone = false;
+  }
+  // Volcano slopes — every step past the approach rolls a 34%
+  // cumulative chance for the Kobold Drake Rider random encounter.
+  // Volcano-path drops use the 50%-gated drake_rider_loot_city.
+  // Mirrors PY game.py:4042-4074.
+  if (!skipEncounter && currentMap.id === 'volcano'
+      && (nodeId === 'volcano_east_path'
+          || nodeId === 'volcano_lava_crossing'
+          || nodeId === 'volcano_base')) {
+    currentMap.currentNodeId = nodeId;
+    node.isDone = true;
+    visitedNodes.add(nodeId);
+    for (const connId of node.connections) {
+      const conn = currentMap.getNode(connId);
+      if (conn && conn.isLocked) {
+        conn.isLocked = false;
+        conn.hiddenName = '';
+        conn.hiddenDescription = '';
+      }
+    }
+    if (Math.random() < volcanoEncounterChance) {
+      volcanoEncounterChance = 0.34;
+      const factory = ENCOUNTER_REGISTRY['kobold_drake_rider'];
+      if (factory) {
+        const enc = factory();
+        // Stamp the LOOT phase with the 50%-gated table override.
+        const last = enc.phases[enc.phases.length - 1];
+        if (last && Array.isArray(last.lootCards)) last.lootCards = ['drake_rider_loot_city'];
+        currentEncounter = enc;
+        encounterTextIndex = 0;
+        encounterChoiceResult = null;
+        _encounterHadCombat = false;
+        advanceEncounterPhase();
+        return;
+      }
+    } else {
+      volcanoEncounterChance = Math.min(1.0, volcanoEncounterChance + 0.34);
+    }
+    // No drake encounter: if the node has its own encounter (volcano_base
+    // → volcano_choice), trigger it; otherwise just settle on the map.
+    if (node.encounterId) {
+      startNodeEncounter(nodeId);
+      return;
+    }
+    state = GameState.MAP;
+    return;
+  }
+  // Volcano Approach (done) → teleport back to the Northern Wastes.
+  // Mirrors PY game.py:2343-2350. We do NOT route through arriveAtNode
+  // for wastes_north here — its arrival handler warps right back to
+  // the volcano when wastesNorthRestDone is true, which would loop.
+  // Instead inline the map setup so the player lands cleanly.
+  if (!skipEncounter && nodeId === 'volcano_approach'
+      && currentMap.id === 'volcano' && node.isDone
+      && (fromNodeId === null || currentMap.getNode(fromNodeId))) {
+    if (currentMap) _mapCache[currentMap.id] = currentMap;
+    currentMap = getOrCreateMap('obsidian_wastes', createObsidianWastesMap);
+    // The wastes map may be freshly created from getOrCreateMap (no
+    // lab nodes, no shortcut, wastes_north locked). Wire all that up
+    // so the player isn't dropped on an isolated node.
+    if (!currentMap.getNode('lab_1_0') && labyrinthGenerated) {
+      generateLabyrinthNodes(currentMap, labyrinthSeed);
+    }
+    const entry = currentMap.getNode('wastes_entry');
+    const north = currentMap.getNode('wastes_north');
+    if (north) {
+      north.isLocked = false;
+      north.hiddenName = '';
+      north.hiddenDescription = '';
+      if (!north.isDone && completedEncounters.has('wastes_north')) {
+        north.isDone = true;
+      }
+    }
+    if (labyrinthComplete && entry && north) {
+      if (!entry.connections.includes('wastes_north')) entry.connections.push('wastes_north');
+      if (!north.connections.includes('wastes_entry')) north.connections.push('wastes_entry');
+    }
+    if (entry && !entry.isDone && completedEncounters.has('obsidian_wastes_arrival')) {
+      entry.isDone = true;
+    }
+    currentMap.currentNodeId = 'wastes_north';
+    visitedNodes = new Set();
+    visitedNodes.add('wastes_north');
+    updateMusicForCurrentScene();
+    state = GameState.MAP;
+    autosaveNow();
+    return;
   }
   // North Pass → Obsidian Wastes. Once the throne audience is done
   // and the exit dialog has played, clicking North Pass on the siege
@@ -3570,7 +3791,22 @@ function handleMapClick(x, y) {
         (r.nodeId === 'filibaf_entrance' && forestCleared && currentMap.id === 'north_qualibaf') ||
         (r.nodeId === 'tharnag_entry' && currentMap.id === 'tharnag' && (node.isDone || forestCleared)) ||
         // Forest Edge — leaving the maze back to the entrance node.
-        (r.nodeId === 'forest_edge' && currentMap.id === 'filibaf_forest');
+        (r.nodeId === 'forest_edge' && currentMap.id === 'filibaf_forest') ||
+        // Tharnag ↔ Obsidian Wastes pair. Click-on-self on either side
+        // hops to the other so the player doesn't have to step off and
+        // back on. north_pass dispatches to transitionToObsidianWastes
+        // in arriveAtNode; wastes_entry dispatches to its own teleport
+        // branch (which lands the party on Tharnag's north_pass).
+        (r.nodeId === 'north_pass' && currentMap.id === 'tharnag') ||
+        (r.nodeId === 'wastes_entry' && currentMap.id === 'obsidian_wastes' && node.isDone) ||
+        // Obsidian Wastes ↔ Volcano pair, same idea: north edge hops
+        // straight to volcano_approach, volcano_approach hops back.
+        // Gate on either the new flag or the completedEncounters set so
+        // older saves (made before wastesNorthRestDone existed) still
+        // route through the teleport instead of the dialog.
+        (r.nodeId === 'wastes_north' && currentMap.id === 'obsidian_wastes'
+          && (wastesNorthRestDone || completedEncounters.has('wastes_north'))) ||
+        (r.nodeId === 'volcano_approach' && currentMap.id === 'volcano' && node.isDone);
       if (hasUnfiredEncounter || hasActiveTeleport || isCrossMapGate) {
         // Forest atmosphere: every node click in Filibaf scuttles.
         if (currentMap.id === 'filibaf_forest') playSound('spider_scuttle', 0.55);
@@ -3654,8 +3890,10 @@ const ENCOUNTER_BG_MAP = {
   tharnag_exit: 'bg_tharnag_siege',
   dwarven_tavern: 'bg_dwarven_tavern',
   dwarven_smithy: 'bg_dwarven_smithy',
-  // Volcano / Wastes
-  volcano_arrival: 'bg_obsidian_wastes', volcano_choice: 'bg_heart_volcano',
+  // Volcano / Wastes. Mirrors PY game.py:15021-15023 — volcano_arrival /
+  // volcano_choice / kobold_drake_rider all use the volcano backdrop.
+  volcano_arrival: 'bg_qualibaf_volcano', volcano_choice: 'bg_heart_volcano',
+  kobold_drake_rider: 'bg_qualibaf_volcano',
   obsidian_wastes_arrival: 'bg_obsidian_wastes', wastes_north: 'bg_obsidian_wastes',
   // Dwarven City
   entry_corridor_arrival: 'bg_obsidian_wastes', corridor_gate_approach: 'bg_obsidian_wastes',
@@ -3698,6 +3936,9 @@ const ENCOUNTER_BG_FILES = {
   bg_personal_quarters: 'Maps/TharnagPersonalQuarter.jpg',
   bg_dwarven_tavern: 'DwarvenTavenBG.jpg', bg_dwarven_smithy: 'DwarvenSmithyBG.jpg',
   bg_obsidian_wastes: 'ObsidianWastesBG.jpg', bg_heart_volcano: 'HeartOfTheVolcanoBG.jpg',
+  // Shares its art with the Qualibaf Volcano map view — PY does the same
+  // (game.py:387: "volcano_bg" → Maps/QualibafVolcano.jpg).
+  bg_qualibaf_volcano: 'Maps/QualibafVolcano.jpg',
   bg_obsidian_forge: 'ObsidianForgeBG.jpg',
 };
 
@@ -3777,8 +4018,202 @@ function transitionToMap(mapCreator, startNode) {
 const _mapCache = {};
 
 function getOrCreateMap(mapId, factory) {
-  if (!_mapCache[mapId]) _mapCache[mapId] = factory();
+  if (!_mapCache[mapId]) {
+    _mapCache[mapId] = factory();
+    hydrateMapFromGlobalState(_mapCache[mapId]);
+  }
   return _mapCache[mapId];
+}
+
+// When a map is created fresh — typically after a save+load wiped the
+// in-memory cache, or on cross-map teleport into a map the player has
+// already cleared — its nodes start with the factory defaults
+// (everything locked, nothing done). Walk the node graph using the
+// persistent globals (completedEncounters + story flags) to bring the
+// state back to "post-progression" so the player isn't dropped onto an
+// isolated, all-locked map.
+function hydrateMapFromGlobalState(map) {
+  if (!map) return;
+  // First pass: any node whose encounter has been completed becomes
+  // done + unlocked + un-hidden.
+  for (const node of Object.values(map.nodes)) {
+    if (node.encounterId && !node.isDone && completedEncounters.has(node.encounterId)) {
+      node.isDone = true;
+      node.isLocked = false;
+      node.hiddenName = '';
+      node.hiddenDescription = '';
+    }
+  }
+  // Second pass: propagate `unlocks` from every done node so chain
+  // unlocks (siege_gauntlet_1 → 2 → 3 → ...) are honored even when the
+  // intermediate nodes have no completedEncounters entry yet.
+  for (const node of Object.values(map.nodes)) {
+    if (node.isDone && Array.isArray(node.unlocks)) {
+      for (const uid of node.unlocks) {
+        const u = map.getNode(uid);
+        if (u && u.isLocked) {
+          u.isLocked = false;
+          u.hiddenName = '';
+          u.hiddenDescription = '';
+        }
+      }
+    }
+  }
+  // Story-flag based unlocks for nodes without an encounter id.
+  if (map.id === 'tharnag') {
+    // North Pass opens once the throne audience is done — it has no
+    // encounter so completedEncounters can't promote it.
+    if (throneAudienceComplete) {
+      const np = map.getNode('north_pass');
+      if (np) { np.isLocked = false; np.hiddenName = ''; np.hiddenDescription = ''; }
+    }
+    // Siege Gauntlet nodes are locked behind one another; if the siege
+    // is complete, the whole chain should be navigable.
+    if (siegeComplete) {
+      for (const id of ['siege_gauntlet_1', 'siege_gauntlet_2', 'siege_gauntlet_3', 'siege_gauntlet_dialog', 'tharnag_side_door']) {
+        const n = map.getNode(id);
+        if (n) {
+          n.isLocked = false;
+          n.hiddenName = '';
+          n.hiddenDescription = '';
+          if (n.encounterId && completedEncounters.has(n.encounterId)) n.isDone = true;
+        }
+      }
+    }
+  }
+  // Tharnag interior — after the throne audience, the Personal
+  // Quarters hallway + Artisan Hall lane (entry → hall → tavern +
+  // smithy) all unlock. These nodes have no encounter id, so they
+  // can't be promoted via completedEncounters alone.
+  if (map.id === 'tharnag_interior' && throneAudienceComplete) {
+    for (const id of ['quarters_hallway', 'personal_quarters_entry', 'artisan_hall_entry', 'artisan_hall', 'dwarven_tavern', 'dwarven_smithy']) {
+      const n = map.getNode(id);
+      if (n) {
+        n.isLocked = false;
+        n.hiddenName = '';
+        n.hiddenDescription = '';
+      }
+    }
+  }
+  // Obsidian Wastes: if the rest stop is complete, ensure the
+  // Edge↔North shortcut is wired (handled separately in
+  // transitionToObsidianWastes too, but defensive).
+  if (map.id === 'obsidian_wastes' && labyrinthComplete) {
+    const entry = map.getNode('wastes_entry');
+    const north = map.getNode('wastes_north');
+    if (entry && north) {
+      if (!entry.connections.includes('wastes_north')) entry.connections.push('wastes_north');
+      if (!north.connections.includes('wastes_entry')) north.connections.push('wastes_entry');
+      north.isLocked = false;
+      north.hiddenName = '';
+      north.hiddenDescription = '';
+    }
+  }
+  // Defensive: force canRevisit=false on nodes that the current map
+  // definition treats as single-shot but that may carry stale
+  // canRevisit=true on long-lived in-memory map instances (e.g. the
+  // guild_hall fix landed mid-session). Cheap and idempotent.
+  // Entries are NODE ids (the keys in map.nodes), not encounter ids.
+  const SINGLE_SHOT_NODES = new Set([
+    // Qualibaf arrival chain
+    'guild_hall', 'city_north_gate', 'south_gate', 'north_crossroad',
+    // Obsidian Wastes / Volcano
+    'wastes_north', 'wastes_entry', 'volcano_approach',
+    // Arriving-city / temple exit
+    'river_crossing', 'cave_exit',
+    // Sahuagin Flood Temple — single-shot beats. The boss_wing_entrance
+    // ambush is repeatable (until the Baron dies, see repeatableUntil
+    // on that node) and is intentionally NOT in this list. The
+    // passage_ambush also stays repeatable per design.
+    'piranha_pool', 'pool_edge', 'pool_exit',
+    'temple_right', 'temple_left', 'temple_depths',
+    'flooded_altar', 'old_god_statue', 'boss_wing_priest',
+    // Lost Shrine — grants an ability card pick, must not re-fire.
+    'lost_shrine',
+  ]);
+  for (const id of SINGLE_SHOT_NODES) {
+    const n = map.getNode(id);
+    if (n) n.canRevisit = false;
+  }
+}
+
+// Older saves predate completedEncounters tracking for some encounter
+// ids — players who completed those branches under earlier builds end
+// up with story flags set but the global set missing entries. Replay
+// the flag→encounter implications on load so hydrate has the data it
+// needs to rebuild cross-map state.
+//
+// Built around the progression chain:
+//   south_gate → guild_hall → city_north_gate → north_crossroad →
+//   filibaf_entrance → forest_clearing → tharnag_entry →
+//   siege_gauntlet_1/2/3 → siege_gauntlet_dialog → tharnag_side_door
+//   → grand_hall_arrival → throne_audience → ...
+// Any flag downstream implies every step upstream is done.
+function seedCompletedEncountersFromFlags() {
+  const add = id => completedEncounters.add(id);
+  // Anything past the forest implies the player crossed Qualibaf city.
+  const reachedNorthOfCity =
+    forestCleared || siegeProgress > 0 || siegeComplete ||
+    throneAudienceComplete || tharnagExitSeen || wastesNorthRestDone ||
+    labyrinthComplete;
+  if (reachedNorthOfCity) {
+    // Qualibaf arrival chain — these are all single-shot story beats
+    // the player must have cleared to leave the city.
+    add('south_gate');
+    add('guild_hall');
+    add('city_north_gate');
+    add('north_crossroad');
+    // Sahuagin Flood Temple → cave exit → river crossing → south gate
+    // is the only path into Qualibaf, so reaching the city implies all
+    // of these mandatory beats cleared. Optional temple encounters
+    // (conservatory_wing, dark_corridor, flooded_passage,
+    // flooded_altar, old_god_statue, boss_wing_priest_combat) stay
+    // off this list — they rely on the save's own completedEncounters.
+    add('piranha_pool');
+    add('sahuagin_sentinel');
+    add('passage_ambush');
+    add('cave_exit');
+    add('river_crossing');
+  }
+  if (forestCleared) {
+    add('forest_clearing');
+    add('forest_edge');
+    add('filibaf_entrance');
+  }
+  if (siegeProgress >= 1) add('siege_gauntlet_1');
+  if (siegeProgress >= 2) add('siege_gauntlet_2');
+  if (siegeProgress >= 3 || siegeComplete) {
+    add('siege_gauntlet_3'); add('siege_gauntlet_dialog');
+    // Seeding siege_gauntlet_3 implies tharnag_entry was cleared too.
+    add('tharnag_arrival');
+  }
+  if (throneAudienceComplete) {
+    add('throne_audience');
+    add('tharnag_side_door');
+    add('grand_hall_arrival');
+  }
+  if (tharnagExitSeen) add('tharnag_exit');
+  if (valdrisaJoined) add('valdrisa_encounter');
+  if (upperStairsReturnSeen) add('upper_stairs_return');
+  if (quartersRested) add('quarters_rest');
+  if (calmGroveRaenaJoined) add('calm_grove');
+  if (wastesNorthRestDone || labyrinthComplete) {
+    add('wastes_north');
+    add('obsidian_wastes_arrival');
+  }
+  // Antiquity Shop: the cleared-shop variant relies on antiquityShopCleared.
+  // Backfill from completedEncounters in case the flag was lost (older
+  // save formats, partial state migrations) but the Mimic fight DID
+  // complete. The flag also goes the other way — if the flag is set,
+  // make sure the encounter id is in completedEncounters so hydrate
+  // can keep the node looking done on fresh maps.
+  if (completedEncounters.has('antiquity_shop') ||
+      completedEncounters.has('antiquity_shop_cleared')) {
+    antiquityShopCleared = true;
+  }
+  if (antiquityShopCleared) {
+    add('antiquity_shop');
+  }
 }
 
 // Sweep every Web token out of every player pile. Mirrors PY's
@@ -3875,7 +4310,7 @@ function transitionToObsidianWastes(fromNodeId) {
   if (!labyrinthGenerated) {
     labyrinthSeed = Math.floor(Math.random() * 0x7FFFFFFF);
     labyrinthGenerated = true;
-    labyrinthEncounterChance = 0.2;
+    labyrinthEncounterChance = 0.15;
   }
   // Always (re)build the lab nodes from the seed — covers fresh
   // generation AND the post-load case where getOrCreateMap returned
@@ -3889,6 +4324,19 @@ function transitionToObsidianWastes(fromNodeId) {
         north.hiddenName = '';
         north.hiddenDescription = '';
       }
+    }
+  }
+  // Wire the wastes_entry ↔ wastes_north shortcut whenever the player
+  // has already crossed the labyrinth at least once. Normally added
+  // when the player arrives at wastes_north, but cross-map entries
+  // (Volcano → Edge of the Wastes, post-load) need it pre-wired so the
+  // direct hop is available immediately.
+  if (labyrinthComplete) {
+    const entry = currentMap.getNode('wastes_entry');
+    const north = currentMap.getNode('wastes_north');
+    if (entry && north) {
+      if (!entry.connections.includes('wastes_north')) entry.connections.push('wastes_north');
+      if (!north.connections.includes('wastes_entry')) north.connections.push('wastes_entry');
     }
   }
   visitedNodes = new Set();
@@ -4306,6 +4754,36 @@ function advanceEncounterPhase() {
     if (completedEncounterId === 'upper_stairs_return') {
       upperStairsReturnSeen = true;
     }
+    if (completedEncounterId === 'wastes_north') {
+      // Mirrors PY game.py:4545-4566. Heal up to 8 cards from the
+      // discard pile (pop from discard, insert at the bottom of the
+      // draw pile), show a toast, then transition straight to the
+      // Qualibaf Volcano map at volcano_approach (which auto-fires
+      // the volcano_arrival encounter). wastesNorthRestDone is the
+      // gate on subsequent wastes_north visits — setting it here
+      // (after the dialog) ensures the rest-stop dialog plays once.
+      wastesNorthRestDone = true;
+      labyrinthComplete = true;
+      let healed = 0;
+      if (player && player.deck) {
+        const want = Math.min(8, player.deck.discardPile.length);
+        for (let i = 0; i < want; i++) {
+          const card = player.deck.discardPile.pop();
+          if (!card) break;
+          player.deck.drawPile.unshift(card);
+          healed++;
+        }
+      }
+      if (healed > 0) {
+        addLog(`Rested and recovered ${healed} HP!`, Colors.GREEN);
+        playSound('heal');
+      }
+      currentMap = getOrCreateMap('volcano', createVolcanoMap);
+      visitedNodes = new Set();
+      startNodeEncounter('volcano_approach');
+      autosaveNow();
+      return;
+    }
     if (completedEncounterId === 'tharnag_exit') {
       tharnagExitSeen = true;
       trackEvent('chapter_completed', { chapter: 5, class: selectedClass });
@@ -4526,18 +5004,27 @@ function advanceEncounterPhase() {
       // Add loot cards to player's deck
       phase._lootedCards = [];
       for (const cardId of phase.lootCards) {
+        // 50% drop gate for the labyrinth-random obsidian encounters
+        // and the volcano-path drake rider (gold still drops above).
+        // Mirrors PY game.py:4952-4964.
+        if ((cardId === 'obsidian_golem_loot'
+             || cardId === 'obsidian_slime_loot'
+             || cardId === 'drake_rider_loot_city')
+            && Math.random() >= 0.5) {
+          continue;
+        }
         // Loot tables: special IDs that roll a random card
         const lootTableCards = rollLootTable(cardId);
         if (lootTableCards) {
           for (const card of lootTableCards) {
-            player.deck.addCard(card, true);
+            addLootedCard(card);
             phase._lootedCards.push(card);
           }
         } else {
           const creator = CARD_REGISTRY[cardId];
           if (creator) {
             const card = creator();
-            player.deck.addCard(card, true);
+            addLootedCard(card);
             phase._lootedCards.push(card);
           }
         }
@@ -4844,7 +5331,11 @@ function setupEnemyForCombat(enemyId) {
     for (let i = 0; i < 6; i++) enemy.deck.addCard(createKoboldShield());
     for (let i = 0; i < 5; i++) enemy.deck.addCard(createDrakeRiderCharge());
     for (let i = 0; i < 4; i++) enemy.deck.addCard(createChainShirt());
-    enemy.addCreature(new Creature({ name: 'Frost Drake', attack: 3, maxHp: 8, iceAttack: 1, armor: 1 }));
+    // Mirrors PY cards_basic.py:create_frost_drake_creature. NOT sentinel.
+    enemy.addCreature(new Creature({
+      name: 'Frost Drake', attack: 3, maxHp: 8, iceAttack: 1, armor: 1,
+      description: 'Attack + Ice to all enemies.',
+    }));
   };
   ENEMY_HAND_SIZE.kobold_drake_rider = 2;
 
@@ -5217,6 +5708,22 @@ function drawMapDebugOverlay() {
     lines.push(`[Tharnag Siege]`);
     lines.push(`progress: ${siegeProgress} / 3`);
     lines.push(`complete: ${siegeComplete ? 'yes' : 'no'}`);
+  }
+  if (currentMap && currentMap.id === 'obsidian_wastes') {
+    const node = currentMap.getCurrentNode && currentMap.getCurrentNode();
+    const onLab = node && typeof node.id === 'string' && node.id.startsWith('lab_');
+    const pct = Math.round(labyrinthEncounterChance * 100);
+    lines.push(`[Obsidian Wastes]`);
+    lines.push(`encounter chance: ${pct}% (next lab step)`);
+    lines.push(`current node: ${node ? node.id : '?'}${onLab ? '  ← lab' : ''}`);
+    lines.push(`labyrinth cleared: ${labyrinthComplete ? 'yes' : 'no'}`);
+  }
+  if (currentMap && currentMap.id === 'volcano') {
+    const node = currentMap.getCurrentNode && currentMap.getCurrentNode();
+    const pct = Math.round(volcanoEncounterChance * 100);
+    lines.push(`[Qualibaf Volcano]`);
+    lines.push(`drake rider chance: ${pct}% (next slope step)`);
+    lines.push(`current node: ${node ? node.id : '?'}`);
   }
   // Flags shared across the whole run — show under any map.
   lines.push(`well rested: ${isWellRested() ? 'yes' : 'no'}`);
@@ -5988,7 +6495,7 @@ function handleEncounterChoiceClick(x, y) {
 function autosaveNow() {
   try {
     if (!player || !currentMap) return;
-    saveToAutoSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack, kitchenChoiceMade, prisonBarrelLooted, shownDeckTutorial, calmGroveRaenaJoined, calmGroveBreadTaken, antiquityShopCleared, soldCardsHistory, forestCleared, forestLoopLevel, forestCorrectPath, siegeProgress, siegeComplete, throneAudienceComplete, quartersRested, valdrisaJoined, upperStairsReturnSeen, tharnagExitSeen, completedEncounters, labyrinthGenerated, labyrinthSeed, labyrinthEncounterChance, labyrinthComplete });
+    saveToAutoSlot({ selectedClass, gold, player, currentMap, visitedNodes, backpack, kitchenChoiceMade, prisonBarrelLooted, shownDeckTutorial, calmGroveRaenaJoined, calmGroveBreadTaken, antiquityShopCleared, soldCardsHistory, forestCleared, forestLoopLevel, forestCorrectPath, siegeProgress, siegeComplete, throneAudienceComplete, quartersRested, valdrisaJoined, upperStairsReturnSeen, tharnagExitSeen, completedEncounters, labyrinthGenerated, labyrinthSeed, labyrinthEncounterChance, labyrinthComplete, wastesNorthRestDone, volcanoEncounterChance });
     addLog('  [Auto-saved]', Colors.GRAY);
   } catch (err) {
     console.warn('Autosave failed:', err);
@@ -6893,6 +7400,15 @@ function startCombat() {
   if (enemy && enemy.name === 'Sahuagin Priest') {
     setTimeout(() => playSound('splash_dive', 0.7), 220);
   }
+  // Kobold Drake Rider — rider's hiss above is layered with the
+  // mounted Frost Drake's alien wail a beat later, so the splash
+  // sells both the rider AND the drake. Death side is intentionally
+  // not paired with the scream — when the rider falls, the drake's
+  // own death cue (getDeathSfxKey for 'frost drake') fires on its
+  // own beat via countAndRemoveDeadCreatures.
+  if (enemy && enemy.name === 'Kobold Drake Rider') {
+    setTimeout(() => playSound('frost_drake_scream', 0.7), 350);
+  }
 
   // Boss music — General Zhost army + boss share music_tension_01 across
   // both fights. Reset _lastMusicNode/_lastMusicArea so returning to the
@@ -7131,6 +7647,29 @@ const KEYWORD_ICONS = {
   sentinel: { isTextKeyword: true, color: '#c8a060', label: 'Sentinel', desc: 'Attacks must target this creature first while it is alive.' },
   haste: { isTextKeyword: true, color: '#9cf07c', label: 'Haste', desc: 'Ready to attack the turn it enters play.' },
   block: { isTextKeyword: true, color: '#a8d8ff', label: 'Block N', desc: 'Mitigates up to N damage from an incoming attack. Played reactively in the defending phase when an enemy attacks you.' },
+  // Card-destination keywords. Where a card lands after you cast it is
+  // its own dimension alongside Recharge / Discard / Banish:
+  //   Play   — the card sits in the Play area while the linked
+  //            Companion is alive. End-of-combat: recharged into your
+  //            deck if the companion survived; sent to the discard
+  //            pile if they died mid-fight (an HP cost).
+  //   Call   — the verb used on a Play card that brings a Companion
+  //            onto the battlefield (Thorb / Raena / Valdrisa / Scout).
+  //   Summon — creates a temporary ally creature. The card itself goes
+  //            to the recharge or discard pile (per its cost) and the
+  //            creature lives independently until it dies.
+  play:    { isTextKeyword: true, color: '#e8d59a', label: 'Play',
+             desc: 'Card destination: stays in the Play area while the linked Companion is alive. End of combat: recharged back into your deck if the companion survived, or sent to the discard pile if they died.' },
+  call:    { isTextKeyword: true, color: '#ffb878', label: 'Call',
+             desc: 'Bring a Companion onto the battlefield. The card uses the Play destination — see Play. Revivify can bring a fallen companion back from the discard pile.' },
+  summon:  { isTextKeyword: true, color: '#c898ff', label: 'Summon',
+             desc: 'Create a temporary ally creature. The card itself follows its cost (Recharge / Discard); the creature stands on its own and is gone when it dies. Revivify can replay the card from the discard pile.' },
+  recharge:{ isTextKeyword: true, color: '#9cd6ff', label: 'Recharge',
+             desc: 'Card destination: the card goes to the bottom of your draw pile after play — you\'ll see it again later in this combat.' },
+  discard: { isTextKeyword: true, color: '#e89870', label: 'Discard',
+             desc: 'Card destination: the card goes to the discard pile — that\'s the HP cost (your HP equals deck size). Healing can move cards back from discard into your deck.' },
+  banish:  { isTextKeyword: true, color: '#b878d8', label: 'Banish',
+             desc: 'Card destination: the card is permanently removed from your deck for the rest of the run.' },
 };
 
 // Trigger badges used on perk cards. Emitted as `{ type: 'badge' }` tokens
@@ -7263,7 +7802,8 @@ function tokenizeKeywordText(text, opts = {}) {
   const isPerk = !!opts.asPerk;
   const keywordList = ['Scry\\s+\\d+', 'Heal\\s+\\d+', 'Block\\s+\\d+', 'Heroism', 'Shields', 'Shield',
     ...(isPerk ? [] : ['Armor']),
-    'Fire', 'Ice', 'Poison', 'Shock', 'Rage', 'Sentinel', 'Haste'];
+    'Fire', 'Ice', 'Poison', 'Shock', 'Rage', 'Sentinel', 'Haste',
+    'Play', 'Call', 'Summon', 'Recharge', 'Discard', 'Banish'];
   const pattern = new RegExp(`\\b(${keywordList.join('|')})\\b`, 'g');
   let lastIdx = 0;
   let match;
@@ -9976,7 +10516,9 @@ function drawCreatureCard(creature, rect, isPlayer, isPreview = false) {
 
   // Exhausted indicator: just the Zzz glyph — no dim overlay. Drop-shadowed
   // so it's visible on bright art. Suppressed on side previews (the
-  // hovered-card preview creatures aren't actually sleeping).
+  // hovered-card preview creatures aren't actually sleeping). Sits a bit
+  // above vertical center so it clears the (i) info badge which anchors
+  // just above the stat-badge row.
   if (!isPreview && creature.exhausted) {
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.95)';
@@ -9986,7 +10528,7 @@ function drawCreatureCard(creature, rect, isPlayer, isPreview = false) {
     ctx.font = 'bold 18px Georgia, serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Zzz', rect.x + rect.w / 2, rect.y + rect.h / 2);
+    ctx.fillText('Zzz', rect.x + rect.w / 2, rect.y + rect.h * 0.4);
     ctx.restore();
   }
 
@@ -11350,6 +11892,9 @@ function cancelBeamMode() {
 
 let attacksThisTurn = 0; // for sneak_attack scaling
 let _activePlayCard = null; // the card currently being resolved (set during playCardSelf/etc.)
+// When true, summon_* handlers skip playing their entry SFX so the caller
+// (e.g. Revivify) can stagger the sound on its own timeline.
+let _suppressSummonSfx = false;
 // Creature whose swing we're currently resolving — set by the ally-attack
 // paths (manual + auto). Lets the weapon SFX classifier route per-ally
 // (e.g. Thorb → 1-handed axe sounds). Cleared right after the swing.
@@ -12516,7 +13061,7 @@ function resolveEffect(eff, caster, target) {
     case 'summon_dwarven_scout': {
       const scout = new Creature({
         name: 'Dwarven Scout', attack: 2, maxHp: 2, shield: 1,
-        endTurnDamage: 1,
+        endTurnDamage: 1, isCompanion: true,
         description: 'Turn End: 1 Dmg to random enemy',
       });
       scout.sourceCard = _activePlayCard || null;
@@ -12526,15 +13071,15 @@ function resolveEffect(eff, caster, target) {
       break;
     }
     case 'summon_misha': {
-      // Animal Companion mode 1 — Misha (4/4 Sentinel).
+      // Animal Companion mode 1 — Misha (4/4 Sentinel). Summon, not
+      // companion: the card discards normally and Misha is a loose
+      // creature with no card-back link.
       const misha = new Creature({
-        name: 'Misha', attack: 4, maxHp: 4, sentinel: true, isCompanion: true,
+        name: 'Misha', attack: 4, maxHp: 4, sentinel: true,
         description: 'Sentinel.',
       });
-      misha.sourceCard = _activePlayCard || null;
       misha._sourceRarity = 'rare';
       misha._sourceSubtype = 'allies';
-      if (_activePlayCard) _activePlayCard._routeToPlayPile = true;
       player.addCreature(misha);
       addLog(`  Misha joins the fight!`, Colors.GREEN);
       playSound('bear_growl', 0.7);
@@ -12543,25 +13088,25 @@ function resolveEffect(eff, caster, target) {
     case 'summon_huffer': {
       // Animal Companion mode 2 — Huffer (4/2 Haste, ready to attack).
       const huffer = new Creature({
-        name: 'Huffer', attack: 4, maxHp: 2, haste: true, isCompanion: true,
+        name: 'Huffer', attack: 4, maxHp: 2, haste: true,
         description: 'Haste',
       });
-      huffer.sourceCard = _activePlayCard || null;
       huffer._sourceRarity = 'rare';
       huffer._sourceSubtype = 'allies';
-      if (_activePlayCard) _activePlayCard._routeToPlayPile = true;
       player.addCreature(huffer);
       addLog(`  Huffer joins the fight!`, Colors.GREEN);
       playSound('pig_grunt', 0.7);
       break;
     }
     case 'summon_treants': {
-      // Druid Tier 2 — Summon 3-4 Treants (1/1 Haste).
+      // Druid Tier 2 — Summon 3-4 Treants (1/1 Haste). Summons, not
+      // companions: card discards normally and each treant is its own
+      // throwaway creature.
       const count = 3 + Math.floor(Math.random() * 2);
       let summoned = 0;
       for (let i = 0; i < count; i++) {
         const treant = new Creature({
-          name: 'Treant', attack: 1, maxHp: 1, haste: true, isCompanion: true,
+          name: 'Treant', attack: 1, maxHp: 1, haste: true,
           description: 'Haste',
         });
         if (!player.addCreature(treant)) break;
@@ -12571,23 +13116,25 @@ function resolveEffect(eff, caster, target) {
       break;
     }
     case 'summon_obsidian_construct': {
+      // Summon: card discards normally, construct is its own throwaway.
       const construct = createObsidianConstructCreature();
-      construct.sourceCard = _activePlayCard || null;
       construct._sourceRarity = 'uncommon';
       construct._sourceSubtype = 'allies';
       player.addCreature(construct);
       addLog(`  Obsidian Construct joins the fight!`, Colors.GREEN);
-      playObsidianGolemBurst();
+      if (!_suppressSummonSfx) playObsidianGolemBurst();
       break;
     }
     case 'summon_obsidian_slime': {
+      // Summon: card discards normally, slime is its own throwaway.
+      // Previously the slime tied its card to playPile via _routeToPlayPile
+      // but lacked isCompanion, leaving the card stranded on death.
       const slime = createObsidianSlimeSummonCreature();
-      slime.sourceCard = _activePlayCard || null;
       slime._sourceRarity = 'rare';
       slime._sourceSubtype = 'allies';
-      if (_activePlayCard) _activePlayCard._routeToPlayPile = true;
       player.addCreature(slime);
       addLog(`  Obsidian Slime joins the fight!`, Colors.GREEN);
+      if (!_suppressSummonSfx) playObsidianSlimeBurst();
       break;
     }
     case 'draw_vs_armor': {
@@ -12672,7 +13219,8 @@ function resolveEffect(eff, caster, target) {
       break;
     }
     case 'summon_small_spider': {
-      const spider = new Creature({ name: 'Pet Spider', attack: 0, maxHp: 1, poisonAttack: true, isCompanion: true });
+      // Summon: card discards normally, spider is loose.
+      const spider = new Creature({ name: 'Pet Spider', attack: 0, maxHp: 1, poisonAttack: true });
       caster.addCreature(spider);
       addLog(`  Pet Spider joins the fight!`, Colors.GREEN);
       const lastEntry = combatLog[combatLog.length - 1];
@@ -14428,6 +14976,15 @@ function enterTakeDamagePhase() {
     playSound('defeat');
     fadeOutMusic(1500);
     stopAmbienceLayer(800);
+    trackEvent('run_died', {
+      cause: 'deck_out',
+      encounter_id: currentEncounter && currentEncounter.id,
+      encounter_name: currentEncounter && currentEncounter.name,
+      enemy_name: enemy && enemy.name,
+      class: selectedClass,
+      level: player && player.level,
+      map_id: currentMap && currentMap.id,
+    });
     state = GameState.GAME_OVER;
     return;
   }
@@ -14615,6 +15172,9 @@ function endPlayerTurn() {
     }
     if (candidates.length === 0) break;
     const tgt = candidates[Math.floor(Math.random() * candidates.length)];
+    // Match the angelic chime used by Flash Heal / Holy Light / Regrowth
+    // so Valdrisa's tick sounds like a small heal spell, not generic heal.
+    playSound('heal_spell', 0.7);
     if (tgt === player) {
       addLog(`  Valdrisa heals you`, Colors.GREEN);
       healPlayer(1);
@@ -14629,7 +15189,6 @@ function endPlayerTurn() {
       if (healed > 0) {
         spawnHealOnTarget(tgt, healed);
         addLog(`  Valdrisa heals ${tgt.name}: +${healed} HP`, Colors.GREEN);
-        playSound('heal');
       }
     }
     break; // only one Valdrisa heal per turn even if multiple were summoned
@@ -14637,6 +15196,9 @@ function endPlayerTurn() {
 
   // Allies with end-of-turn damage hit a random enemy (Dwarven Scout, etc.).
   // Hits a random enemy creature if any are alive, otherwise the enemy character.
+  // Routes through the same defense flow as a regular swing: shield/armor on
+  // creature targets, plus shield/armor/block + reactive defense cards on
+  // the enemy character.
   for (const ally of player.creatures) {
     if (!ally.isAlive || !ally.endTurnDamage) continue;
     // Play the ally's signature swing cue (bow_flesh for Dwarven Scout)
@@ -14646,12 +15208,20 @@ function endPlayerTurn() {
     const targets = enemy.creatures.filter(e => e.isAlive);
     if (targets.length > 0) {
       const tgt = targets[Math.floor(Math.random() * targets.length)];
-      const dealt = tgt.takeDamage(ally.endTurnDamage);
-      addLog(`  ${ally.name} hits ${tgt.name} for ${dealt} damage`, Colors.ALLY_BLUE);
+      const dmg = ally.endTurnDamage;
+      const actual = tgt.takeDamage(dmg);
+      if (actual > 0) spawnDamageOnTarget(tgt, actual);
+      const blocked = Math.max(0, dmg - actual);
+      const bs = blocked > 0 ? ` (${blocked} absorbed)` : '';
+      addLog(`  ${ally.name} hits ${tgt.name} for ${actual} damage${bs}`, Colors.ALLY_BLUE);
       if (!tgt.isAlive) { addLog(`  ${tgt.name} destroyed!`, Colors.RED, null, null, tgt); countAndRemoveDeadCreatures(); }
     } else if (enemy.isAlive) {
-      enemy.takeDamageFromDeck(ally.endTurnDamage);
-      addLog(`  ${ally.name} hits ${enemy.name} for ${ally.endTurnDamage} damage`, Colors.ALLY_BLUE);
+      const dmg = ally.endTurnDamage;
+      enemyAutoPlayDefenses(dmg);
+      const [absorbed, taken] = enemy.takeDamageWithDefense(dmg);
+      if (taken > 0) spawnDamageOnTarget(enemy, taken);
+      const bs = absorbed > 0 ? ` (${absorbed} absorbed)` : '';
+      addLog(`  ${ally.name} hits ${enemy.name} for ${taken} damage${bs}`, Colors.ALLY_BLUE);
     }
   }
   if (checkCombatEnd()) return;
@@ -15739,7 +16309,9 @@ function updateEnemyTurn(dt) {
         for (const d of drawn) addLog(`  Draws ${d.name}`, Colors.GRAY, d);
         queueEnemyDrawnCards(drawn);
       } else if (eff.effectType === 'buff_allies_heroism') {
-        // Warden's Whip: every living enemy ally gains N Heroism.
+        // Warden's Whip / Drake Rider Charge: every living enemy ally
+        // gains N Heroism. The enemy character itself does NOT gain it
+        // (PY parity — game.py:13512-13516 only iterates enemy.creatures).
         let buffed = 0;
         for (const a of enemy.creatures) {
           if (!a.isAlive) continue;
@@ -15748,6 +16320,30 @@ function updateEnemyTurn(dt) {
           buffed++;
         }
         if (buffed > 0) addLog(`  Allies gain +${eff.value} Heroism!`, Colors.GOLD);
+      } else if (eff.effectType === 'drake_attack') {
+        // Drake Rider Charge rider: a random ally drake creature (one
+        // whose name contains "Drake") makes a free attack — does NOT
+        // exhaust. Damage = drake.attack + drake.heroism. If the drake
+        // has iceAttack > 0, apply that much Ice to the player AND
+        // every player ally. Mirrors PY game.py:13551-13565.
+        const drakes = (enemy.creatures || []).filter(c => c.isAlive && /drake/i.test(c.name || ''));
+        if (drakes.length > 0) {
+          const drake = drakes[Math.floor(Math.random() * drakes.length)];
+          const drakeDmg = Math.max(0, (drake.attack || 0) + (drake.heroism || 0));
+          const iceRider = drake.iceAttack || 0;
+          if (iceRider > 0) {
+            applyIceToTarget(player, iceRider);
+            for (const a of (player.creatures || [])) {
+              if (a.isAlive) applyIceToTarget(a, iceRider);
+            }
+          }
+          if (drakeDmg > 0) {
+            addLog(`  -> ${drake.name} charges! (${drakeDmg} damage)`, Colors.ORANGE);
+            routeEnemyDamageToTarget(player, drakeDmg, drake.name, drake);
+          } else {
+            addLog(`  -> ${drake.name} charges!`, Colors.ORANGE);
+          }
+        }
       } else if (eff.effectType === 'summon_shark') {
         // Sahuagin Staff (enemy): each play summons a Shark ally
         // alongside the damage + ice rider. Routes through the
@@ -16364,6 +16960,15 @@ function checkCombatEnd() {
     // death music can crossfade over this fade later.
     fadeOutMusic(1500);
     stopAmbienceLayer(800);
+    trackEvent('run_died', {
+      cause: 'hp_zero',
+      encounter_id: currentEncounter && currentEncounter.id,
+      encounter_name: currentEncounter && currentEncounter.name,
+      enemy_name: enemy && enemy.name,
+      class: selectedClass,
+      level: player && player.level,
+      map_id: currentMap && currentMap.id,
+    });
     state = GameState.GAME_OVER;
     return true;
   }
@@ -16519,6 +17124,55 @@ function triggerOnAttackedPowers(character, creatureTarget) {
 // or null when nothing's wired. Used by countAndRemoveDeadCreatures and
 // the boss-death branch of checkCombatEnd. Easy to extend for future
 // monster death sounds (slime burst, bone shatter, dragon roar, etc.).
+// Maps a player-summoned ally creature back to the SFX it makes on entry.
+// Used to bookend the ally's life: the same shout/growl plays on both
+// summon and death so each companion stays sonically distinct. The
+// Obsidian family is layered (burst), not a single key — handle those
+// at the call site via playObsidianSlimeBurst / playObsidianGolemBurst.
+function getCreaturePlaySfxKey(c) {
+  if (!c) return null;
+  const name = (c.name || '').toLowerCase();
+  if (name === 'thorb') return 'thorb_shout';
+  if (name === 'raena') return 'raena_summon';
+  if (name === 'valdrisa') return 'valdrisa_summon';
+  if (name === 'dwarven scout') return 'dwarven_scout_shout';
+  if (name === 'misha') return 'bear_growl';
+  if (name === 'huffer') return 'pig_grunt';
+  if (name === 'pet spider') return 'spider_scuttle';
+  if (name === 'pet slime') return 'ooze_attack';
+  if (name === 'tamed rat') return 'rat_screech';
+  if (name === 'treant') return 'leaf_fall';
+  return null;
+}
+
+// Codex-only: pick the death-sound key to display next to a creature
+// card. Player allies bookend with their entry sound; enemies use the
+// legacy per-name death cue. Obsidian family shows the lead burst
+// sample (the runtime burst layers two samples, but the codex row
+// only needs one to give the player something to click and preview).
+function getCreatureCodexDeathKey(c, side) {
+  if (!c) return null;
+  const name = (c.name || '').toLowerCase();
+  if (name === 'obsidian slime') return 'ooze_attack';
+  if (name === 'obsidian construct') return 'rocks_impact_small';
+  if (side === 'player') {
+    return getCreaturePlaySfxKey(c) || getDeathSfxKey(c);
+  }
+  return getDeathSfxKey(c);
+}
+
+// Play whatever sound this ally makes on entry (burst for the obsidian
+// family, a single key for everyone else). Returns true if a sound fired.
+function playCreaturePlaySfx(c) {
+  if (!c) return false;
+  const name = (c.name || '').toLowerCase();
+  if (name === 'obsidian slime') { playObsidianSlimeBurst(); return true; }
+  if (name === 'obsidian construct') { playObsidianGolemBurst(); return true; }
+  const key = getCreaturePlaySfxKey(c);
+  if (key) { playSound(key, 0.7); return true; }
+  return false;
+}
+
 function getDeathSfxKey(c) {
   if (!c) return null;
   const name = (c.name || '').toLowerCase();
@@ -16564,6 +17218,21 @@ function getDeathSfxKey(c) {
   // Siege Ogre — pain growl when it crumples (matches the start-of-
   // fight bellow, see getFightStartSfxKey).
   if (name === 'siege ogre') return 'ogre_pain';
+  // Kobold Drake Rider — same reptilian roar that bookends the fight
+  // (also wired to drake_rider_charge's play sound for showcase).
+  if (name === 'kobold drake rider') return 'drake_rider_hiss';
+  // Frost Drake — alien wail on death.
+  if (name === 'frost drake') return 'frost_drake_scream';
+  // Codex-only surface for the obsidian family bursts (the layered
+  // playObsidianSlimeBurst / playObsidianGolemBurst still fires at
+  // runtime; this exposes the lead sample so the codex Sounds row
+  // has a key to play).
+  if (name === 'obsidian slime') return 'ooze_attack';
+  if (name === 'obsidian golem' || name === 'obsidian construct') return 'rocks_impact_small';
+  // Forest Spider codex alias — the codex id is `forest_spiders` and
+  // builds the display name "Forest Spiders", while the live enemy
+  // character is named "Deathjump Spiders" (already covered above).
+  if (name === 'forest spiders') return 'spider_scuttle';
   return null;
 }
 
@@ -16589,6 +17258,12 @@ function getFightStartSfxKey(rawName) {
   if (name === 'piranhas swarm') return 'piranha_swarm';
   if (name === 'deathjump spiders') return 'spider_scuttle';
   if (name === 'siege ogre') return 'ogre_growl';
+  if (name === 'kobold drake rider') return 'drake_rider_hiss';
+  // Codex display aliases — these names come from getCodexMonsterIds()
+  // titled forms, while the live enemies use the names above.
+  if (name === 'obsidian slime') return 'ooze_attack';
+  if (name === 'obsidian golem') return 'rocks_impact_small';
+  if (name === 'forest spiders') return 'spider_scuttle';
   return null;
 }
 
@@ -16602,9 +17277,17 @@ function countAndRemoveDeadCreatures() {
       addLog(`  ${c.name}'s card goes to discard.`, Colors.RED);
     }
   }
-  // Play death-specific cues for any creature about to be removed.
+  // Play a death cue for any creature about to be removed. Player
+  // summons bookend with the same sound they made on entry (Thorb shout,
+  // Misha growl, ooze burst, etc.); enemy creatures keep the legacy
+  // getDeathSfxKey mapping. Obsidian family always plays the layered
+  // burst regardless of side.
+  const playerCreatureSet = new Set(player.creatures);
   for (const c of [...enemy.creatures, ...player.creatures]) {
     if (c.isAlive) continue;
+    if (playerCreatureSet.has(c)) {
+      if (playCreaturePlaySfx(c)) continue;
+    }
     if ((c.name || '').toLowerCase() === 'obsidian slime') {
       playObsidianSlimeBurst();
       continue;
@@ -16993,8 +17676,15 @@ function reviveAllyFromCard(card) {
   if ((!effs || effs.length === 0) && Array.isArray(card.modes) && card.modes.length > 0) {
     effs = card.modes[0].effects || [];
   }
+  // Snapshot creatures so we can identify the ones the summon effect adds.
+  const beforeCreatures = new Set(player.creatures);
   const prev = _activePlayCard;
   _activePlayCard = card;
+  // Suppress the summon's own SFX (currently only the obsidian family
+  // fires inside its handler) so we can stagger the play sound after
+  // the Revivify cast cue instead of layering on top of it.
+  const prevSuppress = _suppressSummonSfx;
+  _suppressSummonSfx = true;
   let summoned = false;
   for (const e of effs) {
     if (typeof e.effectType === 'string' && e.effectType.startsWith('summon_')) {
@@ -17003,6 +17693,7 @@ function reviveAllyFromCard(card) {
       summoned = true;
     }
   }
+  _suppressSummonSfx = prevSuppress;
   _activePlayCard = prev;
   if (card._routeToPlayPile) {
     player.deck.playPile.push(card);
@@ -17010,8 +17701,20 @@ function reviveAllyFromCard(card) {
   } else {
     player.deck.discardPile.push(card);
   }
-  if (summoned) addLog(`  Revivify: ${card.name} returns!`, Colors.GREEN);
-  else addLog(`  Revivify: ${card.name} cannot return.`, Colors.GRAY);
+  if (summoned) {
+    addLog(`  Revivify: ${card.name} returns!`, Colors.GREEN);
+    // Stagger the ally's entry sound so the player hears the Revivify
+    // cast first, then the ally rejoining a beat later — feels like the
+    // card was played from hand.
+    const newly = player.creatures.filter(c => !beforeCreatures.has(c));
+    if (newly.length > 0) {
+      setTimeout(() => {
+        for (const c of newly) playCreaturePlaySfx(c);
+      }, 450);
+    }
+  } else {
+    addLog(`  Revivify: ${card.name} cannot return.`, Colors.GRAY);
+  }
   return summoned;
 }
 
@@ -19219,7 +19922,7 @@ function commitSaveEditing() {
     siegeProgress, siegeComplete,
     throneAudienceComplete, quartersRested, valdrisaJoined, upperStairsReturnSeen, tharnagExitSeen,
     completedEncounters,
-    labyrinthGenerated, labyrinthSeed, labyrinthEncounterChance, labyrinthComplete,
+    labyrinthGenerated, labyrinthSeed, labyrinthEncounterChance, labyrinthComplete, wastesNorthRestDone, volcanoEncounterChance,
   }, saveEditingSlot, name);
   if (success) {
     addLog(`Game saved: ${name}`, Colors.GREEN);
@@ -19733,6 +20436,13 @@ function drawDeleteConfirm() {
 }
 
 function restoreFromSave(data) {
+  // Drop every cached map from the previous in-memory session. Without
+  // this, a load could leave stale node state behind in _mapCache —
+  // e.g. lab_* nodes flagged isDone=true from a prior playthrough
+  // would persist when transitions later go through getOrCreateMap.
+  // Without clearing, reloading an early save in the same session
+  // could still surface a partially-traversed labyrinth.
+  for (const k of Object.keys(_mapCache)) delete _mapCache[k];
   selectedClass = data.selectedClass;
   gold = data.gold;
 
@@ -19798,8 +20508,10 @@ function restoreFromSave(data) {
   completedEncounters = new Set(Array.isArray(data.completedEncounters) ? data.completedEncounters : []);
   labyrinthGenerated = !!data.labyrinthGenerated;
   labyrinthSeed = typeof data.labyrinthSeed === 'number' ? data.labyrinthSeed : 0;
-  labyrinthEncounterChance = typeof data.labyrinthEncounterChance === 'number' ? data.labyrinthEncounterChance : 0.2;
+  labyrinthEncounterChance = typeof data.labyrinthEncounterChance === 'number' ? data.labyrinthEncounterChance : 0.15;
   labyrinthComplete = !!data.labyrinthComplete;
+  wastesNorthRestDone = !!data.wastesNorthRestDone;
+  volcanoEncounterChance = typeof data.volcanoEncounterChance === 'number' ? data.volcanoEncounterChance : 0.34;
   // Backwards-compat for older manual saves that didn't persist
   // forestCleared: if the save lands the player on the tharnag map (or
   // anywhere downstream of it), the forest must have been cleared to
@@ -19844,16 +20556,18 @@ function restoreFromSave(data) {
     generateLabyrinthNodes(currentMap, labyrinthSeed);
   }
 
-  // Restore node states. We intentionally DO NOT restore `canRevisit` — it's
-  // a static property driven by the map definition, and saves from earlier
-  // versions of the game may have stale values (e.g. prison_entrance was
-  // canRevisit=true in older builds, which would make its encounter repeat
-  // after the fix landed). The map definition is always authoritative.
+  // Restore node states. canRevisit only restored when the save marks
+  // it FALSE — that's the one-way "this node has been settled, never
+  // re-fire it" signal (e.g. tight_opening flips to false at runtime
+  // on a successful squeeze). Restoring `true` from older saves would
+  // resurrect old bugs where canRevisit was wrongly set on nodes the
+  // map definition has since clamped to single-shot.
   for (const [id, nodeState] of Object.entries(data.nodeStates || {})) {
     const node = currentMap.getNode(id);
     if (node) {
       node.isDone = nodeState.isDone;
       node.isLocked = nodeState.isLocked;
+      if (nodeState.canRevisit === false) node.canRevisit = false;
       // Hidden labels — older saves may not carry these, so only
       // overwrite when the field is present in the snapshot.
       if (typeof nodeState.hiddenName === 'string') node.hiddenName = nodeState.hiddenName;
@@ -19874,6 +20588,15 @@ function restoreFromSave(data) {
       visitedNodes.add(currentMap.currentNodeId);
     }
   }
+  // Backfill completedEncounters for old saves that didn't track every
+  // completion, then hydrate the just-loaded currentMap (it was built
+  // outside getOrCreateMap so the hydrate pass hasn't run on it yet).
+  seedCompletedEncountersFromFlags();
+  hydrateMapFromGlobalState(currentMap);
+  // Prime the map cache with the freshly-loaded map so later cross-map
+  // transitions through getOrCreateMap return THIS instance (with the
+  // restored node states), not a stale one from a prior session.
+  if (currentMap) _mapCache[currentMap.id] = currentMap;
 }
 
 // ============================================================
@@ -20017,10 +20740,11 @@ const HELP_CONTENT = [
     { text: 'Healing moves cards from damage pile back to draw pile.' },
     { text: 'When draw pile, hand, and recharge pile are all empty, you die.' },
   ]},
-  { title: 'Card Costs', items: [
-    { text: 'Recharge: card goes to the bottom of the draw pile next turn.' },
-    { text: 'Discard: card goes to the discard pile (lost as damage).' },
-    { text: 'Banish: card is permanently removed from your deck.' },
+  { title: 'Card Destinations', items: [
+    { text: 'Recharge: card goes to the bottom of the draw pile — you\'ll see it again later in this combat.', color: '#9cd6ff' },
+    { text: 'Discard: card goes to the discard pile — that\'s the HP cost (your HP equals deck size). Healing can move cards back from discard into your deck.', color: '#e89870' },
+    { text: 'Banish: card is permanently removed from your deck for the rest of the run.', color: '#b878d8' },
+    { text: 'Play: card goes to the Play area while its linked Companion is alive. At end of combat it recharges (companion survived) or moves to the discard pile (companion died).', color: '#e8d59a' },
     { text: 'Some cards Exhaust for a turn (Zzz overlay) and can be used next turn.' },
   ]},
   { title: 'Combat Keywords', items: [
@@ -20040,8 +20764,9 @@ const HELP_CONTENT = [
   ]},
   { title: 'Allies & Summons', items: [
     { text: 'Summoned creatures and allies are exhausted the turn they come into play and can attack on the next turn.' },
-    { text: 'Losing a summon does not cost you a card — the card was already played and recharged.' },
-    { text: 'Losing a companion costs you a card — the companion card goes to your discard pile.' },
+    { text: 'Call: brings a Companion onto the battlefield. The card uses the Play destination — see Card Destinations.', color: '#ffb878' },
+    { text: 'Summon: creates a temporary ally creature. The card itself follows its cost (Recharge / Discard); the creature lives on its own and is gone when it dies.', color: '#c898ff' },
+    { text: 'Revivify (Paladin): pick one ally card from your discard pile and play it again — works on both companions and summons.', color: '#7cff9c' },
     { text: 'Sentinel: attacks must target this creature first while it is alive.', color: '#c8a060' },
   ]},
   { title: 'Controls', items: [
@@ -21062,6 +21787,7 @@ const CARD_SFX_OVERRIDES = {
   dire_rat_bite:            { flesh: 'big_bite',       blocked: 'big_bite' },
   mimic_bite:               { flesh: 'mimic_chomp',    blocked: 'mimic_chomp' },
   pulling_back_the_ram:     { play: 'ogre_groan' },
+  drake_rider_charge:       { play: 'drake_rider_hiss' },
   massive_ogre_ram:         { flesh: 'battering_ram', blocked: 'battering_ram',
                               play:  'battering_ram' },
   slime_appendage:          { flesh: 'ooze_attack',    blocked: 'ooze_attack' },
@@ -21095,6 +21821,9 @@ const CARD_SFX_OVERRIDES = {
 const CARD_SFX_HINTS = {
   // splash_fire (Explosive Shot) stutters fire_flesh per affected enemy.
   explosive_shot:   ['fire_flesh'],
+  // Obsidian Slime ally card — summon plays the layered burst
+  // (playObsidianSlimeBurst): ooze_attack + rocks_impact_small.
+  obsidian_slime_card: ['ooze_attack', 'rocks_impact_small'],
   // playCardAmbient fires arcane_shield + ice_flesh on cast.
   ice_block:        ['ice_flesh'],
   // buff_allies_heroism plays each ally's signature shout.
@@ -21169,14 +21898,17 @@ function getWeaponSfxKeys(card = null, creature = null) {
     // Obsidian Slime — its swing ambient already plays the layered
     // gore-ooze + rocks burst (see playCreatureSwingAmbient). Skipping
     // flesh/blocked here avoids stacking a second ooze sample on top
-    // of the burst when the swing lands.
+    // of the burst when the swing lands. `play` is exposed so the codex
+    // Sounds row surfaces the lead sample — runtime callers either skip
+    // it (playCreatureSwingAmbient early-returns into the burst) or use
+    // playAttackHitSfx which reads flesh/blocked only.
     if (name === 'obsidian slime') {
-      return {};
+      return { play: 'ooze_attack' };
     }
-    // Obsidian Construct (player ally) — swing ambient already plays
-    // a 3-rock burst, so an empty profile keeps the on-hit silent.
+    // Obsidian Construct (player ally) — same story, layered 3-rock
+    // burst at swing time. Expose the lead sample for the codex.
     if (name === 'obsidian construct') {
-      return {};
+      return { play: 'rocks_impact_small' };
     }
     // Slimes / oozes — gory squelch on swing, default thud on block.
     if (name === 'slime' || name === 'pet slime' || name.includes('ooze')) {
@@ -21219,6 +21951,11 @@ function getWeaponSfxKeys(card = null, creature = null) {
     // sword-on-rock-wall clang on block.
     if (name === 'sahuagin sentinel') {
       return { flesh: 'spear_flesh', blocked: 'spear_blocked' };
+    }
+    // Frost Drake (Kobold Drake Rider's mount) — alien wail on every
+    // swing AND on death (death keyed in getDeathSfxKey).
+    if (name === 'frost drake') {
+      return { flesh: 'frost_drake_scream', blocked: 'frost_drake_scream' };
     }
     // Shark — splash on the swing + a chunky chew when teeth land.
     // playAttackHitSfx fires `flesh`; the splash comes from a play-
@@ -21839,7 +22576,7 @@ const ALL_EXTRA_CARD_CREATORS = [
   createBuffRunning, createBuffHiding, createBuffCalculating,
   createBuffVialOfPoison, createBuffSlimeJar, createBuffScrollOfPotency,
   createBuffAle, createBuffDwarvenBrew, createBuffRegrowth, createBuffElfReinforcements,
-  createBuffBlizzard, createBuffSahuaginEye, createBuffOldGodBlessing,
+  createBuffBlizzard, createBuffSahuaginEye, createBuffOldGodBlessing, createBuffObsidianCore,
 ];
 
 // Class powers (player-side). Anything in ALL_POWER_CREATORS not in this set
@@ -23521,7 +24258,8 @@ function getCodexMonsterIds() {
   return [
     'giant_rat', 'bone_pile', 'slime', 'kobold_warden', 'dire_rat',
     'kobold_patrol', 'sahuagin_sentinel', 'sahuagin_priest', 'sahuagin_baron',
-    'forest_spiders', 'obsidian_golem', 'general_zhost', 'wolf_pack',
+    'forest_spiders', 'obsidian_golem', 'obsidian_slime',
+    'kobold_drake_rider', 'general_zhost', 'wolf_pack',
     'piranhas_swarm', 'stone_giant', 'bone_amalgam',
   ];
 }
@@ -24169,6 +24907,14 @@ function drawCodexStatsPanel(L) {
                             ambient: true },
         { label: 'Defense', key: sfx.defense, ambient: true },
       ];
+      // Creature-only: append a "Death" row so the codex previews the
+      // cue heard when the creature is destroyed. Player allies bookend
+      // with their entry sound; enemy creatures use the legacy death-
+      // sfx mapping. Cards skip this row (sel._isCreature is false).
+      if (sel._isCreature) {
+        const deathKey = getCreatureCodexDeathKey(sel, sel._codexSide);
+        rowEntries.push({ label: 'Death', key: deathKey, ambient: true });
+      }
       // Imperative SFX hints — sounds fired from effect handlers, not
       // from CARD_SFX_OVERRIDES. e.g. Explosive Shot's per-enemy fire,
       // Ice Block's layered ice cast, Battle Shout's per-ally voices.
